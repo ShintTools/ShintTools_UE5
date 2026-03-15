@@ -1,11 +1,11 @@
 // Copyright ShintTools. All Rights Reserved.
 
 #include "CoreProcessManager.h"
-#include "ShintTools.h"
+#include "ShintTools/ShintTools.h"
 
 #include "HAL/PlatformProcess.h"
 #include "Misc/Paths.h"
-#include "Misc/FileHelper.h"
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Construction / Destruction
@@ -44,7 +44,7 @@ bool FCoreProcessManager::StartCoreEngine(
 		return true;
 	}
 
-	bool bLaunched = false;
+	bool bLaunched;
 
 	switch (Mode)
 	{
@@ -99,7 +99,7 @@ void FCoreProcessManager::StopCoreEngine()
 // Status
 // ─────────────────────────────────────────────────────────────────────────────
 
-bool FCoreProcessManager::IsCoreRunning() const
+bool FCoreProcessManager::IsCoreRunning()
 {
 	if (!ProcessHandle.IsValid())
 	{

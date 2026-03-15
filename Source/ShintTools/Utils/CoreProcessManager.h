@@ -63,7 +63,7 @@ public:
 	// ── Status ────────────────────────────────────────────────────────────────
 
 	/** Returns true if a Core Engine process was launched and is still alive */
-	bool IsCoreRunning() const;
+	bool IsCoreRunning();
 
 	/** Returns the PID of the managed process, or 0 if none */
 	uint32 GetCorePID() const { return ManagedPID; }

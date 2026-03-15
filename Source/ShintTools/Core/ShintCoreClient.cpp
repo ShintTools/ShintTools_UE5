@@ -1,7 +1,7 @@
 // Copyright ShintTools. All Rights Reserved.
 
 #include "ShintCoreClient.h"
-#include "ShintTools.h"
+#include "ShintTools/ShintTools.h"
 
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"

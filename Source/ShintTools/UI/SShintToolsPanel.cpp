@@ -1,7 +1,7 @@
 // Copyright ShintTools. All Rights Reserved.
 
 #include "SShintToolsPanel.h"
-#include "ShintTools.h"
+#include "ShintTools/ShintTools.h"
 #include "ShintCoreClient.h"
 #include "CoreProcessManager.h"
 
