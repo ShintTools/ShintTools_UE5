@@ -358,14 +358,11 @@ FReply SShintToolsPanel::OnStartCoreEngineClicked()
 			TEXT("  Core Engine process already running (PID=%u)."), ProcessManager->GetCorePID()));
 		return FReply::Handled();
 	}
-
-	// Resolve script path
-	const FString ScriptPath = FCoreProcessManager::ResolveCoreScriptPath();
-
+	
 	uint32 OutPID = 0;
 	const bool bLaunched = ProcessManager->StartCoreEngine(
-		ECoreStartMode::PythonScript,
-		ScriptPath,
+		ECoreStartMode::Docker,
+		FString(),
 		OutPID);
 
 	if (bLaunched)

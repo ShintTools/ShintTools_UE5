@@ -11,10 +11,7 @@
  */
 enum class ECoreStartMode : uint8
 {
-	/** Launch: python main.py  (default for local dev) */
-	PythonScript,
-
-	/** Launch: docker run shinttools-core */
+	/** Launch the Core Engine through Docker. */
 	Docker,
 };
 
@@ -22,7 +19,7 @@ enum class ECoreStartMode : uint8
  * FCoreProcessManager
  *
  * Manages the lifecycle of the ShintTools Core Engine process.
- * Wraps FPlatformProcess to launch, monitor, and stop the Python/Docker backend.
+ * Wraps FPlatformProcess to launch, monitor, and stop the Docker backend.
  *
  * Design contract:
  *   - One Core Engine process per plugin session.
@@ -44,8 +41,8 @@ public:
 	/**
 	 * Attempts to launch the Core Engine using the specified mode.
 	 *
-	 * @param Mode         - Whether to launch via Python or Docker
-	 * @param ScriptPath   - Full path to main.py (used when Mode == PythonScript)
+	 * @param Mode         - Whether to launch via Docker
+	 * @param ScriptPath   - Unused in Docker-only mode
 	 * @param OutPID       - Receives the PID of the launched process on success
 	 * @return True if the process was launched successfully
 	 */
@@ -68,14 +65,14 @@ public:
 	/** Returns the PID of the managed process, or 0 if none */
 	uint32 GetCorePID() const { return ManagedPID; }
 
-	/**
-	 * Resolves the path to the Core Engine main.py relative to the plugin or project.
-	 * Searches:
-	 *   1. <PluginDir>/CoreEngine/main.py
-	 *   2. <ProjectDir>/CoreEngine/main.py
-	 *   3. Fallback: empty string (caller should warn the user)
-	 */
-	static FString ResolveCoreScriptPath();
+	// /**
+	//  * Resolves the path to the Core Engine main.py relative to the plugin or project.
+	//  * Searches:
+	//  *   1. <PluginDir>/CoreEngine/main.py
+	//  *   2. <ProjectDir>/CoreEngine/main.py
+	//  *   3. Fallback: empty string (caller should warn the user)
+	//  */
+	// static FString ResolveCoreScriptPath();
 
 private:
 
@@ -84,9 +81,6 @@ private:
 
 	/** PID of the last process launched by this manager */
 	uint32 ManagedPID = 0;
-
-	/** Launches via: python <ScriptPath> */
-	bool LaunchPython(const FString& ScriptPath, uint32& OutPID);
 
 	/** Launches via: docker run shinttools-core */
 	bool LaunchDocker(uint32& OutPID);
