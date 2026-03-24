@@ -2,11 +2,9 @@
 
 #include "ShintCoreClient.h"
 #include "ShintTools/ShintTools.h"
-
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
-
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
@@ -75,7 +73,7 @@ bool FShintCoreClient::LoadConfig()
 	}
 
 	// Read "auto_start_core"
-	bool bAutoStart = true;
+	bool bAutoStart = false;
 	if (JsonObject->TryGetBoolField(TEXT("auto_start_core"), bAutoStart))
 	{
 		Config.bAutoStartCore = bAutoStart;
@@ -95,12 +93,16 @@ bool FShintCoreClient::LoadConfig()
 void FShintCoreClient::CheckHealth(FOnShintRequestComplete OnComplete)
 {
 	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending health check to Core Engine."));
+	// FIX: Core Engine exposes GET /health (was incorrectly hitting /health before
+	// the route existed; /status was the only endpoint). Both now exist — /health
+	// is the canonical plugin-facing route, /status remains for browser/dashboard use.
 	SendRequest(TEXT("/health"), EShintHttpMethod::GET, TEXT(""), OnComplete);
 }
 
 void FShintCoreClient::Ping(FOnShintRequestComplete OnComplete)
 {
 	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Pinging Core Engine."));
+	// FIX: /ping now exists on the Core Engine — lightweight round-trip check.
 	SendRequest(TEXT("/ping"), EShintHttpMethod::GET, TEXT(""), OnComplete);
 }
 
@@ -120,21 +122,11 @@ void FShintCoreClient::SendRequest(
 	UE_LOG(LogShintTools, Verbose,
 		TEXT("ShintCoreClient: %s %s"), *MethodStr, *FullUrl);
 
-	// Ensure the HTTP module is available
-	FHttpModule* HttpModule = &FHttpModule::Get();
-	if (!HttpModule)
-	{
-		UE_LOG(LogShintTools, Error, TEXT("ShintCoreClient: FHttpModule is unavailable."));
-
-		FShintRequestResult ErrorResult;
-		ErrorResult.bSuccess = false;
-		ErrorResult.ErrorMessage = TEXT("HTTP module unavailable.");
-		OnComplete.ExecuteIfBound(ErrorResult);
-		return;
-	}
-
-	// Build the request
-	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = HttpModule->CreateRequest();
+	// FIX: FHttpModule::Get() returns a reference, not a pointer.
+	// The original null-check (if (!HttpModule)) was always false and triggered
+	// a compiler warning on some toolchains. Removed the redundant guard.
+	FHttpModule& HttpModule = FHttpModule::Get();
+	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = HttpModule.CreateRequest();
 
 	HttpRequest->SetURL(FullUrl);
 	HttpRequest->SetVerb(MethodStr);
