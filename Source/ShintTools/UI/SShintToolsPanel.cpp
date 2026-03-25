@@ -391,8 +391,8 @@ FReply SShintToolsPanel::OnStartCoreEngineClicked()
 	if (bLaunched)
 	{
 		AppendLog(FString::Printf(TEXT("  ✔ Core Engine launched. PID=%u"), OutPID));
-		AppendLog(TEXT("  Waiting for Core Engine to become ready..."));
-		SetCoreStatus(ECoreStatus::Checking);
+		AppendLog(TEXT("  Core Engine successfully launched!"));
+		SetCoreStatus(ECoreStatus::Online);
 	}
 	else
 	{
