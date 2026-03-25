@@ -42,13 +42,11 @@ public:
 	 * Attempts to launch the Core Engine using the specified mode.
 	 *
 	 * @param Mode         - Whether to launch via Docker
-	 * @param ScriptPath   - Unused in Docker-only mode
 	 * @param OutPID       - Receives the PID of the launched process on success
 	 * @return True if the process was launched successfully
 	 */
 	bool StartCoreEngine(
 		ECoreStartMode Mode,
-		const FString& ScriptPath,
 		uint32& OutPID);
 
 	/**

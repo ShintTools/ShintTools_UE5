@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SMultiLineEditableTextBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -13,6 +14,7 @@
 class FShintCoreClient;
 class FCoreProcessManager;
 struct FShintRequestResult;
+struct FShintValidateResult;    // ← NEW: validate response type
 
 /**
  * ECoreStatus
@@ -40,13 +42,16 @@ enum class ECoreStatus : uint8
  *
  * Layout:
  *   ┌──────────────────────────────────────────┐
- *   │  ● ShintTools Control Panel              │
+ *   │  ⚙ ShintTools Control Panel              │
  *   ├──────────────────────────────────────────┤
  *   │  Status: ● Online / ● Offline / Unknown  │
  *   ├──────────────────────────────────────────┤
  *   │  [ Check Core Engine ]                   │
  *   │  [ Start Core Engine ]                   │
  *   │  [ Ping API ]                            │
+ *   │  ─────────────────────────────────────── │
+ *   │  File path: [____________________]       │
+ *   │  [ Validate Code ]                       │
  *   ├──────────────────────────────────────────┤
  *   │  Output:                                 │
  *   │  ┌────────────────────────────────────┐  │
@@ -80,6 +85,12 @@ private:
 	/** Fires GET /ping to the Core Engine */
 	FReply OnPingCoreClicked();
 
+	/**
+	 * Reads the file at the path entered by the user, then sends
+	 * POST /validate/code to the Core Engine.
+	 */
+	FReply OnValidateCodeClicked();
+
 	// ── HTTP Response Handlers ────────────────────────────────────────────────
 
 	/** Called when the health check request completes */
@@ -87,6 +98,9 @@ private:
 
 	/** Called when the ping request completes */
 	void OnPingComplete(const FShintRequestResult& Result);
+
+	/** Called when the POST /validate/code request completes */
+	void OnValidateComplete(const FShintValidateResult& Result);
 
 	// ── UI Helpers ────────────────────────────────────────────────────────────
 
@@ -119,6 +133,9 @@ private:
 	/** Builds the action buttons column */
 	TSharedRef<SWidget> BuildButtonsSection();
 
+	/** Builds the validate-code sub-section (file path input + button) */
+	TSharedRef<SWidget> BuildValidateSection();
+
 	/** Builds the scrollable output log area */
 	TSharedRef<SWidget> BuildOutputSection();
 
@@ -143,4 +160,10 @@ private:
 
 	/** Scroll box wrapping the output - used to auto-scroll to bottom */
 	TSharedPtr<SScrollBox> OutputScrollBox;
+
+	/**
+	 * Single-line text box where the user types the path of the file to validate.
+	 * The path is relative to the UE5 project root, e.g. "Source/MyGame/PlayerController.cpp"
+	 */
+	TSharedPtr<SEditableTextBox> FilePathInputBox;
 };

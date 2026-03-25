@@ -21,7 +21,7 @@ enum class EShintHttpMethod : uint8
 
 /**
  * FShintRequestResult
- * Immutable result object returned (via delegate) after an HTTP request completes.
+ * Immutable result object returned (via delegate) after a raw HTTP request completes.
  */
 struct FShintRequestResult
 {
@@ -38,13 +38,62 @@ struct FShintRequestResult
 	FString ErrorMessage;
 };
 
-/**
- * Delegate fired when an HTTP request to the Core Engine completes.
- * Executed on the Game Thread.
- *
- * @param Result - The result of the HTTP request
- */
+/** Delegate fired when a raw HTTP request completes. Executed on the Game Thread. */
 DECLARE_DELEGATE_OneParam(FOnShintRequestComplete, const FShintRequestResult& /*Result*/);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Validate types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * FShintCodeIssue
+ * A single code issue returned by POST /validate/code.
+ */
+struct FShintCodeIssue
+{
+	/** Rule identifier, e.g. "C001" */
+	FString RuleId;
+
+	/** "error" or "warning" */
+	FString Severity;
+
+	/** Human-readable issue description */
+	FString Message;
+
+	/** Source line where the issue was detected (1-based, 0 = unknown) */
+	int32 Line = 0;
+};
+
+/**
+ * FShintValidateResult
+ * Parsed result from POST /validate/code.
+ */
+struct FShintValidateResult
+{
+	/** True if the HTTP request succeeded (2xx) and the response was parsed */
+	bool bSuccess = false;
+
+	/** HTTP status code (0 if no response received) */
+	int32 StatusCode = 0;
+
+	/** Populated when bSuccess == false */
+	FString ErrorMessage;
+
+	// ── Summary ──────────────────────────────────────────────────────────────
+	int32 TotalIssues   = 0;
+	int32 TotalErrors   = 0;
+	int32 TotalWarnings = 0;
+
+	/** Per-issue breakdown */
+	TArray<FShintCodeIssue> Issues;
+};
+
+/** Delegate fired when a POST /validate/code request completes. */
+DECLARE_DELEGATE_OneParam(FOnShintValidateComplete, const FShintValidateResult& /*Result*/);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Config
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * FShintCoreConfig
@@ -56,7 +105,7 @@ struct FShintCoreConfig
 	int32 CorePort = 18200;
 
 	/** If true, the plugin will attempt to start the Core Engine automatically */
-	bool bAutoStartCore = true;
+	bool bAutoStartCore = false;
 
 	/** Base URL built from CorePort - refreshed whenever CorePort changes */
 	FString GetBaseUrl() const
@@ -64,6 +113,10 @@ struct FShintCoreConfig
 		return FString::Printf(TEXT("http://localhost:%d"), CorePort);
 	}
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Client
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * FShintCoreClient
@@ -106,6 +159,27 @@ public:
 	 * @param OnComplete - Called on completion with the request result
 	 */
 	void Ping(FOnShintRequestComplete OnComplete);
+
+	// ── Validation ───────────────────────────────────────────────────────────
+
+	/**
+	 * Sends POST /validate/code with the given file details.
+	 * Internally builds the JSON payload, dispatches the request, parses the
+	 * response and fires OnComplete with a structured FShintValidateResult.
+	 *
+	 * Expected Core Engine JSON body:
+	 *   { "file_path": "…", "content": "…", "engine": "unreal" }
+	 *
+	 * @param FilePath   - File name or relative path (for display only)
+	 * @param Content    - Full source text of the file
+	 * @param Engine     - Target engine tag, e.g. "unreal"
+	 * @param OnComplete - Delegate fired on the Game Thread with parsed results
+	 */
+	void ValidateCode(
+		const FString& FilePath,
+		const FString& Content,
+		const FString& Engine,
+		FOnShintValidateComplete OnComplete);
 
 	// ── Generic Request ───────────────────────────────────────────────────────
 

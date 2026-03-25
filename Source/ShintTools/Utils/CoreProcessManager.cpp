@@ -29,7 +29,6 @@ FCoreProcessManager::~FCoreProcessManager()
 
 bool FCoreProcessManager::StartCoreEngine(
 	ECoreStartMode Mode,
-	const FString& ScriptPath,
 	uint32& OutPID)
 {
 	OutPID = 0;

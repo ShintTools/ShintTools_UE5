@@ -2,14 +2,18 @@
 
 #include "ShintCoreClient.h"
 #include "ShintTools/ShintTools.h"
+
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
+
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Construction / Destruction
@@ -93,17 +97,114 @@ bool FShintCoreClient::LoadConfig()
 void FShintCoreClient::CheckHealth(FOnShintRequestComplete OnComplete)
 {
 	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending health check to Core Engine."));
-	// FIX: Core Engine exposes GET /health (was incorrectly hitting /health before
-	// the route existed; /status was the only endpoint). Both now exist — /health
-	// is the canonical plugin-facing route, /status remains for browser/dashboard use.
 	SendRequest(TEXT("/health"), EShintHttpMethod::GET, TEXT(""), OnComplete);
 }
 
 void FShintCoreClient::Ping(FOnShintRequestComplete OnComplete)
 {
 	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Pinging Core Engine."));
-	// FIX: /ping now exists on the Core Engine — lightweight round-trip check.
 	SendRequest(TEXT("/ping"), EShintHttpMethod::GET, TEXT(""), OnComplete);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Validation
+// ─────────────────────────────────────────────────────────────────────────────
+
+void FShintCoreClient::ValidateCode(
+	const FString& FilePath,
+	const FString& Content,
+	const FString& Engine,
+	FOnShintValidateComplete OnComplete)
+{
+	UE_LOG(LogShintTools, Log,
+		TEXT("ShintCoreClient: Sending POST /validate/code for file: %s"), *FilePath);
+
+	// ── Build JSON payload ────────────────────────────────────────────────────
+	//
+	//   { "file_path": "PlayerController.cpp",
+	//     "content":   "// full source …",
+	//     "engine":    "unreal" }
+	//
+	TSharedRef<FJsonObject> BodyObj = MakeShared<FJsonObject>();
+	BodyObj->SetStringField(TEXT("file_path"), FilePath);
+	BodyObj->SetStringField(TEXT("content"),   Content);
+	BodyObj->SetStringField(TEXT("engine"),    Engine);
+
+	FString BodyString;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&BodyString);
+	FJsonSerializer::Serialize(BodyObj, Writer);
+
+	// ── Dispatch and parse ────────────────────────────────────────────────────
+	// Capture OnComplete by value so the lambda owns it safely across the async gap.
+	SendRequest(TEXT("/validate/code"), EShintHttpMethod::POST, BodyString,
+		FOnShintRequestComplete::CreateLambda(
+			[OnComplete](const FShintRequestResult& RawResult) mutable
+			{
+				FShintValidateResult Result;
+				Result.StatusCode = RawResult.StatusCode;
+
+				if (!RawResult.bSuccess)
+				{
+					Result.bSuccess     = false;
+					Result.ErrorMessage = RawResult.ErrorMessage;
+					OnComplete.ExecuteIfBound(Result);
+					return;
+				}
+
+				// Parse the JSON response
+				//
+				//  {
+				//    "summary": { "total": 0, "errors": 0, "warnings": 0 },
+				//    "issues":  [ { "rule_id":"…", "severity":"…",
+				//                   "message":"…", "line": 42 } ]
+				//  }
+				TSharedPtr<FJsonObject> JsonObj;
+				TSharedRef<TJsonReader<>> JsonReader =
+					TJsonReaderFactory<>::Create(RawResult.ResponseBody);
+
+				if (!FJsonSerializer::Deserialize(JsonReader, JsonObj) || !JsonObj.IsValid())
+				{
+					Result.bSuccess     = false;
+					Result.ErrorMessage = FString::Printf(
+						TEXT("Failed to parse response JSON: %s"), *RawResult.ResponseBody);
+					OnComplete.ExecuteIfBound(Result);
+					return;
+				}
+
+				Result.bSuccess = true;
+
+				// summary block
+				const TSharedPtr<FJsonObject>* SummaryObj = nullptr;
+				if (JsonObj->TryGetObjectField(TEXT("summary"), SummaryObj) && SummaryObj)
+				{
+					(*SummaryObj)->TryGetNumberField(TEXT("total"),    Result.TotalIssues);
+					(*SummaryObj)->TryGetNumberField(TEXT("errors"),   Result.TotalErrors);
+					(*SummaryObj)->TryGetNumberField(TEXT("warnings"), Result.TotalWarnings);
+				}
+
+				// issues array
+				const TArray<TSharedPtr<FJsonValue>>* IssuesArr = nullptr;
+				if (JsonObj->TryGetArrayField(TEXT("issues"), IssuesArr) && IssuesArr)
+				{
+					for (const TSharedPtr<FJsonValue>& IssueVal : *IssuesArr)
+					{
+						if (!IssueVal.IsValid()) continue;
+
+						const TSharedPtr<FJsonObject>* IssueObj = nullptr;
+						if (!IssueVal->TryGetObject(IssueObj) || !IssueObj) continue;
+
+						FShintCodeIssue Issue;
+						(*IssueObj)->TryGetStringField(TEXT("rule_id"),  Issue.RuleId);
+						(*IssueObj)->TryGetStringField(TEXT("severity"), Issue.Severity);
+						(*IssueObj)->TryGetStringField(TEXT("message"),  Issue.Message);
+						(*IssueObj)->TryGetNumberField(TEXT("line"),     Issue.Line);
+
+						Result.Issues.Add(MoveTemp(Issue));
+					}
+				}
+
+				OnComplete.ExecuteIfBound(Result);
+			}));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,23 +217,25 @@ void FShintCoreClient::SendRequest(
 	const FString& Body,
 	FOnShintRequestComplete OnComplete)
 {
-	const FString FullUrl = Config.GetBaseUrl() + Endpoint;
+	const FString FullUrl   = Config.GetBaseUrl() + Endpoint;
 	const FString MethodStr = MethodToString(Method);
 
 	UE_LOG(LogShintTools, Verbose,
 		TEXT("ShintCoreClient: %s %s"), *MethodStr, *FullUrl);
 
 	// FIX: FHttpModule::Get() returns a reference, not a pointer.
-	// The original null-check (if (!HttpModule)) was always false and triggered
-	// a compiler warning on some toolchains. Removed the redundant guard.
+	// The original code took the address and then tested for null — a check
+	// that can never fire and generates a warning on some UE5 toolchains.
 	FHttpModule& HttpModule = FHttpModule::Get();
+
+	// Build the request
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = HttpModule.CreateRequest();
 
 	HttpRequest->SetURL(FullUrl);
 	HttpRequest->SetVerb(MethodStr);
-	HttpRequest->SetHeader(TEXT("Content-Type"),  TEXT("application/json"));
-	HttpRequest->SetHeader(TEXT("Accept"),         TEXT("application/json"));
-	HttpRequest->SetHeader(TEXT("User-Agent"),     TEXT("ShintTools-UE5-Plugin/1.0"));
+	HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+	HttpRequest->SetHeader(TEXT("Accept"),        TEXT("application/json"));
+	HttpRequest->SetHeader(TEXT("User-Agent"),    TEXT("ShintTools-UE5-Plugin/1.0"));
 
 	// Attach body for methods that support it
 	if (!Body.IsEmpty() && (Method == EShintHttpMethod::POST || Method == EShintHttpMethod::PUT))
@@ -146,17 +249,16 @@ void FShintCoreClient::SendRequest(
 		&FShintCoreClient::OnHttpRequestComplete,
 		OnComplete);
 
-	// Set a reasonable timeout (5 seconds)
+	// Reasonable timeout (5 seconds)
 	HttpRequest->SetTimeout(5.0f);
 
-	// Fire the request
 	if (!HttpRequest->ProcessRequest())
 	{
 		UE_LOG(LogShintTools, Error,
 			TEXT("ShintCoreClient: Failed to dispatch HTTP request to %s"), *FullUrl);
 
 		FShintRequestResult ErrorResult;
-		ErrorResult.bSuccess = false;
+		ErrorResult.bSuccess     = false;
 		ErrorResult.ErrorMessage = TEXT("Failed to dispatch HTTP request.");
 		OnComplete.ExecuteIfBound(ErrorResult);
 	}
@@ -176,18 +278,18 @@ void FShintCoreClient::OnHttpRequestComplete(
 
 	if (!bConnectedSuccessfully || !Response.IsValid())
 	{
-		Result.bSuccess = false;
-		Result.StatusCode = 0;
-		Result.ErrorMessage = TEXT("Connection failed. Core Engine may not be running.");
+		Result.bSuccess      = false;
+		Result.StatusCode    = 0;
+		Result.ErrorMessage  = TEXT("Connection failed. Core Engine may not be running.");
 
 		UE_LOG(LogShintTools, Warning,
-			TEXT("ShintCoreClient: Request failed - %s"), *Result.ErrorMessage);
+			TEXT("ShintCoreClient: Request failed — %s"), *Result.ErrorMessage);
 
 		OnComplete.ExecuteIfBound(Result);
 		return;
 	}
 
-	Result.StatusCode = Response->GetResponseCode();
+	Result.StatusCode  = Response->GetResponseCode();
 	Result.ResponseBody = Response->GetContentAsString();
 
 	// Treat 2xx codes as success

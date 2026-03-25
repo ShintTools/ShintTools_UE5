@@ -11,9 +11,12 @@
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SMultiLineEditableTextBox.h"
 #include "Styling/AppStyle.h"
 #include "Misc/DateTime.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
 
@@ -26,7 +29,7 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 	UE_LOG(LogShintTools, Log, TEXT("SShintToolsPanel: Constructing UI panel."));
 
 	// Instantiate the HTTP client and process manager
-	CoreClient = MakeShared<FShintCoreClient>();
+	CoreClient    = MakeShared<FShintCoreClient>();
 	ProcessManager = MakeShared<FCoreProcessManager>();
 
 	// Build the widget tree
@@ -159,7 +162,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildStatusRow()
 		.Padding(0.0f, 0.0f, 6.0f, 0.0f)
 		[
 			SNew(STextBlock)
-			// Unicode full circle used as status indicator dot
 			.Text(LOCTEXT("StatusDot", "●"))
 			.Font(FCoreStyle::GetDefaultFontStyle("Regular", 14))
 			.ColorAndOpacity(TAttribute<FSlateColor>::Create(
@@ -180,9 +182,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildStatusRow()
 
 TSharedRef<SWidget> SShintToolsPanel::BuildButtonsSection()
 {
-	// Common button padding
 	const FMargin ButtonPadding(0.0f, 0.0f, 0.0f, 8.0f);
-	const FVector2D ButtonSize(220.0f, 32.0f);
 
 	return SNew(SVerticalBox)
 
@@ -198,25 +198,9 @@ TSharedRef<SWidget> SShintToolsPanel::BuildButtonsSection()
 			.OnClicked(this, &SShintToolsPanel::OnCheckCoreEngineClicked)
 			.ToolTipText(LOCTEXT("CheckCoreTooltip", "Send GET /health to the Core Engine and report status."))
 			[
-				SNew(SHorizontalBox)
-
-				+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.VAlign(VAlign_Center)
-				.Padding(0.0f, 0.0f, 6.0f, 0.0f)
-				[
-					SNew(STextBlock)
-					.Text(LOCTEXT("CheckIcon", "🔍"))
-				]
-
-				+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.VAlign(VAlign_Center)
-				[
-					SNew(STextBlock)
-					.Text(LOCTEXT("CheckCoreLabel", "Check Core Engine"))
-					.Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
-				]
+				SNew(STextBlock)
+				.Text(LOCTEXT("CheckCoreLabel", "Check Core Engine"))
+				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
 			]
 		]
 
@@ -230,27 +214,11 @@ TSharedRef<SWidget> SShintToolsPanel::BuildButtonsSection()
 			.VAlign(VAlign_Center)
 			.ContentPadding(FMargin(16.0f, 4.0f))
 			.OnClicked(this, &SShintToolsPanel::OnStartCoreEngineClicked)
-			.ToolTipText(LOCTEXT("StartCoreTooltip", "Launch the Core Engine process (python main.py or docker)."))
+			.ToolTipText(LOCTEXT("StartCoreTooltip", "Launch the Core Engine process."))
 			[
-				SNew(SHorizontalBox)
-
-				+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.VAlign(VAlign_Center)
-				.Padding(0.0f, 0.0f, 6.0f, 0.0f)
-				[
-					SNew(STextBlock)
-					.Text(LOCTEXT("StartIcon", "▶"))
-				]
-
-				+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.VAlign(VAlign_Center)
-				[
-					SNew(STextBlock)
-					.Text(LOCTEXT("StartCoreLabel", "Start Core Engine"))
-					.Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
-				]
+				SNew(STextBlock)
+				.Text(LOCTEXT("StartCoreLabel", "Start Core Engine"))
+				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
 			]
 		]
 
@@ -266,25 +234,88 @@ TSharedRef<SWidget> SShintToolsPanel::BuildButtonsSection()
 			.OnClicked(this, &SShintToolsPanel::OnPingCoreClicked)
 			.ToolTipText(LOCTEXT("PingTooltip", "Send GET /ping as a lightweight round-trip test."))
 			[
-				SNew(SHorizontalBox)
+				SNew(STextBlock)
+				.Text(LOCTEXT("PingLabel", "Ping API"))
+				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
+			]
+		]
 
-				+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.VAlign(VAlign_Center)
-				.Padding(0.0f, 0.0f, 6.0f, 0.0f)
-				[
-					SNew(STextBlock)
-					.Text(LOCTEXT("PingIcon", "📡"))
-				]
+		// ── Separator ─────────────────────────────────────────────────────────
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(0.0f, 4.0f, 0.0f, 8.0f)
+		[
+			SNew(SSeparator)
+		]
 
-				+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.VAlign(VAlign_Center)
-				[
-					SNew(STextBlock)
-					.Text(LOCTEXT("PingAPILabel", "Ping API"))
-					.Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
-				]
+		// ── Validate Code section ─────────────────────────────────────────────
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		[
+			BuildValidateSection()
+		];
+}
+
+TSharedRef<SWidget> SShintToolsPanel::BuildValidateSection()
+{
+	return SNew(SVerticalBox)
+
+		// Section label
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(0.0f, 0.0f, 0.0f, 4.0f)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("ValidateSectionLabel", "Validate Code"))
+			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+		]
+
+		// File path label + input row
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(0.0f, 0.0f, 0.0f, 6.0f)
+		[
+			SNew(SHorizontalBox)
+
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(0.0f, 0.0f, 6.0f, 0.0f)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("FilePathLabel", "File:"))
+				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
+			]
+
+			+ SHorizontalBox::Slot()
+			.FillWidth(1.0f)
+			.VAlign(VAlign_Center)
+			[
+				SAssignNew(FilePathInputBox, SEditableTextBox)
+				.HintText(LOCTEXT("FilePathHint", "Source/MyGame/PlayerController.cpp"))
+				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
+				.ToolTipText(LOCTEXT("FilePathTooltip",
+					"Path relative to the project root. The plugin reads this file "
+					"and sends its content to POST /validate/code."))
+			]
+		]
+
+		// Validate button
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(0.0f, 0.0f, 0.0f, 4.0f)
+		[
+			SNew(SButton)
+			.HAlign(HAlign_Center)
+			.VAlign(VAlign_Center)
+			.ContentPadding(FMargin(16.0f, 4.0f))
+			.OnClicked(this, &SShintToolsPanel::OnValidateCodeClicked)
+			.ToolTipText(LOCTEXT("ValidateTooltip",
+				"Read the file at the path above and send it to POST /validate/code on the Core Engine."))
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("ValidateLabel", "Validate Code"))
+				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
 			]
 		];
 }
@@ -293,38 +324,30 @@ TSharedRef<SWidget> SShintToolsPanel::BuildOutputSection()
 {
 	return SNew(SVerticalBox)
 
-		// Label
+		// "Output:" label
 		+ SVerticalBox::Slot()
 		.AutoHeight()
 		.Padding(0.0f, 0.0f, 0.0f, 4.0f)
 		[
 			SNew(STextBlock)
 			.Text(LOCTEXT("OutputLabel", "Output:"))
-			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 11))
+			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
 		]
 
-		// Scrollable text area
+		// Scrollable log area
 		+ SVerticalBox::Slot()
 		.FillHeight(1.0f)
 		[
-			SNew(SBorder)
-			.BorderImage(FAppStyle::GetBrush("ToolPanel.DarkGroupBorder"))
-			.Padding(FMargin(4.0f))
+			SAssignNew(OutputScrollBox, SScrollBox)
+			.Orientation(Orient_Vertical)
+			+ SScrollBox::Slot()
 			[
-				SAssignNew(OutputScrollBox, SScrollBox)
-				.ScrollBarAlwaysVisible(false)
-				.Orientation(Orient_Vertical)
-
-				+ SScrollBox::Slot()
-				[
-					SAssignNew(OutputTextBox, SMultiLineEditableTextBox)
-					.IsReadOnly(true)
-					.AutoWrapText(true)
-					.BackgroundColor(FLinearColor(0.05f, 0.05f, 0.05f, 1.0f))
-					.ForegroundColor(FLinearColor(0.85f, 0.85f, 0.85f, 1.0f))
-					.Font(FCoreStyle::GetDefaultFontStyle("Mono", 9))
-					.Text(FText::FromString(TEXT("")))
-				]
+				SAssignNew(OutputTextBox, SMultiLineEditableTextBox)
+				.IsReadOnly(true)
+				.AutoWrapText(false)
+				.Font(FCoreStyle::GetDefaultFontStyle("Mono", 9))
+				.BackgroundColor(FLinearColor(0.05f, 0.05f, 0.05f, 1.0f))
+				.ForegroundColor(FLinearColor(0.85f, 0.85f, 0.85f, 1.0f))
 			]
 		];
 }
@@ -351,32 +374,29 @@ FReply SShintToolsPanel::OnStartCoreEngineClicked()
 	UE_LOG(LogShintTools, Log, TEXT("SShintToolsPanel: Start Core Engine clicked."));
 	AppendLog(TEXT("→ Attempting to start Core Engine..."));
 
-	// Check if it's already running first
 	if (ProcessManager->IsCoreRunning())
 	{
 		AppendLog(FString::Printf(
 			TEXT("  Core Engine process already running (PID=%u)."), ProcessManager->GetCorePID()));
 		return FReply::Handled();
 	}
-	
+
+	//const FString ScriptPath = FCoreProcessManager::ResolveCoreScriptPath();
+
 	uint32 OutPID = 0;
 	const bool bLaunched = ProcessManager->StartCoreEngine(
 		ECoreStartMode::Docker,
-		FString(),
 		OutPID);
 
 	if (bLaunched)
 	{
 		AppendLog(FString::Printf(TEXT("  ✔ Core Engine launched. PID=%u"), OutPID));
 		AppendLog(TEXT("  Waiting for Core Engine to become ready..."));
-
-		// Give the process a moment then fire a health check
-		// In a production plugin you'd use a timer or retry loop
 		SetCoreStatus(ECoreStatus::Checking);
 	}
 	else
 	{
-		AppendLogAndUELog(TEXT("  ✘ Failed to launch Core Engine. Check log for details."), /*bIsWarning=*/true);
+		AppendLogAndUELog(TEXT("  ✘ Failed to launch Core Engine. Check log for details."), true);
 		SetCoreStatus(ECoreStatus::Offline);
 	}
 
@@ -394,6 +414,53 @@ FReply SShintToolsPanel::OnPingCoreClicked()
 	return FReply::Handled();
 }
 
+FReply SShintToolsPanel::OnValidateCodeClicked()
+{
+	UE_LOG(LogShintTools, Log, TEXT("SShintToolsPanel: Validate Code clicked."));
+
+	// ── Read file path from the input box ─────────────────────────────────────
+	if (!FilePathInputBox.IsValid() || FilePathInputBox->GetText().IsEmpty())
+	{
+		AppendLogAndUELog(TEXT("  ✘ Please enter a file path before validating."), true);
+		return FReply::Handled();
+	}
+
+	const FString RelativePath = FilePathInputBox->GetText().ToString();
+	const FString AbsolutePath = FPaths::Combine(FPaths::ProjectDir(), RelativePath);
+
+	AppendLog(FString::Printf(TEXT("→ Validating: %s"), *RelativePath));
+
+	if (!FPaths::FileExists(AbsolutePath))
+	{
+		AppendLogAndUELog(
+			FString::Printf(TEXT("  ✘ File not found: %s"), *AbsolutePath),
+			/*bIsWarning=*/true);
+		return FReply::Handled();
+	}
+
+	// ── Read file content ─────────────────────────────────────────────────────
+	FString FileContent;
+	if (!FFileHelper::LoadFileToString(FileContent, *AbsolutePath))
+	{
+		AppendLogAndUELog(
+			FString::Printf(TEXT("  ✘ Failed to read file: %s"), *AbsolutePath),
+			/*bIsWarning=*/true);
+		return FReply::Handled();
+	}
+
+	AppendLog(FString::Printf(TEXT("  File read OK (%d chars). Sending to Core Engine..."),
+		FileContent.Len()));
+
+	// ── Send POST /validate/code ──────────────────────────────────────────────
+	CoreClient->ValidateCode(
+		RelativePath,
+		FileContent,
+		TEXT("unreal"),
+		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnValidateComplete));
+
+	return FReply::Handled();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HTTP Response Handlers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -403,17 +470,14 @@ void SShintToolsPanel::OnHealthCheckComplete(const FShintRequestResult& Result)
 	if (Result.bSuccess)
 	{
 		SetCoreStatus(ECoreStatus::Online);
-		AppendLog(FString::Printf(
-			TEXT("  ✔ Core Engine is ONLINE. HTTP %d"), Result.StatusCode));
-		AppendLog(FString::Printf(
-			TEXT("  Response: %s"), *Result.ResponseBody));
+		AppendLog(FString::Printf(TEXT("  ✔ Core Engine ONLINE. HTTP %d"), Result.StatusCode));
+		AppendLog(FString::Printf(TEXT("  Response: %s"), *Result.ResponseBody));
 	}
 	else
 	{
 		SetCoreStatus(ECoreStatus::Offline);
 		AppendLogAndUELog(
-			FString::Printf(TEXT("  ✘ Core Engine is OFFLINE. %s"), *Result.ErrorMessage),
-			/*bIsWarning=*/true);
+			FString::Printf(TEXT("  ✘ Core Engine OFFLINE. %s"), *Result.ErrorMessage), true);
 	}
 }
 
@@ -421,15 +485,55 @@ void SShintToolsPanel::OnPingComplete(const FShintRequestResult& Result)
 {
 	if (Result.bSuccess)
 	{
-		AppendLog(FString::Printf(
-			TEXT("  ✔ Ping OK. HTTP %d | Response: %s"),
+		AppendLog(FString::Printf(TEXT("  ✔ Ping OK. HTTP %d | %s"),
 			Result.StatusCode, *Result.ResponseBody));
 	}
 	else
 	{
 		AppendLogAndUELog(
-			FString::Printf(TEXT("  ✘ Ping FAILED. %s"), *Result.ErrorMessage),
+			FString::Printf(TEXT("  ✘ Ping FAILED. %s"), *Result.ErrorMessage), true);
+	}
+}
+
+void SShintToolsPanel::OnValidateComplete(const FShintValidateResult& Result)
+{
+	if (!Result.bSuccess)
+	{
+		AppendLogAndUELog(
+			FString::Printf(TEXT("  ✘ Validation FAILED. HTTP %d — %s"),
+				Result.StatusCode, *Result.ErrorMessage),
 			/*bIsWarning=*/true);
+		return;
+	}
+
+	// ── Summary ───────────────────────────────────────────────────────────────
+	AppendLog(TEXT("  ✔ Validation complete."));
+	AppendLog(TEXT("  ┌─ Summary ────────────────────────────────────────────────"));
+	AppendLog(FString::Printf(TEXT("  │  Total issues : %d"), Result.TotalIssues));
+	AppendLog(FString::Printf(TEXT("  │  Errors       : %d"), Result.TotalErrors));
+	AppendLog(FString::Printf(TEXT("  │  Warnings     : %d"), Result.TotalWarnings));
+	AppendLog(TEXT("  └─────────────────────────────────────────────────────────"));
+
+	if (Result.Issues.Num() == 0)
+	{
+		AppendLog(TEXT("  ✔ No issues found."));
+		return;
+	}
+
+	// ── Per-issue breakdown ───────────────────────────────────────────────────
+	AppendLog(FString::Printf(TEXT("  Issues (%d):"), Result.Issues.Num()));
+
+	for (int32 i = 0; i < Result.Issues.Num(); ++i)
+	{
+		const FShintCodeIssue& Issue = Result.Issues[i];
+		const FString Prefix = (Issue.Severity == TEXT("error")) ? TEXT("✘") : TEXT("⚠");
+
+		AppendLog(FString::Printf(
+			TEXT("  %s [%s] %s  (line %d)"),
+			*Prefix,
+			Issue.RuleId.IsEmpty() ? TEXT("--") : *Issue.RuleId,
+			*Issue.Message,
+			Issue.Line));
 	}
 }
 
@@ -452,7 +556,6 @@ void SShintToolsPanel::AppendLog(const FString& Message)
 		OutputTextBox->SetText(FText::FromString(LogBuffer));
 	}
 
-	// Auto-scroll to the bottom
 	if (OutputScrollBox.IsValid())
 	{
 		OutputScrollBox->ScrollToEnd();
@@ -476,8 +579,6 @@ void SShintToolsPanel::AppendLogAndUELog(const FString& Message, bool bIsWarning
 void SShintToolsPanel::SetCoreStatus(ECoreStatus NewStatus)
 {
 	CurrentStatus = NewStatus;
-
-	// Trigger a slate repaint to update the status indicator
 	Invalidate(EInvalidateWidget::Paint);
 }
 
@@ -485,22 +586,10 @@ FSlateColor SShintToolsPanel::GetStatusDotColor() const
 {
 	switch (CurrentStatus)
 	{
-	case ECoreStatus::Online:
-		// Green
-		return FSlateColor(FLinearColor(0.0f, 0.85f, 0.2f, 1.0f));
-
-	case ECoreStatus::Offline:
-		// Red
-		return FSlateColor(FLinearColor(0.85f, 0.1f, 0.1f, 1.0f));
-
-	case ECoreStatus::Checking:
-		// Yellow / amber
-		return FSlateColor(FLinearColor(0.95f, 0.75f, 0.0f, 1.0f));
-
-	case ECoreStatus::Unknown:
-	default:
-		// Gray
-		return FSlateColor(FLinearColor(0.5f, 0.5f, 0.5f, 1.0f));
+	case ECoreStatus::Online:   return FSlateColor(FLinearColor(0.0f,  0.85f, 0.2f,  1.0f));
+	case ECoreStatus::Offline:  return FSlateColor(FLinearColor(0.85f, 0.1f,  0.1f,  1.0f));
+	case ECoreStatus::Checking: return FSlateColor(FLinearColor(0.95f, 0.75f, 0.0f,  1.0f));
+	default:                    return FSlateColor(FLinearColor(0.5f,  0.5f,  0.5f,  1.0f));
 	}
 }
 
@@ -508,18 +597,10 @@ FText SShintToolsPanel::GetStatusText() const
 {
 	switch (CurrentStatus)
 	{
-	case ECoreStatus::Online:
-		return LOCTEXT("StatusOnline", "Online");
-
-	case ECoreStatus::Offline:
-		return LOCTEXT("StatusOffline", "Offline");
-
-	case ECoreStatus::Checking:
-		return LOCTEXT("StatusChecking", "Checking...");
-
-	case ECoreStatus::Unknown:
-	default:
-		return LOCTEXT("StatusUnknown", "Unknown (click Check)");
+	case ECoreStatus::Online:   return LOCTEXT("StatusOnline",   "Online");
+	case ECoreStatus::Offline:  return LOCTEXT("StatusOffline",  "Offline");
+	case ECoreStatus::Checking: return LOCTEXT("StatusChecking", "Checking...");
+	default:                    return LOCTEXT("StatusUnknown",  "Unknown (click Check)");
 	}
 }
 
