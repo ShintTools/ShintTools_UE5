@@ -1,614 +1,1264 @@
 // Copyright ShintTools. All Rights Reserved.
+//
+// ShintTools Panel v4
+// Fixes:
+//   [1] Apply code fixes — sends absolute paths, server rewrites, plugin writes back
+//   [2] Asset rename    — uses IAssetTools::RenameAssets (UE5 native, updates refs)
+//   [3] Typography      — all small fonts increased to legible sizes
+//   [4] Banner image    — loads ShintTools_Banner.png from plugin Resources dir
+//   [5] Dashboard API   — sends to web API matching Emergent /api/code-validator/analyze
+//                         and /api/naming-bot/analyze with api_key + project_id
+//   [6] Responsive      — SListView with filter bar (All / Errors / Warnings / Fixable)
+//                         and virtual row rendering for hundreds of issues
 
 #include "SShintToolsPanel.h"
 #include "ShintTools/ShintTools.h"
 #include "ShintCoreClient.h"
 #include "CoreProcessManager.h"
 
+// Slate layout
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
-#include "Widgets/Layout/SSeparator.h"
 #include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SWrapBox.h"
+
+// Slate widgets
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SButton.h"
-#include "Widgets/Input/SEditableTextBox.h"
-#include "Widgets/Input/SMultiLineEditableTextBox.h"
+#include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/Notifications/SProgressBar.h"
+#include "Widgets/Views/SListView.h"
+// Style
 #include "Styling/AppStyle.h"
+// Plugin manager (for banner path)
+#include "Interfaces/IPluginManager.h"
+// Asset tools (for IAssetTools::RenameAssets)
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+// Misc
 #include "Misc/DateTime.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Algo/Count.h"
 
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Construction / Destruction
+// Brush cache
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace ST4
+{
+	static TMap<FString, FSlateBrush> BC;
+
+	static const FSlateBrush* Solid(const FLinearColor& C, float R = 0.f)
+	{
+		const FString K = FString::Printf(TEXT("S%.3f%.3f%.3f%.1f"), C.R, C.G, C.B, R);
+		if (!BC.Contains(K))
+		{
+			FSlateBrush B;
+			B.TintColor = FSlateColor(C);
+			B.DrawAs    = R > 0.f ? ESlateBrushDrawType::RoundedBox : ESlateBrushDrawType::Box;
+			if (R > 0.f) {
+				B.OutlineSettings.CornerRadii  = FVector4(R,R,R,R);
+				B.OutlineSettings.RoundingType = ESlateBrushRoundingType::FixedRadius;
+			}
+			BC.Add(K, B);
+		}
+		return &BC[K];
+	}
+
+	static const FSlateBrush* Outline(const FLinearColor& Fill, const FLinearColor& Brd, float R = 4.f)
+	{
+		const FString K = FString::Printf(TEXT("O%.3f%.3f%.1f"), Fill.R, Brd.R, R);
+		if (!BC.Contains(K))
+		{
+			FSlateBrush B;
+			B.TintColor = FSlateColor(Fill);
+			B.DrawAs    = ESlateBrushDrawType::RoundedBox;
+			B.OutlineSettings.CornerRadii  = FVector4(R,R,R,R);
+			B.OutlineSettings.RoundingType = ESlateBrushRoundingType::FixedRadius;
+			B.OutlineSettings.Color        = FSlateColor(Brd);
+			B.OutlineSettings.Width        = 1.f;
+			BC.Add(K, B);
+		}
+		return &BC[K];
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Construct
 // ─────────────────────────────────────────────────────────────────────────────
 
 void SShintToolsPanel::Construct(const FArguments& InArgs)
 {
-	UE_LOG(LogShintTools, Log, TEXT("SShintToolsPanel: Constructing UI panel."));
-
-	// Instantiate the HTTP client and process manager
-	CoreClient    = MakeShared<FShintCoreClient>();
+	CoreClient     = MakeShared<FShintCoreClient>();
 	ProcessManager = MakeShared<FCoreProcessManager>();
 
-	// Build the widget tree
+	LoadBannerBrush();
+
 	ChildSlot
 	[
 		SNew(SBorder)
-		.BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
-		.Padding(FMargin(8.0f))
+		.BorderImage(ST4::Solid(C_BG()))
+		.Padding(0.f)
 		[
-			SNew(SVerticalBox)
-
-			// ── Header ────────────────────────────────────────────────────────
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.Padding(0.0f, 0.0f, 0.0f, 8.0f)
-			[
-				BuildHeaderRow()
-			]
-
-			// ── Separator ─────────────────────────────────────────────────────
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.Padding(0.0f, 0.0f, 0.0f, 8.0f)
-			[
-				SNew(SSeparator)
-			]
-
-			// ── Status Row ────────────────────────────────────────────────────
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.Padding(0.0f, 0.0f, 0.0f, 12.0f)
-			[
-				BuildStatusRow()
-			]
-
-			// ── Action Buttons ────────────────────────────────────────────────
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.Padding(0.0f, 0.0f, 0.0f, 12.0f)
-			[
-				BuildButtonsSection()
-			]
-
-			// ── Separator ─────────────────────────────────────────────────────
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.Padding(0.0f, 0.0f, 0.0f, 8.0f)
-			[
-				SNew(SSeparator)
-			]
-
-			// ── Output Log ────────────────────────────────────────────────────
-			+ SVerticalBox::Slot()
-			.FillHeight(1.0f)
-			[
-				BuildOutputSection()
-			]
+			SNew(SScrollBox).Orientation(Orient_Vertical)
+			+ SScrollBox::Slot().Padding(0.f) [ BuildHeader()               ]
+			+ SScrollBox::Slot().Padding(0.f) [ BuildStatusBar()            ]
+			+ SScrollBox::Slot().Padding(0.f) [ BuildCodeValidatorSection() ]
+			+ SScrollBox::Slot().Padding(0.f) [ BuildAssetNamingSection()   ]
 		]
 	];
-
-	AppendLog(TEXT("ShintTools Control Panel initialized."));
-	AppendLog(FString::Printf(TEXT("Core Engine URL: %s"), *CoreClient->GetConfig().GetBaseUrl()));
 }
 
 SShintToolsPanel::~SShintToolsPanel()
 {
-	UE_LOG(LogShintTools, Log, TEXT("SShintToolsPanel: Destroyed."));
+	BannerBrush.Reset();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Widget Factories
+// Banner loader
+// Looks for ShintTools_Banner.png in the plugin's Resources directory.
+// User must copy the PNG there with that exact filename.
 // ─────────────────────────────────────────────────────────────────────────────
 
-TSharedRef<SWidget> SShintToolsPanel::BuildHeaderRow()
+void SShintToolsPanel::LoadBannerBrush()
 {
-	return SNew(SHorizontalBox)
+	TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("ShintTools"));
+	if (!Plugin.IsValid()) return;
 
-		// Plugin logo/icon placeholder
-		+ SHorizontalBox::Slot()
-		.AutoWidth()
-		.VAlign(VAlign_Center)
-		.Padding(0.0f, 0.0f, 8.0f, 0.0f)
-		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("HeaderIcon", "⚙"))
-			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 18))
-		]
+	const FString BannerPath = Plugin->GetBaseDir() / TEXT("Resources/ShintTools_Banner.png");
+	if (!FPaths::FileExists(BannerPath)) return;
 
-		// Title
-		+ SHorizontalBox::Slot()
-		.FillWidth(1.0f)
-		.VAlign(VAlign_Center)
-		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("HeaderTitle", "ShintTools Control Panel"))
-			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 14))
-		]
-
-		// Version label
-		+ SHorizontalBox::Slot()
-		.AutoWidth()
-		.VAlign(VAlign_Center)
-		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("HeaderVersion", "v1.0.0"))
-			.ColorAndOpacity(FLinearColor(0.5f, 0.5f, 0.5f, 1.0f))
-			.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
-		];
+	// Display at 240×48 in the panel header (scaled from 4K source)
+	BannerBrush = MakeShared<FSlateDynamicImageBrush>(*BannerPath, FVector2D(240.f, 48.f));
 }
 
-TSharedRef<SWidget> SShintToolsPanel::BuildStatusRow()
+// ─────────────────────────────────────────────────────────────────────────────
+// Divider helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedRef<SWidget> SShintToolsPanel::Divider()
 {
-	return SNew(SHorizontalBox)
-
-		// Status label
-		+ SHorizontalBox::Slot()
-		.AutoWidth()
-		.VAlign(VAlign_Center)
-		.Padding(0.0f, 0.0f, 8.0f, 0.0f)
-		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("StatusLabel", "Core Engine Status:"))
-			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 11))
-		]
-
-		// Status dot (colored circle indicator)
-		+ SHorizontalBox::Slot()
-		.AutoWidth()
-		.VAlign(VAlign_Center)
-		.Padding(0.0f, 0.0f, 6.0f, 0.0f)
-		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("StatusDot", "●"))
-			.Font(FCoreStyle::GetDefaultFontStyle("Regular", 14))
-			.ColorAndOpacity(TAttribute<FSlateColor>::Create(
-				TAttribute<FSlateColor>::FGetter::CreateSP(this, &SShintToolsPanel::GetStatusDotColor)))
-		]
-
-		// Status text
-		+ SHorizontalBox::Slot()
-		.AutoWidth()
-		.VAlign(VAlign_Center)
-		[
-			SNew(STextBlock)
-			.Text(TAttribute<FText>::Create(
-				TAttribute<FText>::FGetter::CreateSP(this, &SShintToolsPanel::GetStatusText)))
-			.Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
-		];
+	return SNew(SBox).HeightOverride(1.f)
+		[ SNew(SBorder).BorderImage(ST4::Solid(C_Border())).Padding(0.f) ];
 }
 
-TSharedRef<SWidget> SShintToolsPanel::BuildButtonsSection()
+// ─────────────────────────────────────────────────────────────────────────────
+// Header — black strip, bold "ShintTools", banner image upper-right
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedRef<SWidget> SShintToolsPanel::BuildHeader()
 {
-	const FMargin ButtonPadding(0.0f, 0.0f, 0.0f, 8.0f);
+	// Right side: banner or fallback version text
+	TSharedRef<SWidget> RightWidget = BannerBrush.IsValid()
+		? StaticCastSharedRef<SWidget>(
+			SNew(SBox).WidthOverride(240.f).HeightOverride(48.f).VAlign(VAlign_Center)
+			[ SNew(SImage).Image(BannerBrush.Get()) ])
+		: StaticCastSharedRef<SWidget>(
+			SNew(STextBlock).Text(LOCTEXT("Ver","v4.0")).Font(F_Label())
+			.ColorAndOpacity(FSlateColor(C_DimGray())));
 
-	return SNew(SVerticalBox)
-
-		// ── Check Core Engine ─────────────────────────────────────────────────
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(ButtonPadding)
-		[
-			SNew(SButton)
-			.HAlign(HAlign_Center)
-			.VAlign(VAlign_Center)
-			.ContentPadding(FMargin(16.0f, 4.0f))
-			.OnClicked(this, &SShintToolsPanel::OnCheckCoreEngineClicked)
-			.ToolTipText(LOCTEXT("CheckCoreTooltip", "Send GET /health to the Core Engine and report status."))
-			[
-				SNew(STextBlock)
-				.Text(LOCTEXT("CheckCoreLabel", "Check Core Engine"))
-				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
-			]
-		]
-
-		// ── Start Core Engine ─────────────────────────────────────────────────
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(ButtonPadding)
-		[
-			SNew(SButton)
-			.HAlign(HAlign_Center)
-			.VAlign(VAlign_Center)
-			.ContentPadding(FMargin(16.0f, 4.0f))
-			.OnClicked(this, &SShintToolsPanel::OnStartCoreEngineClicked)
-			.ToolTipText(LOCTEXT("StartCoreTooltip", "Launch the Core Engine process."))
-			[
-				SNew(STextBlock)
-				.Text(LOCTEXT("StartCoreLabel", "Start Core Engine"))
-				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
-			]
-		]
-
-		// ── Ping API ──────────────────────────────────────────────────────────
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(ButtonPadding)
-		[
-			SNew(SButton)
-			.HAlign(HAlign_Center)
-			.VAlign(VAlign_Center)
-			.ContentPadding(FMargin(16.0f, 4.0f))
-			.OnClicked(this, &SShintToolsPanel::OnPingCoreClicked)
-			.ToolTipText(LOCTEXT("PingTooltip", "Send GET /ping as a lightweight round-trip test."))
-			[
-				SNew(STextBlock)
-				.Text(LOCTEXT("PingLabel", "Ping API"))
-				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
-			]
-		]
-
-		// ── Separator ─────────────────────────────────────────────────────────
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(0.0f, 4.0f, 0.0f, 8.0f)
-		[
-			SNew(SSeparator)
-		]
-
-		// ── Validate Code section ─────────────────────────────────────────────
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		[
-			BuildValidateSection()
-		];
-}
-
-TSharedRef<SWidget> SShintToolsPanel::BuildValidateSection()
-{
-	return SNew(SVerticalBox)
-
-		// Section label
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(0.0f, 0.0f, 0.0f, 4.0f)
-		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("ValidateSectionLabel", "Validate Code"))
-			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
-		]
-
-		// File path label + input row
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(0.0f, 0.0f, 0.0f, 6.0f)
+	return SNew(SBorder)
+		.BorderImage(ST4::Solid(C_BG()))
+		.Padding(FMargin(20.f, 18.f, 20.f, 14.f))
 		[
 			SNew(SHorizontalBox)
 
-			+ SHorizontalBox::Slot()
-			.AutoWidth()
-			.VAlign(VAlign_Center)
-			.Padding(0.0f, 0.0f, 6.0f, 0.0f)
+			// Left: Brand text
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 			[
-				SNew(STextBlock)
-				.Text(LOCTEXT("FilePathLabel", "File:"))
-				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(STextBlock).Text(LOCTEXT("Brand","ShintTools"))
+					.Font(F_Title()).ColorAndOpacity(FSlateColor(C_White()))
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f,4.f,0.f,0.f)
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("Sub","Automation and optimization tools for Unreal Engine and Unity"))
+					.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray()))
+				]
 			]
 
-			+ SHorizontalBox::Slot()
-			.FillWidth(1.0f)
-			.VAlign(VAlign_Center)
-			[
-				SAssignNew(FilePathInputBox, SEditableTextBox)
-				.HintText(LOCTEXT("FilePathHint", "Source/MyGame/PlayerController.cpp"))
-				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
-				.ToolTipText(LOCTEXT("FilePathTooltip",
-					"Path relative to the project root. The plugin reads this file "
-					"and sends its content to POST /validate/code."))
-			]
-		]
+			// Right: banner image (upper-right corner)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12.f,0.f,0.f,0.f)
+			[ RightWidget ]
+		];
+}
 
-		// Validate button
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(0.0f, 0.0f, 0.0f, 4.0f)
+// ─────────────────────────────────────────────────────────────────────────────
+// Status bar
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedRef<SWidget> SShintToolsPanel::BuildStatusBar()
+{
+	return SNew(SBorder)
+		.BorderImage(ST4::Outline(C_Surface(), C_Border()))
+		.Padding(FMargin(18.f, 10.f))
 		[
-			SNew(SButton)
-			.HAlign(HAlign_Center)
-			.VAlign(VAlign_Center)
-			.ContentPadding(FMargin(16.0f, 4.0f))
-			.OnClicked(this, &SShintToolsPanel::OnValidateCodeClicked)
-			.ToolTipText(LOCTEXT("ValidateTooltip",
-				"Read the file at the path above and send it to POST /validate/code on the Core Engine."))
+			SNew(SHorizontalBox)
+
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f,0.f,8.f,0.f)
+			[
+				SNew(STextBlock).Text(FText::FromString(TEXT("●"))).Font(F_Body())
+				.ColorAndOpacity(TAttribute<FSlateColor>::Create(
+					TAttribute<FSlateColor>::FGetter::CreateSP(this, &SShintToolsPanel::GetStatusColor)))
+			]
+
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f,0.f,6.f,0.f)
+			[
+				SNew(STextBlock).Text(LOCTEXT("CoreLbl","CORE ENGINE")).Font(F_Label())
+				.ColorAndOpacity(FSlateColor(C_DimGray()))
+			]
+
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 			[
 				SNew(STextBlock)
-				.Text(LOCTEXT("ValidateLabel", "Validate Code"))
-				.Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
+				.Text(TAttribute<FText>::Create(
+					TAttribute<FText>::FGetter::CreateSP(this, &SShintToolsPanel::GetStatusText)))
+				.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White()))
+			]
+
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SButton)
+				.ButtonColorAndOpacity(C_BG())
+				.ContentPadding(FMargin(14.f,5.f))
+				.OnClicked(this, &SShintToolsPanel::OnCheckConnectionClicked)
+				[
+					SNew(STextBlock).Text(LOCTEXT("CheckBtn","Check Connection"))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Blue()))
+				]
 			]
 		];
 }
 
-TSharedRef<SWidget> SShintToolsPanel::BuildOutputSection()
+// ─────────────────────────────────────────────────────────────────────────────
+// Stat badge
+// ─────────────────────────────────────────────────────────────────────────────
+
+static TSharedRef<SWidget> StatBadge(
+	TSharedPtr<STextBlock>& OutLabel, const FText& Caption, const FLinearColor& Clr)
 {
 	return SNew(SVerticalBox)
-
-		// "Output:" label
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(0.0f, 0.0f, 0.0f, 4.0f)
+		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
 		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("OutputLabel", "Output:"))
-			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+			SAssignNew(OutLabel, STextBlock)
+			.Text(FText::FromString(TEXT("—")))
+			.Font(SShintToolsPanel::F_StatNum())
+			.ColorAndOpacity(FSlateColor(Clr))
+		]
+		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.f,3.f,0.f,0.f)
+		[
+			SNew(STextBlock).Text(Caption).Font(SShintToolsPanel::F_StatCap())
+			.ColorAndOpacity(FSlateColor(SShintToolsPanel::C_DimGray()))
+		];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Code Validator section
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
+{
+	return SNew(SBorder)
+		.BorderImage(ST4::Solid(C_BG()))
+		.Padding(FMargin(20.f, 18.f))
+		[
+			SNew(SVerticalBox)
+
+			// Title
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,3.f)
+			[
+				SNew(STextBlock).Text(LOCTEXT("CVTitle","CODE VALIDATOR")).Font(F_H2())
+				.ColorAndOpacity(FSlateColor(C_White()))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,16.f)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("CVSub","Analyse C++ source and Blueprints · review issues · apply fixes · send to dashboard"))
+				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray()))
+			]
+
+			// Stats
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,16.f)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
+				[ StatBadge(CodeFiles_Label,    LOCTEXT("CVF","FILES"),    C_Blue())   ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
+				[ StatBadge(CodeErrors_Label,   LOCTEXT("CVE","ERRORS"),   C_Red())    ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
+				[ StatBadge(CodeWarnings_Label, LOCTEXT("CVW","WARNINGS"), C_Yellow()) ]
+			]
+
+			// Progress bar
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,14.f)
+			[
+				SNew(SBox).HeightOverride(2.f)
+				[
+					SAssignNew(CodeProgressBar, SProgressBar)
+					.Percent(TAttribute<TOptional<float>>::Create(
+						TAttribute<TOptional<float>>::FGetter::CreateSP(this, &SShintToolsPanel::GetCodeProgress)))
+					.FillColorAndOpacity(FSlateColor(C_Blue()))
+					.BackgroundImage(FAppStyle::GetBrush("ProgressBar.Background"))
+				]
+			]
+
+			// Scan buttons
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,18.f)
+			[
+				SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f,6.f))
+				+ SWrapBox::Slot()
+				[
+					SNew(SButton).ContentPadding(FMargin(16.f,7.f))
+					.OnClicked(this, &SShintToolsPanel::OnScanProjectClicked)
+					[
+						SNew(STextBlock).Text(LOCTEXT("ScanSrc","⟳  Scan All Source")).Font(F_Small())
+						.ColorAndOpacity(FSlateColor(C_White()))
+					]
+				]
+				+ SWrapBox::Slot()
+				[
+					SNew(SButton).ContentPadding(FMargin(16.f,7.f))
+					.OnClicked(this, &SShintToolsPanel::OnScanBlueprintsClicked)
+					[
+						SNew(STextBlock).Text(LOCTEXT("ScanBP","⟳  Scan Blueprints")).Font(F_Small())
+						.ColorAndOpacity(FSlateColor(C_White()))
+					]
+				]
+			]
+
+			// Results panel
+			+ SVerticalBox::Slot().AutoHeight()
+			[ BuildCodeResultsPanel() ]
+		];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Code filter bar
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
+{
+	auto FilterBtn = [this](const FText& Label, EIssueFilter Filter) -> TSharedRef<SWidget>
+	{
+		return SNew(SButton).ContentPadding(FMargin(10.f,4.f))
+			.OnClicked_Lambda([this, Filter]() -> FReply {
+				CurrentFilter = Filter;
+				ApplyCodeFilter();
+				return FReply::Handled();
+			})
+			[
+				SNew(STextBlock).Text(Label).Font(F_Label())
+				.ColorAndOpacity(FSlateColor(C_Gray()))
+			];
+	};
+
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+		[
+			SNew(STextBlock).Text(LOCTEXT("ResLbl","RESULTS")).Font(F_Label())
+			.ColorAndOpacity(FSlateColor(C_DimGray()))
+		]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,4.f,0.f)
+		[ FilterBtn(LOCTEXT("FAll","All"),         EIssueFilter::All)        ]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,4.f,0.f)
+		[ FilterBtn(LOCTEXT("FErr","Errors"),      EIssueFilter::ErrorsOnly) ]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,4.f,0.f)
+		[ FilterBtn(LOCTEXT("FWrn","Warnings"),    EIssueFilter::WarningsOnly)]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,10.f,0.f)
+		[ FilterBtn(LOCTEXT("FFix","Fixable"),     EIssueFilter::FixableOnly) ]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,4.f,0.f)
+		[
+			SNew(SButton).ContentPadding(FMargin(10.f,4.f))
+			.OnClicked(this, &SShintToolsPanel::OnSelectAllCodeClicked)
+			[ SNew(STextBlock).Text(LOCTEXT("SelAll","Select All")).Font(F_Label())
+			  .ColorAndOpacity(FSlateColor(C_Blue())) ]
+		]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[
+			SNew(SButton).ContentPadding(FMargin(10.f,4.f))
+			.OnClicked(this, &SShintToolsPanel::OnDeselectAllCodeClicked)
+			[ SNew(STextBlock).Text(LOCTEXT("DeselAll","Deselect All")).Font(F_Label())
+			  .ColorAndOpacity(FSlateColor(C_Gray())) ]
+		];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Code results panel
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
+{
+	SAssignNew(CodeEmptyState, SBox)
+	.HAlign(HAlign_Center).VAlign(VAlign_Center).MinDesiredHeight(64.f)
+	[
+		SNew(STextBlock).Text(LOCTEXT("CVEmpty","Run a scan to see results here."))
+		.Font(F_Small()).ColorAndOpacity(FSlateColor(C_DimGray()))
+	];
+
+	TSharedRef<SWidget> ListArea =
+		SNew(SVerticalBox)
+
+		// Filter + select toolbar
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f) [ BuildCodeFilterBar() ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f) [ Divider() ]
+
+		// Virtual list — fixed item height for performance with hundreds of rows
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SBox).MaxDesiredHeight(420.f)
+			[
+				SAssignNew(CodeIssueListView, SListView<FShintIssueItemPtr>)
+				.ListItemsSource(&CodeIssueItems)
+				.OnGenerateRow(this, &SShintToolsPanel::GenerateCodeIssueRow)
+				.SelectionMode(ESelectionMode::None)// fixed height → no re-measure per row → fast scroll
+				.AllowOverscroll(EAllowOverscroll::Yes)
+			]
 		]
 
-		// Scrollable log area
-		+ SVerticalBox::Slot()
-		.FillHeight(1.0f)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,8.f,0.f,0.f) [ Divider() ]
+
+		// Action row
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,8.f,0.f,0.f)
 		[
-			SAssignNew(OutputScrollBox, SScrollBox)
-			.Orientation(Orient_Vertical)
-			+ SScrollBox::Slot()
+			SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f,6.f))
+			+ SWrapBox::Slot()
 			[
-				SAssignNew(OutputTextBox, SMultiLineEditableTextBox)
-				.IsReadOnly(true)
-				.AutoWrapText(false)
-				.Font(FCoreStyle::GetDefaultFontStyle("Mono", 9))
-				.BackgroundColor(FLinearColor(0.05f, 0.05f, 0.05f, 1.0f))
-				.ForegroundColor(FLinearColor(0.85f, 0.85f, 0.85f, 1.0f))
+				SAssignNew(ApplyCodeBtn, SButton)
+				.IsEnabled(false).ContentPadding(FMargin(16.f,7.f))
+				.OnClicked(this, &SShintToolsPanel::OnApplySelectedCodeFixesClicked)
+				[
+					SAssignNew(ApplyCodeBtnLabel, STextBlock)
+					.Text(LOCTEXT("ApplyCode","✓  Apply Selected (0)"))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green()))
+				]
+			]
+			+ SWrapBox::Slot()
+			[
+				SAssignNew(SendCodeBtn, SButton)
+				.IsEnabled(false).ContentPadding(FMargin(16.f,7.f))
+				.OnClicked(this, &SShintToolsPanel::OnSendCodeToDashboardClicked)
+				[
+					SNew(STextBlock).Text(LOCTEXT("SendCode","↑  Send to Dashboard"))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Blue()))
+				]
+			]
+		];
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight() [ CodeEmptyState.ToSharedRef() ]
+		+ SVerticalBox::Slot().AutoHeight() [ ListArea ];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Code issue row — shows rule, filepath, message, snippet ▸ suggestion
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
+	FShintIssueItemPtr Item, const TSharedRef<STableViewBase>& Owner)
+{
+	const bool bError = (Item->Severity == TEXT("error"));
+	const FLinearColor SevColor  = bError ? C_Red() : C_Yellow();
+	const FLinearColor RowBG     = (Item->OriginalIndex % 2 == 0) ? C_RowEven() : C_RowOdd();
+	const FString      AutoBadge = Item->bIsAutoFixable ? TEXT("  AUTO") : TEXT("");
+
+	return SNew(STableRow<FShintIssueItemPtr>, Owner)
+		.Style(FAppStyle::Get(), "TableView.Row").Padding(0.f)
+		[
+			SNew(SBorder).BorderImage(ST4::Solid(RowBG)).Padding(FMargin(12.f, 9.f))
+			[
+				SNew(SHorizontalBox)
+
+				// Checkbox
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(0.f,2.f,10.f,0.f)
+				[
+					SNew(SCheckBox)
+					.IsChecked(Item->bChecked ? ECheckBoxState::Checked : ECheckBoxState::Unchecked)
+					.OnCheckStateChanged_Lambda([this, Item](ECheckBoxState S) {
+						Item->bChecked = (S == ECheckBoxState::Checked);
+						RefreshApplyCodeLabel();
+					})
+				]
+
+				// Content column
+				+ SHorizontalBox::Slot().FillWidth(1.f)
+				[
+					SNew(SVerticalBox)
+
+					// Row 1: severity ● + rule_id + file:line + AUTO badge
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,4.f)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,5.f,0.f)
+						[
+							SNew(STextBlock).Text(FText::FromString(TEXT("●"))).Font(F_Small())
+							.ColorAndOpacity(FSlateColor(SevColor))
+						]
+						+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,10.f,0.f)
+						[
+							SNew(STextBlock).Text(FText::FromString(Item->RuleId)).Font(F_RuleId())
+							.ColorAndOpacity(FSlateColor(C_White()))
+						]
+						+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+						[
+							SNew(STextBlock)
+							.Text(FText::FromString(
+								FString::Printf(TEXT("%s : %d"), *Item->FileName, Item->Line)))
+							.Font(F_Mono()).ColorAndOpacity(FSlateColor(C_Gray()))
+						]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+						[
+							SNew(STextBlock).Text(FText::FromString(AutoBadge)).Font(F_Label())
+							.ColorAndOpacity(FSlateColor(C_Blue()))
+						]
+					]
+
+					// Row 2: message (wraps at container width)
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,5.f)
+					[
+						SNew(STextBlock).Text(FText::FromString(Item->Message)).Font(F_Small())
+						.ColorAndOpacity(FSlateColor(C_White())).AutoWrapText(true)
+					]
+
+					// Row 3: code diff (▸ bad → ✓ good)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(SBorder)
+						.Visibility(Item->Snippet.IsEmpty()
+							? EVisibility::Collapsed : EVisibility::Visible)
+						.BorderImage(ST4::Solid(FLinearColor(0.055f,0.055f,0.055f,1.f)))
+						.Padding(FMargin(8.f,5.f))
+						[
+							SNew(SVerticalBox)
+
+							// Current (red)
+							+ SVerticalBox::Slot().AutoHeight()
+							[
+								SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f)
+								[ SNew(STextBlock).Text(FText::FromString(TEXT("▸"))).Font(F_Mono())
+								  .ColorAndOpacity(FSlateColor(C_Red())) ]
+								+ SHorizontalBox::Slot().FillWidth(1.f)
+								[ SNew(STextBlock).Text(FText::FromString(Item->Snippet))
+								  .Font(F_Mono()).ColorAndOpacity(FSlateColor(
+								      FLinearColor(0.90f,0.48f,0.48f,1.f))).AutoWrapText(true) ]
+							]
+
+							// Fix suggestion (green)
+							+ SVerticalBox::Slot().AutoHeight().Padding(0.f,3.f,0.f,0.f)
+							[
+								SNew(SHorizontalBox)
+								.Visibility(Item->FixSuggestion.IsEmpty()
+									? EVisibility::Collapsed : EVisibility::Visible)
+								+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f)
+								[ SNew(STextBlock).Text(FText::FromString(TEXT("→"))).Font(F_Mono())
+								  .ColorAndOpacity(FSlateColor(C_Green())) ]
+								+ SHorizontalBox::Slot().FillWidth(1.f)
+								[ SNew(STextBlock).Text(FText::FromString(Item->FixSuggestion))
+								  .Font(F_Mono()).ColorAndOpacity(FSlateColor(
+								      FLinearColor(0.48f,0.90f,0.48f,1.f))).AutoWrapText(true) ]
+							]
+						]
+					]
+				]
 			]
 		];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Button Handlers
+// Asset Naming Bot section
 // ─────────────────────────────────────────────────────────────────────────────
 
-FReply SShintToolsPanel::OnCheckCoreEngineClicked()
+TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 {
-	UE_LOG(LogShintTools, Log, TEXT("SShintToolsPanel: Check Core Engine clicked."));
-	AppendLog(TEXT("→ Checking Core Engine health..."));
+	return SNew(SBorder)
+		.BorderImage(ST4::Solid(C_BG()))
+		.Padding(FMargin(20.f,18.f))
+		[
+			SNew(SVerticalBox)
 
-	SetCoreStatus(ECoreStatus::Checking);
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,3.f)
+			[
+				SNew(STextBlock).Text(LOCTEXT("ANBTitle","ASSET NAMING BOT")).Font(F_H2())
+				.ColorAndOpacity(FSlateColor(C_White()))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,16.f)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("ANBSub","Scan entire project · detect invalid names · apply UE5 rename (refs preserved) · send to dashboard"))
+				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray()))
+			]
 
+			// Stats
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,16.f)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
+				[ StatBadge(AssetTotal_Label,   LOCTEXT("ANBT","ASSETS"),   C_Blue())   ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
+				[ StatBadge(AssetInvalid_Label, LOCTEXT("ANBI","INVALID"),  C_Red())    ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
+				[ StatBadge(AssetTime_Label,    LOCTEXT("ANBMS","TIME (s)"), C_Gray()) ]
+			]
+
+			// Progress
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,14.f)
+			[
+				SNew(SBox).HeightOverride(2.f)
+				[
+					SAssignNew(AssetProgressBar, SProgressBar)
+					.Percent(TAttribute<TOptional<float>>::Create(
+						TAttribute<TOptional<float>>::FGetter::CreateSP(this, &SShintToolsPanel::GetAssetProgress)))
+					.FillColorAndOpacity(FSlateColor(C_Blue()))
+					.BackgroundImage(FAppStyle::GetBrush("ProgressBar.Background"))
+				]
+			]
+
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,18.f)
+			[
+				SNew(SButton).ContentPadding(FMargin(16.f,7.f)).HAlign(HAlign_Left)
+				.OnClicked(this, &SShintToolsPanel::OnScanAssetsClicked)
+				[
+					SNew(STextBlock).Text(LOCTEXT("ScanAssets","⟳  Scan All Assets")).Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_White()))
+				]
+			]
+
+			+ SVerticalBox::Slot().AutoHeight()
+			[ BuildAssetResultsPanel() ]
+		];
+}
+
+TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
+{
+	SAssignNew(AssetEmptyState, SBox)
+	.HAlign(HAlign_Center).VAlign(VAlign_Center).MinDesiredHeight(64.f)
+	[
+		SNew(STextBlock).Text(LOCTEXT("ANBEmpty","Run a scan to see naming violations."))
+		.Font(F_Small()).ColorAndOpacity(FSlateColor(C_DimGray()))
+	];
+
+	TSharedRef<SWidget> ListArea =
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock).Text(LOCTEXT("ANBRes","RESULTS")).Font(F_Label())
+				.ColorAndOpacity(FSlateColor(C_DimGray()))
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SButton).ContentPadding(FMargin(10.f,4.f))
+				.OnClicked(this, &SShintToolsPanel::OnSelectAllAssetsClicked)
+				[ SNew(STextBlock).Text(LOCTEXT("ANBSel","Select All")).Font(F_Label())
+				  .ColorAndOpacity(FSlateColor(C_Blue())) ]
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f) [ Divider() ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SBox).MaxDesiredHeight(360.f)
+			[
+				SAssignNew(AssetIssueListView, SListView<FShintAssetItemPtr>)
+				.ListItemsSource(&AssetIssueItems)
+				.OnGenerateRow(this, &SShintToolsPanel::GenerateAssetIssueRow)
+				.SelectionMode(ESelectionMode::None)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,8.f,0.f,0.f) [ Divider() ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,8.f,0.f,0.f)
+		[
+			SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f,6.f))
+			+ SWrapBox::Slot()
+			[
+				SAssignNew(ApplyAssetBtn, SButton)
+				.IsEnabled(false).ContentPadding(FMargin(16.f,7.f))
+				.OnClicked(this, &SShintToolsPanel::OnApplySelectedAssetFixesClicked)
+				[
+					SAssignNew(ApplyAssetBtnLabel, STextBlock)
+					.Text(LOCTEXT("ApplyAsset","✓  Apply Corrections (0)"))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green()))
+				]
+			]
+			+ SWrapBox::Slot()
+			[
+				SAssignNew(SendAssetBtn, SButton)
+				.IsEnabled(false).ContentPadding(FMargin(16.f,7.f))
+				.OnClicked(this, &SShintToolsPanel::OnSendAssetToDashboardClicked)
+				[
+					SNew(STextBlock).Text(LOCTEXT("SendAsset","↑  Send to Dashboard"))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Blue()))
+				]
+			]
+		];
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight() [ AssetEmptyState.ToSharedRef() ]
+		+ SVerticalBox::Slot().AutoHeight() [ ListArea ];
+}
+
+TSharedRef<ITableRow> SShintToolsPanel::GenerateAssetIssueRow(
+	FShintAssetItemPtr Item, const TSharedRef<STableViewBase>& Owner)
+{
+	const FLinearColor RowBG = (Item->OriginalIndex % 2 == 0) ? C_RowEven() : C_RowOdd();
+
+	return SNew(STableRow<FShintAssetItemPtr>, Owner)
+		.Style(FAppStyle::Get(), "TableView.Row").Padding(0.f)
+		[
+			SNew(SBorder).BorderImage(ST4::Solid(RowBG)).Padding(FMargin(12.f,9.f))
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f,0.f,10.f,0.f)
+				[
+					SNew(SCheckBox)
+					.IsChecked(Item->bChecked ? ECheckBoxState::Checked : ECheckBoxState::Unchecked)
+					.OnCheckStateChanged_Lambda([this, Item](ECheckBoxState S) {
+						Item->bChecked = (S == ECheckBoxState::Checked);
+						RefreshApplyAssetLabel();
+					})
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.f)
+				[
+					SNew(SVerticalBox)
+
+					// Type + path row
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,4.f)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f)
+						[
+							SNew(STextBlock).Text(FText::FromString(TEXT("⚠"))).Font(F_Small())
+							.ColorAndOpacity(FSlateColor(C_Yellow()))
+						]
+						+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,10.f,0.f)
+						[
+							SNew(STextBlock).Text(FText::FromString(Item->AssetType))
+							.Font(FCoreStyle::GetDefaultFontStyle("Bold",10))
+							.ColorAndOpacity(FSlateColor(C_White()))
+						]
+						+ SHorizontalBox::Slot().FillWidth(1.f)
+						[
+							SNew(STextBlock).Text(FText::FromString(Item->AssetPath))
+							.Font(F_Mono()).ColorAndOpacity(FSlateColor(C_Gray()))
+						]
+					]
+
+					// Current → suggested
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(SBorder).BorderImage(ST4::Solid(FLinearColor(0.055f,0.055f,0.055f,1.f)))
+						.Padding(FMargin(8.f,4.f))
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f)
+							[ SNew(STextBlock).Text(FText::FromString(TEXT("▸"))).Font(F_Mono())
+							  .ColorAndOpacity(FSlateColor(C_Red())) ]
+							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,12.f,0.f)
+							[ SNew(STextBlock).Text(FText::FromString(Item->CurrentName))
+							  .Font(F_Mono()).ColorAndOpacity(FSlateColor(FLinearColor(0.9f,0.45f,0.45f,1.f))) ]
+							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f)
+							[ SNew(STextBlock).Text(FText::FromString(TEXT("→"))).Font(F_Mono())
+							  .ColorAndOpacity(FSlateColor(C_Green())) ]
+							+ SHorizontalBox::Slot().FillWidth(1.f)
+							[ SNew(STextBlock).Text(FText::FromString(Item->SuggestedName))
+							  .Font(F_Mono()).ColorAndOpacity(FSlateColor(FLinearColor(0.45f,0.9f,0.45f,1.f))) ]
+						]
+					]
+				]
+			]
+		];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Button handlers
+// ─────────────────────────────────────────────────────────────────────────────
+
+FReply SShintToolsPanel::OnCheckConnectionClicked()
+{
+	SetStatus(ECoreStatus::Checking);
 	CoreClient->CheckHealth(FOnShintRequestComplete::CreateSP(
 		this, &SShintToolsPanel::OnHealthCheckComplete));
-
 	return FReply::Handled();
 }
 
-FReply SShintToolsPanel::OnStartCoreEngineClicked()
+FReply SShintToolsPanel::OnScanProjectClicked()
 {
-	UE_LOG(LogShintTools, Log, TEXT("SShintToolsPanel: Start Core Engine clicked."));
-	AppendLog(TEXT("→ Attempting to start Core Engine..."));
-
-	if (ProcessManager->IsCoreRunning())
-	{
-		AppendLog(FString::Printf(
-			TEXT("  Core Engine process already running (PID=%u)."), ProcessManager->GetCorePID()));
-		return FReply::Handled();
-	}
-
-	//const FString ScriptPath = FCoreProcessManager::ResolveCoreScriptPath();
-
-	uint32 OutPID = 0;
-	const bool bLaunched = ProcessManager->StartCoreEngine(
-		ECoreStartMode::Docker,
-		OutPID);
-
-	if (bLaunched)
-	{
-		AppendLog(FString::Printf(TEXT("  ✔ Core Engine launched. PID=%u"), OutPID));
-		AppendLog(TEXT("  Core Engine successfully launched!"));
-		SetCoreStatus(ECoreStatus::Online);
-	}
-	else
-	{
-		AppendLogAndUELog(TEXT("  ✘ Failed to launch Core Engine. Check log for details."), true);
-		SetCoreStatus(ECoreStatus::Offline);
-	}
-
+	SetCodeState(EModuleState::Running);
+	AllCodeItems.Empty(); CodeIssueItems.Empty();
+	CoreClient->ValidateProject(FPaths::GameSourceDir(),
+		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnProjectValidateComplete));
 	return FReply::Handled();
 }
 
-FReply SShintToolsPanel::OnPingCoreClicked()
+FReply SShintToolsPanel::OnScanBlueprintsClicked()
 {
-	UE_LOG(LogShintTools, Log, TEXT("SShintToolsPanel: Ping API clicked."));
-	AppendLog(TEXT("→ Pinging Core Engine..."));
-
-	CoreClient->Ping(FOnShintRequestComplete::CreateSP(
-		this, &SShintToolsPanel::OnPingComplete));
-
+	SetCodeState(EModuleState::Running);
+	CoreClient->ValidateBlueprints(FPaths::ProjectContentDir(),
+		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnBlueprintValidateComplete));
 	return FReply::Handled();
 }
 
-FReply SShintToolsPanel::OnValidateCodeClicked()
+FReply SShintToolsPanel::OnSelectAllCodeClicked()
 {
-	UE_LOG(LogShintTools, Log, TEXT("SShintToolsPanel: Validate Code clicked."));
+	for (FShintIssueItemPtr& I : CodeIssueItems)
+		if (I->bIsAutoFixable) I->bChecked = true;
+	if (CodeIssueListView.IsValid()) CodeIssueListView->RequestListRefresh();
+	RefreshApplyCodeLabel();
+	return FReply::Handled();
+}
 
-	// ── Read file path from the input box ─────────────────────────────────────
-	if (!FilePathInputBox.IsValid() || FilePathInputBox->GetText().IsEmpty())
-	{
-		AppendLogAndUELog(TEXT("  ✘ Please enter a file path before validating."), true);
-		return FReply::Handled();
-	}
-
-	const FString RelativePath = FilePathInputBox->GetText().ToString();
-	const FString AbsolutePath = FPaths::Combine(FPaths::ProjectDir(), RelativePath);
-
-	AppendLog(FString::Printf(TEXT("→ Validating: %s"), *RelativePath));
-
-	if (!FPaths::FileExists(AbsolutePath))
-	{
-		AppendLogAndUELog(
-			FString::Printf(TEXT("  ✘ File not found: %s"), *AbsolutePath),
-			/*bIsWarning=*/true);
-		return FReply::Handled();
-	}
-
-	// ── Read file content ─────────────────────────────────────────────────────
-	FString FileContent;
-	if (!FFileHelper::LoadFileToString(FileContent, *AbsolutePath))
-	{
-		AppendLogAndUELog(
-			FString::Printf(TEXT("  ✘ Failed to read file: %s"), *AbsolutePath),
-			/*bIsWarning=*/true);
-		return FReply::Handled();
-	}
-
-	AppendLog(FString::Printf(TEXT("  File read OK (%d chars). Sending to Core Engine..."),
-		FileContent.Len()));
-
-	// ── Send POST /validate/code ──────────────────────────────────────────────
-	CoreClient->ValidateCode(
-		RelativePath,
-		FileContent,
-		TEXT("unreal"),
-		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnValidateComplete));
-
+FReply SShintToolsPanel::OnDeselectAllCodeClicked()
+{
+	for (FShintIssueItemPtr& I : CodeIssueItems) I->bChecked = false;
+	if (CodeIssueListView.IsValid()) CodeIssueListView->RequestListRefresh();
+	RefreshApplyCodeLabel();
 	return FReply::Handled();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HTTP Response Handlers
+// Apply code fixes — sends to /validate/fix → server rewrites → plugin writes back
+// ─────────────────────────────────────────────────────────────────────────────
+
+FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
+{
+	TArray<FShintCodeIssue> Accepted;
+
+	for (const FShintIssueItemPtr& Item : CodeIssueItems)
+	{
+		if (!Item->bChecked || !Item->bIsAutoFixable) continue;
+
+		FShintCodeIssue I;
+		I.RuleId         = Item->RuleId;
+		I.Severity       = Item->Severity;
+		I.Message        = Item->Message;
+		I.FilePath       = Item->FilePath;   // absolute path
+		I.Line           = Item->Line;
+		I.bIsAutoFixable = true;
+		I.bChecked       = true;
+		Accepted.Add(I);
+	}
+
+	if (Accepted.IsEmpty())
+	{
+		UE_LOG(LogShintTools, Warning,
+			TEXT("ShintTools: No auto-fixable issues checked. Select issues with the AUTO badge."));
+		return FReply::Handled();
+	}
+
+	UE_LOG(LogShintTools, Log,
+		TEXT("ShintTools: Sending %d issue(s) to /validate/fix..."), Accepted.Num());
+
+	SetCodeState(EModuleState::Running);
+	CoreClient->ApplyCodeFixes(Accepted,
+		FOnShintFixComplete::CreateSP(this, &SShintToolsPanel::OnCodeFixComplete));
+	return FReply::Handled();
+}
+
+FReply SShintToolsPanel::OnSendCodeToDashboardClicked()
+{
+	CoreClient->SendCodeValidatorToDashboard(LastCodeResult,
+		FOnShintWebDashboardComplete::CreateSP(this, &SShintToolsPanel::OnCodeDashboardComplete));
+	return FReply::Handled();
+}
+
+FReply SShintToolsPanel::OnScanAssetsClicked()
+{
+	SetAssetState(EModuleState::Running);
+	AssetIssueItems.Empty();
+	CoreClient->ScanAssetNaming(FPaths::ProjectContentDir(),
+		FOnShintAssetScanComplete::CreateSP(this, &SShintToolsPanel::OnAssetScanComplete));
+	return FReply::Handled();
+}
+
+FReply SShintToolsPanel::OnSelectAllAssetsClicked()
+{
+	for (FShintAssetItemPtr& I : AssetIssueItems) I->bChecked = true;
+	if (AssetIssueListView.IsValid()) AssetIssueListView->RequestListRefresh();
+	RefreshApplyAssetLabel();
+	return FReply::Handled();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Apply asset fixes — uses IAssetTools::RenameAssets (proper UE5 rename with
+// reference fixup). Then reports the operation to the local server.
+// ─────────────────────────────────────────────────────────────────────────────
+
+FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
+{
+	if (!FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
+	{
+		UE_LOG(LogShintTools, Error, TEXT("ShintTools: AssetTools module not available."));
+		return FReply::Handled();
+	}
+
+	const FAssetToolsModule& AssetToolsModule =
+	FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+
+	IAssetTools& AssetTools = AssetToolsModule.Get();
+	
+	TArray<FAssetRenameData> RenameData;
+	TArray<FShintAssetIssue> ForServer;
+
+	for (const FShintAssetItemPtr& Item : AssetIssueItems)
+	{
+		if (!Item->bChecked) continue;
+
+		// Load the UObject from its package path (/Game/...AssetName)
+		UObject* Asset = StaticLoadObject(UObject::StaticClass(), nullptr, *Item->AssetPath);
+		if (!Asset)
+		{
+			UE_LOG(LogShintTools, Warning,
+				TEXT("ShintTools: Could not load asset for rename: %s"), *Item->AssetPath);
+			continue;
+		}
+
+		const FString NewPackagePath = FPaths::GetPath(Item->AssetPath);
+		RenameData.Add(FAssetRenameData(Asset, NewPackagePath, Item->SuggestedName));
+
+		FShintAssetIssue I;
+		I.AssetPath    = Item->AssetPath;
+		I.CurrentName  = Item->CurrentName;
+		I.SuggestedName= Item->SuggestedName;
+		I.AssetType    = Item->AssetType;
+		ForServer.Add(I);
+	}
+
+	if (RenameData.IsEmpty())
+	{
+		UE_LOG(LogShintTools, Warning, TEXT("ShintTools: No assets could be loaded for rename."));
+		return FReply::Handled();
+	}
+
+	// Execute the rename — UE5 updates .uasset on disk + all redirectors + references
+	AssetTools.RenameAssets(RenameData);
+
+	UE_LOG(LogShintTools, Log,
+		TEXT("ShintTools: ✔ Renamed %d asset(s) via IAssetTools."), RenameData.Num());
+
+	// Report to local server (for MongoDB history / dashboard sync)
+	CoreClient->ReportAssetFixesToServer(ForServer,
+		FOnShintAssetFixComplete::CreateSP(this, &SShintToolsPanel::OnAssetFixComplete));
+
+	return FReply::Handled();
+}
+
+FReply SShintToolsPanel::OnSendAssetToDashboardClicked()
+{
+	CoreClient->SendAssetNamingToDashboard(LastAssetResult,
+		FOnShintWebDashboardComplete::CreateSP(this, &SShintToolsPanel::OnAssetDashboardComplete));
+	return FReply::Handled();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HTTP callbacks
 // ─────────────────────────────────────────────────────────────────────────────
 
 void SShintToolsPanel::OnHealthCheckComplete(const FShintRequestResult& Result)
 {
+	SetStatus(Result.bSuccess ? ECoreStatus::Online : ECoreStatus::Offline);
 	if (Result.bSuccess)
 	{
-		SetCoreStatus(ECoreStatus::Online);
-		AppendLog(FString::Printf(TEXT("  ✔ Core Engine ONLINE. HTTP %d"), Result.StatusCode));
-		AppendLog(FString::Printf(TEXT("  Response: %s"), *Result.ResponseBody));
+		UE_LOG(LogShintTools, Log, TEXT("ShintTools: Core Engine ONLINE"));
 	}
 	else
 	{
-		SetCoreStatus(ECoreStatus::Offline);
-		AppendLogAndUELog(
-			FString::Printf(TEXT("  ✘ Core Engine OFFLINE. %s"), *Result.ErrorMessage), true);
+		UE_LOG(LogShintTools, Warning, TEXT("ShintTools: Core Engine %s"), *FString::Printf(TEXT("OFFLINE — %s"), *Result.ErrorMessage));
 	}
 }
 
-void SShintToolsPanel::OnPingComplete(const FShintRequestResult& Result)
-{
-	if (Result.bSuccess)
-	{
-		AppendLog(FString::Printf(TEXT("  ✔ Ping OK. HTTP %d | %s"),
-			Result.StatusCode, *Result.ResponseBody));
-	}
-	else
-	{
-		AppendLogAndUELog(
-			FString::Printf(TEXT("  ✘ Ping FAILED. %s"), *Result.ErrorMessage), true);
-	}
-}
-
-void SShintToolsPanel::OnValidateComplete(const FShintValidateResult& Result)
+void SShintToolsPanel::OnProjectValidateComplete(const FShintValidateResult& Result)
 {
 	if (!Result.bSuccess)
 	{
-		AppendLogAndUELog(
-			FString::Printf(TEXT("  ✘ Validation FAILED. HTTP %d — %s"),
-				Result.StatusCode, *Result.ErrorMessage),
-			/*bIsWarning=*/true);
+		SetCodeState(EModuleState::Error);
+		UE_LOG(LogShintTools, Error, TEXT("ShintTools: Scan failed — %s"), *Result.ErrorMessage);
 		return;
 	}
+	LastCodeResult = Result;
+	SetCodeState(EModuleState::Done);
+	PopulateCodeIssueList(Result);
+	RefreshCodeStats();
+}
 
-	// ── Summary ───────────────────────────────────────────────────────────────
-	AppendLog(TEXT("  ✔ Validation complete."));
-	AppendLog(TEXT("  ┌─ Summary ────────────────────────────────────────────────"));
-	AppendLog(FString::Printf(TEXT("  │  Total issues : %d"), Result.TotalIssues));
-	AppendLog(FString::Printf(TEXT("  │  Errors       : %d"), Result.TotalErrors));
-	AppendLog(FString::Printf(TEXT("  │  Warnings     : %d"), Result.TotalWarnings));
-	AppendLog(TEXT("  └─────────────────────────────────────────────────────────"));
-
-	if (Result.Issues.Num() == 0)
+void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& Result)
+{
+	if (!Result.bSuccess)
 	{
-		AppendLog(TEXT("  ✔ No issues found."));
+		SetCodeState(EModuleState::Error);
+		UE_LOG(LogShintTools, Error, TEXT("ShintTools: BP scan failed — %s"), *Result.ErrorMessage);
 		return;
 	}
+	// Merge
+	LastCodeResult.bSuccess       = true;
+	LastCodeResult.TotalIssues   += Result.TotalIssues;
+	LastCodeResult.TotalErrors   += Result.TotalErrors;
+	LastCodeResult.TotalWarnings += Result.TotalWarnings;
+	LastCodeResult.FilesScanned  += Result.FilesScanned;
+	for (const FShintCodeIssue& I : Result.Issues) LastCodeResult.Issues.Add(I);
 
-	// ── Per-issue breakdown ───────────────────────────────────────────────────
-	AppendLog(FString::Printf(TEXT("  Issues (%d):"), Result.Issues.Num()));
-
-	for (int32 i = 0; i < Result.Issues.Num(); ++i)
-	{
-		const FShintCodeIssue& Issue = Result.Issues[i];
-		const FString Prefix = (Issue.Severity == TEXT("error")) ? TEXT("✘") : TEXT("⚠");
-
-		AppendLog(FString::Printf(
-			TEXT("  %s [%s] %s  (line %d)"),
-			*Prefix,
-			Issue.RuleId.IsEmpty() ? TEXT("--") : *Issue.RuleId,
-			*Issue.Message,
-			Issue.Line));
-	}
+	SetCodeState(EModuleState::Done);
+	PopulateCodeIssueList(LastCodeResult);
+	RefreshCodeStats();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// UI Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-void SShintToolsPanel::AppendLog(const FString& Message)
+void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result)
 {
-	const FString Line = GetTimePrefix() + TEXT(" ") + Message;
-
-	if (!LogBuffer.IsEmpty())
+	SetCodeState(EModuleState::Done);
+	if (!Result.bSuccess)
 	{
-		LogBuffer += TEXT("\n");
+		UE_LOG(LogShintTools, Error, TEXT("ShintTools: Fix failed — %s"), *Result.ErrorMessage);
+		return;
 	}
-	LogBuffer += Line;
+	UE_LOG(LogShintTools, Log, TEXT("ShintTools: ✔ %d fix(es) applied, %d skipped."),
+		Result.TotalFixesApplied, Result.TotalFixesSkipped);
 
-	if (OutputTextBox.IsValid())
-	{
-		OutputTextBox->SetText(FText::FromString(LogBuffer));
-	}
+	// Uncheck successfully fixed items
+	for (FShintIssueItemPtr& I : CodeIssueItems)
+		if (I->bChecked && I->bIsAutoFixable) I->bChecked = false;
 
-	if (OutputScrollBox.IsValid())
-	{
-		OutputScrollBox->ScrollToEnd();
-	}
+	if (CodeIssueListView.IsValid()) CodeIssueListView->RequestListRefresh();
+	RefreshApplyCodeLabel();
 }
 
-void SShintToolsPanel::AppendLogAndUELog(const FString& Message, bool bIsWarning)
+void SShintToolsPanel::OnCodeDashboardComplete(const FShintWebDashboardResult& Result)
 {
-	AppendLog(Message);
-
-	if (bIsWarning)
+	if (Result.bSuccess)
 	{
-		UE_LOG(LogShintTools, Warning, TEXT("%s"), *Message);
+		UE_LOG(LogShintTools, Log, TEXT("ShintTools: Code Validator dashboard ✔ synced"));
 	}
 	else
 	{
-		UE_LOG(LogShintTools, Log, TEXT("%s"), *Message);
+		UE_LOG(LogShintTools, Warning, TEXT("ShintTools: Code Validator dashboard ✘ failed — %s"), *Result.ErrorMessage);
 	}
 }
 
-void SShintToolsPanel::SetCoreStatus(ECoreStatus NewStatus)
+void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
 {
-	CurrentStatus = NewStatus;
-	Invalidate(EInvalidateWidget::Paint);
+	if (!Result.bSuccess)
+	{
+		SetAssetState(EModuleState::Error);
+		UE_LOG(LogShintTools, Error, TEXT("ShintTools: Asset scan failed — %s"), *Result.ErrorMessage);
+		return;
+	}
+	LastAssetResult = Result;
+	SetAssetState(EModuleState::Done);
+	PopulateAssetIssueList(Result);
+	RefreshAssetStats();
 }
 
-FSlateColor SShintToolsPanel::GetStatusDotColor() const
+void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
 {
-	switch (CurrentStatus)
+	SetAssetState(EModuleState::Done);
+	if (Result.bSuccess)
 	{
-	case ECoreStatus::Online:   return FSlateColor(FLinearColor(0.0f,  0.85f, 0.2f,  1.0f));
-	case ECoreStatus::Offline:  return FSlateColor(FLinearColor(0.85f, 0.1f,  0.1f,  1.0f));
-	case ECoreStatus::Checking: return FSlateColor(FLinearColor(0.95f, 0.75f, 0.0f,  1.0f));
-	default:                    return FSlateColor(FLinearColor(0.5f,  0.5f,  0.5f,  1.0f));
+		UE_LOG(LogShintTools, Log,     TEXT("ShintTools: Asset fix ✔ (%d renamed)"), Result.AssetsRenamed);
+	}
+	else
+	{
+		UE_LOG(LogShintTools, Warning, TEXT("ShintTools: Asset fix ✘ (%d renamed)"), Result.AssetsRenamed);
+	}
+}
+
+void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& Result)
+{
+	if (Result.bSuccess)
+	{
+		UE_LOG(LogShintTools, Log,     TEXT("ShintTools: Asset Naming dashboard ✔ synced"));
+	}
+	else
+	{
+		UE_LOG(LogShintTools, Warning, TEXT("ShintTools: Asset Naming dashboard ✘ failed — %s"), *Result.ErrorMessage);
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Populate + refresh
+// ─────────────────────────────────────────────────────────────────────────────
+
+void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result)
+{
+	AllCodeItems.Reset();
+	AllCodeItems.Reserve(Result.Issues.Num());
+
+	for (int32 i = 0; i < Result.Issues.Num(); ++i)
+	{
+		const FShintCodeIssue& Src = Result.Issues[i];
+		FShintIssueItemPtr Item = MakeShared<FShintIssueItem>();
+		Item->RuleId         = Src.RuleId;
+		Item->Severity       = Src.Severity;
+		Item->Message        = Src.Message;
+		Item->FilePath       = Src.FilePath;
+		Item->FileName       = FPaths::GetCleanFilename(Src.FilePath);
+		Item->Line           = Src.Line;
+		Item->Snippet        = Src.Snippet;
+		Item->FixSuggestion  = Src.FixSuggestion;
+		Item->bIsAutoFixable = Src.bIsAutoFixable;
+		Item->bChecked       = Src.bIsAutoFixable;
+		Item->OriginalIndex  = i;
+		AllCodeItems.Add(MoveTemp(Item));
+	}
+
+	ApplyCodeFilter();
+
+	if (CodeEmptyState.IsValid())
+		CodeEmptyState->SetVisibility(
+			AllCodeItems.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed);
+
+	if (ApplyCodeBtn.IsValid()) ApplyCodeBtn->SetEnabled(!AllCodeItems.IsEmpty());
+	if (SendCodeBtn.IsValid())  SendCodeBtn->SetEnabled(true);
+	RefreshApplyCodeLabel();
+}
+
+void SShintToolsPanel::ApplyCodeFilter()
+{
+	CodeIssueItems.Reset();
+	CodeIssueItems.Reserve(AllCodeItems.Num());
+
+	for (const FShintIssueItemPtr& Item : AllCodeItems)
+	{
+		switch (CurrentFilter)
+		{
+		case EIssueFilter::ErrorsOnly:   if (Item->Severity != TEXT("error"))   continue; break;
+		case EIssueFilter::WarningsOnly: if (Item->Severity != TEXT("warning")) continue; break;
+		case EIssueFilter::FixableOnly:  if (!Item->bIsAutoFixable)             continue; break;
+		default: break;
+		}
+		CodeIssueItems.Add(Item);
+	}
+
+	if (CodeIssueListView.IsValid()) CodeIssueListView->RequestListRefresh();
+}
+
+void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Result)
+{
+	AssetIssueItems.Reset();
+	AssetIssueItems.Reserve(Result.Issues.Num());
+
+	for (int32 i = 0; i < Result.Issues.Num(); ++i)
+	{
+		const FShintAssetIssue& Src = Result.Issues[i];
+		FShintAssetItemPtr Item = MakeShared<FShintAssetItem>();
+		Item->AssetPath    = Src.AssetPath;
+		Item->CurrentName  = Src.CurrentName;
+		Item->SuggestedName= Src.SuggestedName;
+		Item->Reason       = Src.Reason;
+		Item->AssetType    = Src.AssetType;
+		Item->bChecked     = true;
+		Item->OriginalIndex= i;
+		AssetIssueItems.Add(MoveTemp(Item));
+	}
+
+	if (AssetIssueListView.IsValid()) AssetIssueListView->RequestListRefresh();
+
+	if (AssetEmptyState.IsValid())
+		AssetEmptyState->SetVisibility(
+			AssetIssueItems.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed);
+
+	if (ApplyAssetBtn.IsValid()) ApplyAssetBtn->SetEnabled(!AssetIssueItems.IsEmpty());
+	if (SendAssetBtn.IsValid())  SendAssetBtn->SetEnabled(true);
+	RefreshApplyAssetLabel();
+}
+
+void SShintToolsPanel::RefreshCodeStats()
+{
+	if (CodeFiles_Label.IsValid())    CodeFiles_Label->SetText(FText::FromString(FmtN(LastCodeResult.FilesScanned)));
+	if (CodeErrors_Label.IsValid())   CodeErrors_Label->SetText(FText::FromString(FmtN(LastCodeResult.TotalErrors)));
+	if (CodeWarnings_Label.IsValid()) CodeWarnings_Label->SetText(FText::FromString(FmtN(LastCodeResult.TotalWarnings)));
+}
+
+void SShintToolsPanel::RefreshAssetStats()
+{
+	if (AssetTotal_Label.IsValid())   AssetTotal_Label->SetText(FText::FromString(FmtN(LastAssetResult.TotalAssets)));
+	if (AssetInvalid_Label.IsValid()) AssetInvalid_Label->SetText(FText::FromString(FmtN(LastAssetResult.InvalidAssets)));
+	if (AssetTime_Label.IsValid())    AssetTime_Label->SetText(FText::FromString(
+		FString::Printf(TEXT("%.2f"), LastAssetResult.ScanTimeSeconds)));
+}
+
+void SShintToolsPanel::RefreshApplyCodeLabel()
+{
+	const int32 N = Algo::CountIf(CodeIssueItems,
+		[](const FShintIssueItemPtr& P){ return P->bChecked && P->bIsAutoFixable; });
+	if (ApplyCodeBtnLabel.IsValid())
+		ApplyCodeBtnLabel->SetText(FText::FromString(
+			FString::Printf(TEXT("✓  Apply Selected (%d)"), N)));
+	if (ApplyCodeBtn.IsValid()) ApplyCodeBtn->SetEnabled(N > 0);
+}
+
+void SShintToolsPanel::RefreshApplyAssetLabel()
+{
+	const int32 N = Algo::CountIf(AssetIssueItems,
+		[](const FShintAssetItemPtr& P){ return P->bChecked; });
+	if (ApplyAssetBtnLabel.IsValid())
+		ApplyAssetBtnLabel->SetText(FText::FromString(
+			FString::Printf(TEXT("✓  Apply Corrections (%d)"), N)));
+	if (ApplyAssetBtn.IsValid()) ApplyAssetBtn->SetEnabled(N > 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// State setters + attribute getters
+// ─────────────────────────────────────────────────────────────────────────────
+
+void SShintToolsPanel::SetStatus(ECoreStatus S)
+{ StatusState = S; Invalidate(EInvalidateWidget::Paint); }
+
+void SShintToolsPanel::SetCodeState(EModuleState S)
+{ CodeState = S; Invalidate(EInvalidateWidget::Paint); }
+
+void SShintToolsPanel::SetAssetState(EModuleState S)
+{ AssetState = S; Invalidate(EInvalidateWidget::Paint); }
+
+FSlateColor SShintToolsPanel::GetStatusColor() const
+{
+	switch (StatusState)
+	{
+	case ECoreStatus::Online:   return FSlateColor(C_Green());
+	case ECoreStatus::Offline:  return FSlateColor(C_Red());
+	case ECoreStatus::Checking: return FSlateColor(C_Yellow());
+	default:                    return FSlateColor(C_DimGray());
 	}
 }
 
 FText SShintToolsPanel::GetStatusText() const
 {
-	switch (CurrentStatus)
+	switch (StatusState)
 	{
-	case ECoreStatus::Online:   return LOCTEXT("StatusOnline",   "Online");
-	case ECoreStatus::Offline:  return LOCTEXT("StatusOffline",  "Offline");
-	case ECoreStatus::Checking: return LOCTEXT("StatusChecking", "Checking...");
-	default:                    return LOCTEXT("StatusUnknown",  "Unknown (click Check)");
+	case ECoreStatus::Online:   return LOCTEXT("On",  "Online");
+	case ECoreStatus::Offline:  return LOCTEXT("Off", "Offline");
+	case ECoreStatus::Checking: return LOCTEXT("Chk", "Checking…");
+	default:                    return LOCTEXT("Unk", "Not checked");
 	}
 }
 
-FString SShintToolsPanel::GetTimePrefix()
+TOptional<float> SShintToolsPanel::GetCodeProgress() const
 {
-	const FDateTime Now = FDateTime::Now();
-	return FString::Printf(TEXT("[%02d:%02d:%02d]"),
-		Now.GetHour(), Now.GetMinute(), Now.GetSecond());
+	if (CodeState == EModuleState::Running) return TOptional<float>();
+	if (CodeState == EModuleState::Done)    return TOptional<float>(1.f);
+	return TOptional<float>(0.f);
 }
+
+TOptional<float> SShintToolsPanel::GetAssetProgress() const
+{
+	if (AssetState == EModuleState::Running) return TOptional<float>();
+	if (AssetState == EModuleState::Done)    return TOptional<float>(1.f);
+	return TOptional<float>(0.f);
+}
+
+FString SShintToolsPanel::TimeStr()
+{
+	const FDateTime N = FDateTime::Now();
+	return FString::Printf(TEXT("[%02d:%02d:%02d]"), N.GetHour(), N.GetMinute(), N.GetSecond());
+}
+
+FString SShintToolsPanel::FmtN(int32 N)
+{ return N < 0 ? TEXT("—") : FString::Printf(TEXT("%d"), N); }
 
 #undef LOCTEXT_NAMESPACE

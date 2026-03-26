@@ -1,5 +1,4 @@
 // Copyright ShintTools. All Rights Reserved.
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -7,110 +6,168 @@
 #include "Interfaces/IHttpResponse.h"
 #include "HttpModule.h"
 
-/**
- * EShintHttpMethod
- * Supported HTTP verbs for Core Engine requests.
- */
-enum class EShintHttpMethod : uint8
-{
-	GET,
-	POST,
-	PUT,
-	DELETE_
-};
+// ─────────────────────────────────────────────────────────────────────────────
+// HTTP primitives
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * FShintRequestResult
- * Immutable result object returned (via delegate) after a raw HTTP request completes.
- */
+enum class EShintHttpMethod : uint8 { GET, POST, PUT, DELETE_ };
+
 struct FShintRequestResult
 {
-	/** True if the request completed with a 2xx HTTP status code */
-	bool bSuccess = false;
-
-	/** HTTP status code (0 if no response received) */
-	int32 StatusCode = 0;
-
-	/** Raw response body as a string */
+	bool    bSuccess     = false;
+	int32   StatusCode   = 0;
 	FString ResponseBody;
-
-	/** Human-readable error message when bSuccess == false */
 	FString ErrorMessage;
 };
-
-/** Delegate fired when a raw HTTP request completes. Executed on the Game Thread. */
-DECLARE_DELEGATE_OneParam(FOnShintRequestComplete, const FShintRequestResult& /*Result*/);
+DECLARE_DELEGATE_OneParam(FOnShintRequestComplete, const FShintRequestResult&);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Validate types
+// Code Validator — enriched issue
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * FShintCodeIssue
- * A single code issue returned by POST /validate/code.
- */
 struct FShintCodeIssue
 {
-	/** Rule identifier, e.g. "C001" */
 	FString RuleId;
-
-	/** "error" or "warning" */
-	FString Severity;
-
-	/** Human-readable issue description */
+	FString Severity;         // "error" | "warning"
 	FString Message;
+	FString FilePath;         // absolute path on disk
+	int32   Line             = 0;
+	FString Snippet;          // the problematic source line
+	FString FixSuggestion;    // what the corrected line should look like
+	bool    bIsAutoFixable   = false;
+	int32   LinesCount       = 0;  // total lines in file (for dashboard)
 
-	/** Source line where the issue was detected (1-based, 0 = unknown) */
-	int32 Line = 0;
+	// Runtime UI state — not sent over wire
+	bool    bChecked         = false;
 };
 
-/**
- * FShintValidateResult
- * Parsed result from POST /validate/code.
- */
 struct FShintValidateResult
 {
-	/** True if the HTTP request succeeded (2xx) and the response was parsed */
-	bool bSuccess = false;
-
-	/** HTTP status code (0 if no response received) */
-	int32 StatusCode = 0;
-
-	/** Populated when bSuccess == false */
+	bool    bSuccess      = false;
+	int32   StatusCode    = 0;
 	FString ErrorMessage;
-
-	// ── Summary ──────────────────────────────────────────────────────────────
-	int32 TotalIssues   = 0;
-	int32 TotalErrors   = 0;
-	int32 TotalWarnings = 0;
-
-	/** Per-issue breakdown */
+	int32   TotalIssues   = 0;
+	int32   TotalErrors   = 0;
+	int32   TotalWarnings = 0;
+	int32   FilesScanned  = 0;
 	TArray<FShintCodeIssue> Issues;
+
+	// Kept for "Send to Dashboard" — populated during scan
+	TArray<FString> ScannedFilePaths;  // absolute paths of all scanned files
+};
+DECLARE_DELEGATE_OneParam(FOnShintValidateComplete, const FShintValidateResult&);
+
+struct FShintFixedFile
+{
+	FString FilePath;           // absolute path
+	FString CorrectedContent;
+	int32   FixesApplied = 0;
+	int32   FixesSkipped = 0;
 };
 
-/** Delegate fired when a POST /validate/code request completes. */
-DECLARE_DELEGATE_OneParam(FOnShintValidateComplete, const FShintValidateResult& /*Result*/);
+struct FShintFixResult
+{
+	bool    bSuccess           = false;
+	int32   TotalFixesApplied  = 0;
+	int32   TotalFixesSkipped  = 0;
+	FString ErrorMessage;
+	TArray<FShintFixedFile> FixedFiles;
+};
+DECLARE_DELEGATE_OneParam(FOnShintFixComplete, const FShintFixResult&);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Asset Naming Bot
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct FShintAssetIssue
+{
+	FString AssetPath;       // UE package path e.g. /Game/Characters/hero_body
+	FString CurrentName;
+	FString SuggestedName;
+	FString Reason;
+	FString AssetType;       // "Texture2D", "StaticMesh", etc.
+
+	bool    bChecked = true;
+};
+
+struct FShintAssetScanResult
+{
+	bool    bSuccess        = false;
+	int32   StatusCode      = 0;
+	FString ErrorMessage;
+	int32   TotalAssets     = 0;
+	int32   InvalidAssets   = 0;
+	float   ScanTimeSeconds = 0.0f;
+	TArray<FShintAssetIssue> Issues;
+};
+DECLARE_DELEGATE_OneParam(FOnShintAssetScanComplete, const FShintAssetScanResult&);
+
+struct FShintAssetFixResult
+{
+	bool    bSuccess      = false;
+	int32   AssetsRenamed = 0;
+	FString ErrorMessage;
+};
+DECLARE_DELEGATE_OneParam(FOnShintAssetFixComplete, const FShintAssetFixResult&);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// External web dashboard results
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct FShintWebDashboardResult
+{
+	bool    bSuccess     = false;
+	FString ErrorMessage;
+	FString ResponseBody;
+};
+DECLARE_DELEGATE_OneParam(FOnShintWebDashboardComplete, const FShintWebDashboardResult&);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Local dashboard report (legacy — keeps local MongoDB sync)
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct FShintDashboardReport
+{
+	FString ProjectName;
+	FString Engine = TEXT("unreal");
+	FString ReportType;
+	int32   Code_FilesScanned   = 0;
+	int32   Code_TotalIssues    = 0;
+	int32   Code_TotalErrors    = 0;
+	int32   Code_TotalWarnings  = 0;
+	int32   Asset_TotalScanned  = 0;
+	int32   Asset_InvalidAssets = 0;
+	float   Asset_ScanTime      = 0.0f;
+};
+struct FShintDashboardResult { bool bSuccess = false; FString ErrorMessage; };
+DECLARE_DELEGATE_OneParam(FOnShintDashboardComplete, const FShintDashboardResult&);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * FShintCoreConfig
- * Runtime configuration loaded from shinttools.config.json.
- */
 struct FShintCoreConfig
 {
-	/** TCP port the Core Engine REST API listens on */
-	int32 CorePort = 18200;
+	// Local core engine
+	int32   CorePort        = 18200;
+	bool    bAutoStartCore  = false;
 
-	/** If true, the plugin will attempt to start the Core Engine automatically */
-	bool bAutoStartCore = false;
+	// Project identity
+	FString ProjectName     = TEXT("MyGame");
+	FString ProjectId       = TEXT("");
 
-	/** Base URL built from CorePort - refreshed whenever CorePort changes */
+	// External web dashboard (app.shinttools.io or emergent)
+	FString ApiKey          = TEXT("");
+	FString DashboardUrl    = TEXT("https://app.shinttools.io");
+
 	FString GetBaseUrl() const
 	{
 		return FString::Printf(TEXT("http://localhost:%d"), CorePort);
+	}
+
+	bool HasExternalDashboard() const
+	{
+		return !ApiKey.IsEmpty() && !DashboardUrl.IsEmpty() && !ProjectId.IsEmpty();
 	}
 };
 
@@ -118,97 +175,71 @@ struct FShintCoreConfig
 // Client
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * FShintCoreClient
- *
- * Thin HTTP client that communicates with the ShintTools Core Engine REST API.
- * All business logic lives in the Core Engine; this class only handles
- * serialization, transport, and response delivery.
- *
- * Thread safety: All public methods must be called from the Game Thread.
- */
 class SHINTTOOLS_API FShintCoreClient
 {
 public:
-
 	FShintCoreClient();
 	~FShintCoreClient();
 
-	// ── Configuration ────────────────────────────────────────────────────────
-
-	/**
-	 * Loads configuration from <ProjectDir>/shinttools.config.json.
-	 * Falls back to default values if the file is missing or malformed.
-	 * @return True if the file was found and parsed successfully
-	 */
 	bool LoadConfig();
-
-	/** Returns the currently active configuration */
 	const FShintCoreConfig& GetConfig() const { return Config; }
 
 	// ── Connectivity ─────────────────────────────────────────────────────────
-
-	/**
-	 * Fires a GET /health request to check whether the Core Engine is running.
-	 * @param OnComplete - Called on completion with the request result
-	 */
 	void CheckHealth(FOnShintRequestComplete OnComplete);
-
-	/**
-	 * Fires a GET /ping request as a lightweight round-trip test.
-	 * @param OnComplete - Called on completion with the request result
-	 */
 	void Ping(FOnShintRequestComplete OnComplete);
 
-	// ── Validation ───────────────────────────────────────────────────────────
+	// ── Code Validator — local engine ─────────────────────────────────────────
+	void ValidateCode(const FString& AbsFilePath, const FString& Content,
+	                  const FString& Engine, FOnShintValidateComplete OnComplete);
+	void ValidateProject(const FString& SourceDir, FOnShintValidateComplete OnComplete);
+	void ValidateBlueprints(const FString& ContentDir, FOnShintValidateComplete OnComplete);
+	void ApplyCodeFixes(const TArray<FShintCodeIssue>& AcceptedIssues,
+	                    FOnShintFixComplete OnComplete);
 
+	// ── Code Validator — external web dashboard ───────────────────────────────
 	/**
-	 * Sends POST /validate/code with the given file details.
-	 * Internally builds the JSON payload, dispatches the request, parses the
-	 * response and fires OnComplete with a structured FShintValidateResult.
-	 *
-	 * Expected Core Engine JSON body:
-	 *   { "file_path": "…", "content": "…", "engine": "unreal" }
-	 *
-	 * @param FilePath   - File name or relative path (for display only)
-	 * @param Content    - Full source text of the file
-	 * @param Engine     - Target engine tag, e.g. "unreal"
-	 * @param OnComplete - Delegate fired on the Game Thread with parsed results
+	 * Sends the full project scan to the web dashboard.
+	 * Payload: POST {DashboardUrl}/api/code-validator/analyze
+	 * Body: { project_id, project_name, api_key, files:[{name,path,type,content,lines_count}] }
 	 */
-	void ValidateCode(
-		const FString& FilePath,
-		const FString& Content,
-		const FString& Engine,
-		FOnShintValidateComplete OnComplete);
+	void SendCodeValidatorToDashboard(const FShintValidateResult& LastResult,
+	                                  FOnShintWebDashboardComplete OnComplete);
 
-	// ── Generic Request ───────────────────────────────────────────────────────
+	// ── Asset Naming Bot — local engine ──────────────────────────────────────
+	void ScanAssetNaming(const FString& ContentDir, FOnShintAssetScanComplete OnComplete);
+	void ReportAssetFixesToServer(const TArray<FShintAssetIssue>& Fixed,
+	                              FOnShintAssetFixComplete OnComplete);
 
+	// ── Asset Naming Bot — external web dashboard ─────────────────────────────
 	/**
-	 * Sends an HTTP request to the Core Engine.
-	 *
-	 * @param Endpoint   - Path relative to base URL, e.g. "/health"
-	 * @param Method     - HTTP verb
-	 * @param Body       - JSON body (ignored for GET/DELETE)
-	 * @param OnComplete - Delegate fired on completion (Game Thread)
+	 * Sends naming violations to the web dashboard.
+	 * Payload: POST {DashboardUrl}/api/naming-bot/analyze
+	 * Body: { project_id, project_name, api_key, items:[{name,path,type,category}] }
 	 */
-	void SendRequest(
-		const FString& Endpoint,
-		EShintHttpMethod Method,
-		const FString& Body,
-		FOnShintRequestComplete OnComplete);
+	void SendAssetNamingToDashboard(const FShintAssetScanResult& LastResult,
+	                                FOnShintWebDashboardComplete OnComplete);
+
+	// ── Local MongoDB dashboard report (legacy) ───────────────────────────────
+	void SendDashboardReport(const FShintDashboardReport& Report,
+	                         FOnShintDashboardComplete OnComplete);
+
+	// ── Generic ───────────────────────────────────────────────────────────────
+	void SendRequest(const FString& FullUrl, EShintHttpMethod Method,
+	                 const FString& Body, FOnShintRequestComplete OnComplete,
+	                 const TMap<FString, FString>& ExtraHeaders = {});
 
 private:
+	void OnHttpRequestComplete(FHttpRequestPtr Request, FHttpResponsePtr Response,
+	                           bool bConnectedSuccessfully, FOnShintRequestComplete OnComplete);
 
-	/** Internal callback wired to IHttpRequest::OnProcessRequestComplete */
-	void OnHttpRequestComplete(
-		FHttpRequestPtr Request,
-		FHttpResponsePtr Response,
-		bool bConnectedSuccessfully,
-		FOnShintRequestComplete OnComplete);
-
-	/** Converts EShintHttpMethod to the string expected by FHttpModule */
 	static FString MethodToString(EShintHttpMethod Method);
+	static FShintValidateResult  ParseValidateResponse (const FShintRequestResult& Raw);
+	static FShintAssetScanResult ParseAssetScanResponse(const FShintRequestResult& Raw);
+	static FShintFixResult       ParseFixResponse      (const FShintRequestResult& Raw);
+	static void CollectSourceFiles(const FString& Dir, TArray<FString>& Out);
 
-	/** Loaded runtime configuration */
+	// Infer asset category from UE type string (for dashboard payload)
+	static FString AssetTypeToCategory(const FString& AssetType);
+
 	FShintCoreConfig Config;
 };

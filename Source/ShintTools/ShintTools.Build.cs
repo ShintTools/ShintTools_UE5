@@ -8,11 +8,6 @@ public class ShintTools : ModuleRules
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 
-		PublicIncludePaths.AddRange(new string[]
-		{
-			// No additional public include paths required
-		});
-
 		PrivateIncludePaths.AddRange(new string[]
 		{
 			"ShintTools/Core",
@@ -41,6 +36,13 @@ public class ShintTools : ModuleRules
 			"ToolMenus",
 			"WorkspaceMenuStructure",
 
+			// Asset management — required for IAssetTools::RenameAssets
+			"AssetTools",
+			"AssetRegistry",
+
+			// Plugin info — required for IPluginManager (banner image loading)
+			"Projects",
+
 			// HTTP & JSON
 			"HTTP",
 			"Json",
@@ -50,7 +52,6 @@ public class ShintTools : ModuleRules
 			"InputCore",
 		});
 
-		// Ensure HTTP module is available
 		if (Target.bBuildEditor)
 		{
 			PrivateDependencyModuleNames.AddRange(new string[]
@@ -58,10 +59,5 @@ public class ShintTools : ModuleRules
 				"MainFrame",
 			});
 		}
-
-		DynamicallyLoadedModuleNames.AddRange(new string[]
-		{
-			// No dynamically loaded modules
-		});
 	}
 }

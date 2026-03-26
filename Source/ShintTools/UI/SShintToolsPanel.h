@@ -1,169 +1,217 @@
 // Copyright ShintTools. All Rights Reserved.
-
 #pragma once
 
 #include "CoreMinimal.h"
+#include "ShintCoreClient.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SComboBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SMultiLineEditableTextBox.h"
 #include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SBorder.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/Notifications/SProgressBar.h"
+#include "Widgets/Views/SListView.h"
+#include "Widgets/Views/STableRow.h"
+#include "Brushes/SlateDynamicImageBrush.h"
 
-// Forward declarations
 class FShintCoreClient;
 class FCoreProcessManager;
 struct FShintRequestResult;
-struct FShintValidateResult;    // ← NEW: validate response type
+struct FShintValidateResult;
+struct FShintAssetScanResult;
+struct FShintFixResult;
+struct FShintAssetFixResult;
+struct FShintWebDashboardResult;
+struct FShintCodeIssue;
+struct FShintAssetIssue;
 
-/**
- * ECoreStatus
- * Tracks the last known connectivity status of the Core Engine.
- */
-enum class ECoreStatus : uint8
+// ─────────────────────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum class ECoreStatus  : uint8 { Unknown, Online, Offline, Checking };
+enum class EModuleState : uint8 { Idle, Running, Done, Error };
+enum class EIssueFilter : uint8 { All, ErrorsOnly, WarningsOnly, FixableOnly };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// List item types (shared_ptr owned by TArray for SListView)
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct FShintIssueItem
 {
-	/** Not yet checked */
-	Unknown,
-
-	/** GET /health returned 2xx */
-	Online,
-
-	/** Connection refused or timeout */
-	Offline,
-
-	/** Waiting for an in-flight HTTP request */
-	Checking,
+	FString RuleId;
+	FString Severity;
+	FString Message;
+	FString FilePath;
+	FString FileName;        // cached for display
+	int32   Line           = 0;
+	FString Snippet;
+	FString FixSuggestion;
+	bool    bIsAutoFixable = false;
+	bool    bChecked       = false;
+	int32   OriginalIndex  = -1;
 };
+using FShintIssueItemPtr = TSharedPtr<FShintIssueItem>;
 
-/**
- * SShintToolsPanel
- *
- * Main Slate widget for the ShintTools Editor Panel.
- *
- * Layout:
- *   ┌──────────────────────────────────────────┐
- *   │  ⚙ ShintTools Control Panel              │
- *   ├──────────────────────────────────────────┤
- *   │  Status: ● Online / ● Offline / Unknown  │
- *   ├──────────────────────────────────────────┤
- *   │  [ Check Core Engine ]                   │
- *   │  [ Start Core Engine ]                   │
- *   │  [ Ping API ]                            │
- *   │  ─────────────────────────────────────── │
- *   │  File path: [____________________]       │
- *   │  [ Validate Code ]                       │
- *   ├──────────────────────────────────────────┤
- *   │  Output:                                 │
- *   │  ┌────────────────────────────────────┐  │
- *   │  │  (scrollable multiline log area)   │  │
- *   │  └────────────────────────────────────┘  │
- *   └──────────────────────────────────────────┘
- */
+struct FShintAssetItem
+{
+	FString AssetPath;
+	FString CurrentName;
+	FString SuggestedName;
+	FString Reason;
+	FString AssetType;
+	bool    bChecked      = true;
+	int32   OriginalIndex = -1;
+};
+using FShintAssetItemPtr = TSharedPtr<FShintAssetItem>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Panel widget
+// ─────────────────────────────────────────────────────────────────────────────
+
 class SShintToolsPanel : public SCompoundWidget
 {
 public:
-
 	SLATE_BEGIN_ARGS(SShintToolsPanel) {}
 	SLATE_END_ARGS()
 
-	/** Constructs the widget. Called by Slate macro expansion. */
 	void Construct(const FArguments& InArgs);
-
-	/** SWidget destructor - performs cleanup */
 	virtual ~SShintToolsPanel() override;
 
+	// ── Brand palette — exact website colors ─────────────────────────────────
+	static FLinearColor C_BG()       { return FLinearColor(0.000f, 0.000f, 0.000f, 1.f); }
+	static FLinearColor C_Surface()  { return FLinearColor(0.048f, 0.048f, 0.048f, 1.f); }
+	static FLinearColor C_Border()   { return FLinearColor(0.110f, 0.110f, 0.110f, 1.f); }
+	static FLinearColor C_White()    { return FLinearColor(1.000f, 1.000f, 1.000f, 1.f); }
+	static FLinearColor C_Gray()     { return FLinearColor(0.560f, 0.560f, 0.560f, 1.f); }
+	static FLinearColor C_DimGray()  { return FLinearColor(0.300f, 0.300f, 0.300f, 1.f); }
+	static FLinearColor C_Blue()     { return FLinearColor(0.145f, 0.430f, 0.940f, 1.f); }
+	static FLinearColor C_Green()    { return FLinearColor(0.145f, 0.820f, 0.380f, 1.f); }
+	static FLinearColor C_Red()      { return FLinearColor(0.940f, 0.200f, 0.200f, 1.f); }
+	static FLinearColor C_Yellow()   { return FLinearColor(1.000f, 0.780f, 0.000f, 1.f); }
+	static FLinearColor C_RowEven()  { return FLinearColor(0.038f, 0.038f, 0.038f, 1.f); }
+	static FLinearColor C_RowOdd()   { return FLinearColor(0.018f, 0.018f, 0.018f, 1.f); }
+
+	// ── Fonts — increased from v3 ─────────────────────────────────────────────
+	static FSlateFontInfo F_Title()   { return FCoreStyle::GetDefaultFontStyle("Bold",    18); }
+	static FSlateFontInfo F_H2()      { return FCoreStyle::GetDefaultFontStyle("Bold",    13); }
+	static FSlateFontInfo F_Body()    { return FCoreStyle::GetDefaultFontStyle("Regular", 12); }
+	static FSlateFontInfo F_Small()   { return FCoreStyle::GetDefaultFontStyle("Regular", 11); }
+	static FSlateFontInfo F_Label()   { return FCoreStyle::GetDefaultFontStyle("Regular", 10); }
+	static FSlateFontInfo F_Mono()    { return FCoreStyle::GetDefaultFontStyle("Mono",    10); }
+	static FSlateFontInfo F_RuleId()  { return FCoreStyle::GetDefaultFontStyle("Bold",    11); }
+	static FSlateFontInfo F_StatNum() { return FCoreStyle::GetDefaultFontStyle("Bold",    24); }
+	static FSlateFontInfo F_StatCap() { return FCoreStyle::GetDefaultFontStyle("Regular", 10); }
+
 private:
+	// ── Widget builders ───────────────────────────────────────────────────────
+	TSharedRef<SWidget> BuildHeader();
+	TSharedRef<SWidget> BuildStatusBar();
+	TSharedRef<SWidget> BuildCodeValidatorSection();
+	TSharedRef<SWidget> BuildCodeResultsPanel();
+	TSharedRef<SWidget> BuildCodeFilterBar();
+	TSharedRef<SWidget> BuildAssetNamingSection();
+	TSharedRef<SWidget> BuildAssetResultsPanel();
 
-	// ── Button Handlers ───────────────────────────────────────────────────────
+	// ── Row generators for SListView ──────────────────────────────────────────
+	TSharedRef<ITableRow> GenerateCodeIssueRow(
+		FShintIssueItemPtr Item, const TSharedRef<STableViewBase>& Owner);
+	TSharedRef<ITableRow> GenerateAssetIssueRow(
+		FShintAssetItemPtr Item, const TSharedRef<STableViewBase>& Owner);
 
-	/** Fires GET /health to the Core Engine */
-	FReply OnCheckCoreEngineClicked();
+	// ── Button handlers ───────────────────────────────────────────────────────
+	FReply OnCheckConnectionClicked();
+	FReply OnScanProjectClicked();
+	FReply OnScanBlueprintsClicked();
+	FReply OnSelectAllCodeClicked();
+	FReply OnDeselectAllCodeClicked();
+	FReply OnApplySelectedCodeFixesClicked();
+	FReply OnSendCodeToDashboardClicked();
+	FReply OnScanAssetsClicked();
+	FReply OnSelectAllAssetsClicked();
+	FReply OnApplySelectedAssetFixesClicked();
+	FReply OnSendAssetToDashboardClicked();
 
-	/** Attempts to start the Core Engine process */
-	FReply OnStartCoreEngineClicked();
-
-	/** Fires GET /ping to the Core Engine */
-	FReply OnPingCoreClicked();
-
-	/**
-	 * Reads the file at the path entered by the user, then sends
-	 * POST /validate/code to the Core Engine.
-	 */
-	FReply OnValidateCodeClicked();
-
-	// ── HTTP Response Handlers ────────────────────────────────────────────────
-
-	/** Called when the health check request completes */
+	// ── HTTP callbacks ────────────────────────────────────────────────────────
 	void OnHealthCheckComplete(const FShintRequestResult& Result);
+	void OnProjectValidateComplete(const FShintValidateResult& Result);
+	void OnBlueprintValidateComplete(const FShintValidateResult& Result);
+	void OnCodeFixComplete(const FShintFixResult& Result);
+	void OnCodeDashboardComplete(const FShintWebDashboardResult& Result);
+	void OnAssetScanComplete(const FShintAssetScanResult& Result);
+	void OnAssetFixComplete(const FShintAssetFixResult& Result);
+	void OnAssetDashboardComplete(const FShintWebDashboardResult& Result);
 
-	/** Called when the ping request completes */
-	void OnPingComplete(const FShintRequestResult& Result);
+	// ── UI state helpers ──────────────────────────────────────────────────────
+	void SetStatus(ECoreStatus S);
+	void SetCodeState(EModuleState S);
+	void SetAssetState(EModuleState S);
+	void PopulateCodeIssueList(const FShintValidateResult& Result);
+	void PopulateAssetIssueList(const FShintAssetScanResult& Result);
+	void ApplyCodeFilter();
+	void RefreshCodeStats();
+	void RefreshAssetStats();
+	void RefreshApplyCodeLabel();
+	void RefreshApplyAssetLabel();
+	void LoadBannerBrush();
 
-	/** Called when the POST /validate/code request completes */
-	void OnValidateComplete(const FShintValidateResult& Result);
+	FSlateColor GetStatusColor()        const;
+	FText       GetStatusText()         const;
+	TOptional<float> GetCodeProgress()  const;
+	TOptional<float> GetAssetProgress() const;
 
-	// ── UI Helpers ────────────────────────────────────────────────────────────
-
-	/** Appends a timestamped line to the output log area */
-	void AppendLog(const FString& Message);
-
-	/** Appends a line and also emits it via UE_LOG */
-	void AppendLogAndUELog(const FString& Message, bool bIsWarning = false);
-
-	/** Updates the status indicator dot color and label */
-	void SetCoreStatus(ECoreStatus NewStatus);
-
-	/** Returns the display color for the status dot */
-	FSlateColor GetStatusDotColor() const;
-
-	/** Returns the text label for the status */
-	FText GetStatusText() const;
-
-	/** Returns the human-readable time prefix: [HH:MM:SS] */
-	static FString GetTimePrefix();
-
-	// ── Widget Factories ──────────────────────────────────────────────────────
-
-	/** Builds the top header row */
-	TSharedRef<SWidget> BuildHeaderRow();
-
-	/** Builds the status indicator row */
-	TSharedRef<SWidget> BuildStatusRow();
-
-	/** Builds the action buttons column */
-	TSharedRef<SWidget> BuildButtonsSection();
-
-	/** Builds the validate-code sub-section (file path input + button) */
-	TSharedRef<SWidget> BuildValidateSection();
-
-	/** Builds the scrollable output log area */
-	TSharedRef<SWidget> BuildOutputSection();
+	static FString TimeStr();
+	static FString FmtN(int32 N);
+	static TSharedRef<SWidget> Divider();
 
 	// ── State ─────────────────────────────────────────────────────────────────
-
-	/** HTTP client - owns all communication with the Core Engine */
-	TSharedPtr<FShintCoreClient> CoreClient;
-
-	/** Process manager - handles launching the Core Engine */
+	TSharedPtr<FShintCoreClient>    CoreClient;
 	TSharedPtr<FCoreProcessManager> ProcessManager;
 
-	/** Current connectivity status */
-	ECoreStatus CurrentStatus = ECoreStatus::Unknown;
+	ECoreStatus  StatusState = ECoreStatus::Unknown;
+	EModuleState CodeState   = EModuleState::Idle;
+	EModuleState AssetState  = EModuleState::Idle;
 
-	/** Text accumulator for the output log */
-	FString LogBuffer;
+	FShintValidateResult  LastCodeResult;
+	FShintAssetScanResult LastAssetResult;
 
-	// ── Slate Widget References ───────────────────────────────────────────────
+	// All issues from last scan
+	TArray<FShintIssueItemPtr> AllCodeItems;
+	// Currently visible (after filter)
+	TArray<FShintIssueItemPtr> CodeIssueItems;
+	TArray<FShintAssetItemPtr> AssetIssueItems;
 
-	/** Multiline output text box - we keep a reference to update its content */
-	TSharedPtr<SMultiLineEditableTextBox> OutputTextBox;
+	EIssueFilter CurrentFilter = EIssueFilter::All;
 
-	/** Scroll box wrapping the output - used to auto-scroll to bottom */
-	TSharedPtr<SScrollBox> OutputScrollBox;
+	// ── Slate refs ────────────────────────────────────────────────────────────
+	TSharedPtr<SListView<FShintIssueItemPtr>> CodeIssueListView;
+	TSharedPtr<SListView<FShintAssetItemPtr>> AssetIssueListView;
 
-	/**
-	 * Single-line text box where the user types the path of the file to validate.
-	 * The path is relative to the UE5 project root, e.g. "Source/MyGame/PlayerController.cpp"
-	 */
-	TSharedPtr<SEditableTextBox> FilePathInputBox;
+	TSharedPtr<STextBlock> CodeFiles_Label;
+	TSharedPtr<STextBlock> CodeErrors_Label;
+	TSharedPtr<STextBlock> CodeWarnings_Label;
+	TSharedPtr<STextBlock> AssetTotal_Label;
+	TSharedPtr<STextBlock> AssetInvalid_Label;
+	TSharedPtr<STextBlock> AssetTime_Label;
+
+	TSharedPtr<SProgressBar> CodeProgressBar;
+	TSharedPtr<SProgressBar> AssetProgressBar;
+
+	TSharedPtr<SButton>    ApplyCodeBtn;
+	TSharedPtr<SButton>    SendCodeBtn;
+	TSharedPtr<SButton>    ApplyAssetBtn;
+	TSharedPtr<SButton>    SendAssetBtn;
+
+	TSharedPtr<STextBlock> ApplyCodeBtnLabel;
+	TSharedPtr<STextBlock> ApplyAssetBtnLabel;
+
+	TSharedPtr<SWidget>    CodeEmptyState;
+	TSharedPtr<SWidget>    AssetEmptyState;
+
+	// Banner image brush (loaded from plugin Resources/ShintTools_Banner.png)
+	TSharedPtr<FSlateDynamicImageBrush> BannerBrush;
 };
