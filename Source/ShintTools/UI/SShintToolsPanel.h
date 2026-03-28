@@ -6,10 +6,7 @@
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
-#include "Widgets/Input/SEditableTextBox.h"
-#include "Widgets/Input/SComboBox.h"
 #include "Widgets/Text/STextBlock.h"
-#include "Widgets/Input/SMultiLineEditableTextBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Images/SImage.h"
@@ -73,7 +70,7 @@ public:
 	void Construct(const FArguments& InArgs);
 	virtual ~SShintToolsPanel() override;
 
-	// ── Brand palette — exact website colors ─────────────────────────────────
+	// ── Brand palette ────────────────────────────────────────────────────────
 	static FLinearColor C_BG()       { return FLinearColor(0.000f, 0.000f, 0.000f, 1.f); }
 	static FLinearColor C_Surface()  { return FLinearColor(0.048f, 0.048f, 0.048f, 1.f); }
 	static FLinearColor C_Border()   { return FLinearColor(0.110f, 0.110f, 0.110f, 1.f); }
@@ -86,8 +83,11 @@ public:
 	static FLinearColor C_Yellow()   { return FLinearColor(1.000f, 0.780f, 0.000f, 1.f); }
 	static FLinearColor C_RowEven()  { return FLinearColor(0.038f, 0.038f, 0.038f, 1.f); }
 	static FLinearColor C_RowOdd()   { return FLinearColor(0.018f, 0.018f, 0.018f, 1.f); }
+	static FLinearColor C_CodeBG()   { return FLinearColor(0.055f, 0.055f, 0.055f, 1.f); }
+	static FLinearColor C_DiffRed()  { return FLinearColor(0.900f, 0.480f, 0.480f, 1.f); }
+	static FLinearColor C_DiffGreen(){ return FLinearColor(0.480f, 0.900f, 0.480f, 1.f); }
 
-	// ── Fonts — increased from v3 ─────────────────────────────────────────────
+	// ── Fonts ────────────────────────────────────────────────────────────────
 	static FSlateFontInfo F_Title()   { return FCoreStyle::GetDefaultFontStyle("Bold",    18); }
 	static FSlateFontInfo F_H2()      { return FCoreStyle::GetDefaultFontStyle("Bold",    13); }
 	static FSlateFontInfo F_Body()    { return FCoreStyle::GetDefaultFontStyle("Regular", 12); }
@@ -155,9 +155,16 @@ private:
 	TOptional<float> GetCodeProgress()  const;
 	TOptional<float> GetAssetProgress() const;
 
-	static FString TimeStr();
+	void HandleValidateResult(const FShintValidateResult& Result, bool bMerge);
+
 	static FString FmtN(int32 N);
 	static TSharedRef<SWidget> Divider();
+	static TSharedRef<SWidget> BuildSectionTitle(const FText& Title, const FText& Subtitle);
+	static TSharedRef<SWidget> BuildDiffLine(const FString& Icon, const FString& Text,
+		const FLinearColor& IconColor, const FLinearColor& TextColor);
+	static TSharedRef<SWidget> BuildModuleProgressBar(
+		TSharedPtr<SProgressBar>& OutBar,
+		TAttribute<TOptional<float>> PercentAttr);
 
 	// ── State ─────────────────────────────────────────────────────────────────
 	TSharedPtr<FShintCoreClient>    CoreClient;

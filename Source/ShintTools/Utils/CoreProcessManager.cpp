@@ -65,12 +65,7 @@ void FCoreProcessManager::StopCoreEngine()
 
 bool FCoreProcessManager::IsCoreRunning()
 {
-	if (!ProcessHandle.IsValid())
-	{
-		return false;
-	}
-
-	return FPlatformProcess::IsProcRunning(ProcessHandle);
+	return ProcessHandle.IsValid() && FPlatformProcess::IsProcRunning(ProcessHandle);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
