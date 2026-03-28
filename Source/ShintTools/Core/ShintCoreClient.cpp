@@ -52,10 +52,8 @@ bool FShintCoreClient::LoadConfig()
 	if (Json->TryGetStringField(TEXT("api_key"),      S)) Config.ApiKey      = S;
 	if (Json->TryGetStringField(TEXT("dashboard_url"),S)) Config.DashboardUrl= S;
 
-	UE_LOG(LogShintTools, Log,
-		TEXT("ShintCoreClient: Config loaded. Port=%d, Dashboard=%s, HasKey=%s"),
-		Config.CorePort, *Config.DashboardUrl,
-		Config.ApiKey.IsEmpty() ? TEXT("no") : TEXT("yes"));
+	UE_LOG(LogShintTools, Verbose,
+		TEXT("ShintCoreClient: Config loaded. Port=%d"), Config.CorePort);
 	return true;
 }
 
@@ -97,10 +95,6 @@ void FShintCoreClient::ValidateCode(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Code Validator — full project
-//
-// KEY FIX: We store ABSOLUTE paths in file_path so that:
-//   a) ApplyCodeFixes can read/write the exact disk location
-//   b) SendCodeValidatorToDashboard can re-read the content
 // ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreClient::ValidateProject(
@@ -109,7 +103,7 @@ void FShintCoreClient::ValidateProject(
 	TArray<FString> AbsFiles;
 	CollectSourceFiles(SourceDir, AbsFiles);
 
-	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Scanning %d source files."), AbsFiles.Num());
+	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Scanning %d source files."), AbsFiles.Num());
 
 	TArray<TSharedPtr<FJsonValue>> FilesArr;
 	for (const FString& Abs : AbsFiles)
@@ -118,7 +112,7 @@ void FShintCoreClient::ValidateProject(
 		if (!FFileHelper::LoadFileToString(Content, *Abs)) continue;
 
 		TSharedRef<FJsonObject> FO = MakeShared<FJsonObject>();
-		FO->SetStringField(TEXT("file_path"), Abs);  // ← ABSOLUTE path
+		FO->SetStringField(TEXT("file_path"), Abs);
 		FO->SetStringField(TEXT("content"),   Content);
 		FilesArr.Add(MakeShared<FJsonValueObject>(FO));
 	}
@@ -130,7 +124,6 @@ void FShintCoreClient::ValidateProject(
 	FString Str; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Str);
 	FJsonSerializer::Serialize(Body, W);
 
-	// Capture absolute file list so the result can be used for dashboard
 	TArray<FString> CapturedFiles = AbsFiles;
 
 	SendRequest(Config.GetBaseUrl() + TEXT("/validate/project"), EShintHttpMethod::POST, Str,
@@ -154,7 +147,7 @@ void FShintCoreClient::ValidateBlueprints(
 
 	TArray<TSharedPtr<FJsonValue>> Arr;
 	for (const FString& P : Assets)
-		Arr.Add(MakeShared<FJsonValueString>(P));   // ← also absolute
+		Arr.Add(MakeShared<FJsonValueString>(P));
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetArrayField(TEXT("asset_paths"), Arr);
@@ -171,9 +164,6 @@ void FShintCoreClient::ValidateBlueprints(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Code Validator — apply fixes
-//
-// KEY FIX: file_path in issues is now absolute → no path combination needed.
-// We read content, POST to server, server rewrites, we write back.
 // ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreClient::ApplyCodeFixes(
@@ -200,7 +190,7 @@ void FShintCoreClient::ApplyCodeFixes(
 
 	for (auto& Pair : ByFile)
 	{
-		const FString& AbsPath = Pair.Key;   // already absolute
+		const FString& AbsPath = Pair.Key;
 
 		FString Content;
 		if (!FFileHelper::LoadFileToString(Content, *AbsPath))
@@ -243,13 +233,11 @@ void FShintCoreClient::ApplyCodeFixes(
 					return;
 				}
 
-				// Write corrected files back to disk using the absolute path
+				// Write corrected files back to disk
 				for (FShintFixedFile& FF : Result.FixedFiles)
 				{
 					if (FF.FixesApplied == 0 || FF.FilePath.IsEmpty()) continue;
 
-					// FF.FilePath IS the absolute path (we sent it that way)
-					const FString SaveEncoding = TEXT("UTF-8");
 					if (!FFileHelper::SaveStringToFile(
 						FF.CorrectedContent, *FF.FilePath,
 						FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
@@ -261,8 +249,8 @@ void FShintCoreClient::ApplyCodeFixes(
 					}
 					else
 					{
-						UE_LOG(LogShintTools, Log,
-							TEXT("ShintCoreClient: ✔ Wrote %d fix(es) → %s"),
+						UE_LOG(LogShintTools, Verbose,
+							TEXT("ShintCoreClient: Wrote %d fix(es) -> %s"),
 							FF.FixesApplied, *FF.FilePath);
 					}
 				}
@@ -273,9 +261,6 @@ void FShintCoreClient::ApplyCodeFixes(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // External Web Dashboard — Code Validator
-//
-// POST {DashboardUrl}/api/code-validator/analyze
-// Body matches exactly what the ShintTools web dashboard expects.
 // ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreClient::SendCodeValidatorToDashboard(
@@ -290,7 +275,7 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 		return;
 	}
 
-	// Build files array — re-read from disk using stored absolute paths
+	// Build files array — re-read from disk
 	TArray<TSharedPtr<FJsonValue>> FilesArr;
 	TSet<FString> SeenPaths;
 
@@ -301,14 +286,14 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 		SeenPaths.Add(Issue.FilePath);
 	}
 
-	// Add all scanned files (even those with no issues) from stored path list
+	// Include all scanned files (even those with no issues)
 	for (const FString& AbsPath : LastResult.ScannedFilePaths)
 		SeenPaths.Add(AbsPath);
 
 	for (const FString& AbsPath : SeenPaths)
 	{
 		FString Content;
-		FFileHelper::LoadFileToString(Content, *AbsPath);  // best-effort
+		FFileHelper::LoadFileToString(Content, *AbsPath);
 
 		const FString Filename = FPaths::GetCleanFilename(AbsPath);
 		const FString RelPath  = FPaths::GetPath(AbsPath);
@@ -337,8 +322,7 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 
 	const FString Url = Config.DashboardUrl / TEXT("api/code-validator/analyze");
 
-	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d files to Code Validator dashboard."),
-		FilesArr.Num());
+	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Sending %d files to dashboard."), FilesArr.Num());
 
 	SendRequest(Url, EShintHttpMethod::POST, BodyStr,
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
@@ -377,7 +361,7 @@ void FShintCoreClient::ScanAssetNaming(
 	FString Str; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Str);
 	FJsonSerializer::Serialize(Body, W);
 
-	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Scanning %d assets."), Assets.Num());
+	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Scanning %d assets."), Assets.Num());
 
 	SendRequest(Config.GetBaseUrl() + TEXT("/assets/scan"), EShintHttpMethod::POST, Str,
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
@@ -421,8 +405,6 @@ void FShintCoreClient::ReportAssetFixesToServer(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // External Web Dashboard — Asset Naming Bot
-//
-// POST {DashboardUrl}/api/naming-bot/analyze
 // ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreClient::SendAssetNamingToDashboard(
@@ -437,11 +419,9 @@ void FShintCoreClient::SendAssetNamingToDashboard(
 		return;
 	}
 
-	// Build items array from all violations
 	TArray<TSharedPtr<FJsonValue>> ItemsArr;
 	for (const FShintAssetIssue& Issue : LastResult.Issues)
 	{
-		// AssetPath is like /Game/Characters/Player/hero_body
 		const FString Name     = FPaths::GetBaseFilename(Issue.AssetPath);
 		const FString Path     = FPaths::GetPath(Issue.AssetPath);
 		const FString Category = AssetTypeToCategory(Issue.AssetType);
@@ -465,8 +445,7 @@ void FShintCoreClient::SendAssetNamingToDashboard(
 
 	const FString Url = Config.DashboardUrl / TEXT("api/naming-bot/analyze");
 
-	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d asset items to naming-bot dashboard."),
-		ItemsArr.Num());
+	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Sending %d asset items to dashboard."), ItemsArr.Num());
 
 	SendRequest(Url, EShintHttpMethod::POST, BodyStr,
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {

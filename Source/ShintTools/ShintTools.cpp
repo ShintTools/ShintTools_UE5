@@ -26,26 +26,16 @@ const FName FShintToolsModule::ShintToolsTabName = FName("ShintTools");
 
 void FShintToolsModule::StartupModule()
 {
-	UE_LOG(LogShintTools, Log, TEXT("ShintTools Plugin: StartupModule()"));
-
-	// Register the dockable tab spawner so the tab manager knows how to
-	// instantiate our panel when requested.
 	RegisterTabSpawner();
-
-	// Add the "ShintTools" entry under Window > Developer Tools
 	ExtendLevelEditorMenu();
-
-	UE_LOG(LogShintTools, Log, TEXT("ShintTools Plugin: Startup complete."));
+	UE_LOG(LogShintTools, Verbose, TEXT("ShintTools: Module started."));
 }
 
 void FShintToolsModule::ShutdownModule()
 {
-	UE_LOG(LogShintTools, Log, TEXT("ShintTools Plugin: ShutdownModule()"));
-
 	RemoveLevelEditorMenuExtension();
 	UnregisterTabSpawner();
-
-	UE_LOG(LogShintTools, Log, TEXT("ShintTools Plugin: Shutdown complete."));
+	UE_LOG(LogShintTools, Verbose, TEXT("ShintTools: Module shut down."));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -113,14 +103,11 @@ void FShintToolsModule::RemoveLevelEditorMenuExtension()
 
 void FShintToolsModule::OpenShintToolsPanel()
 {
-	UE_LOG(LogShintTools, Log, TEXT("Opening ShintTools panel."));
 	FGlobalTabmanager::Get()->TryInvokeTab(ShintToolsTabName);
 }
 
 TSharedRef<SDockTab> FShintToolsModule::SpawnShintToolsTab(const FSpawnTabArgs& SpawnTabArgs)
 {
-	UE_LOG(LogShintTools, Log, TEXT("Spawning ShintTools tab."));
-
 	return SNew(SDockTab)
 		.TabRole(ETabRole::NomadTab)
 		[

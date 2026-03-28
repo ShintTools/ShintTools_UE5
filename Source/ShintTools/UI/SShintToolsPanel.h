@@ -18,16 +18,7 @@
 #include "Widgets/Views/STableRow.h"
 #include "Brushes/SlateDynamicImageBrush.h"
 
-class FShintCoreClient;
 class FCoreProcessManager;
-struct FShintRequestResult;
-struct FShintValidateResult;
-struct FShintAssetScanResult;
-struct FShintFixResult;
-struct FShintAssetFixResult;
-struct FShintWebDashboardResult;
-struct FShintCodeIssue;
-struct FShintAssetIssue;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Enums
