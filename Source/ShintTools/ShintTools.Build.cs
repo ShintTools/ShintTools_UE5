@@ -36,11 +36,15 @@ public class ShintTools : ModuleRules
 			"ToolMenus",
 			"WorkspaceMenuStructure",
 
-			// Asset management — required for IAssetTools::RenameAssets
+			// Blueprint reading (UK2Node, UEdGraph, FBPVariableDescription)
+			"BlueprintGraph",
+			"KismetCompiler",
+
+			// Asset tools (IAssetTools::RenameAssets + AssetRegistry discovery)
 			"AssetTools",
 			"AssetRegistry",
 
-			// Plugin info — required for IPluginManager (banner image loading)
+			// Plugin manager (IPluginManager for config paths)
 			"Projects",
 
 			// HTTP & JSON
@@ -48,7 +52,7 @@ public class ShintTools : ModuleRules
 			"Json",
 			"JsonUtilities",
 
-			// Input/Output utilities
+			// Input
 			"InputCore",
 		});
 
@@ -57,6 +61,7 @@ public class ShintTools : ModuleRules
 			PrivateDependencyModuleNames.AddRange(new string[]
 			{
 				"MainFrame",
+				"Kismet",      // Blueprint editor helpers (for reading BP data)
 			});
 		}
 	}

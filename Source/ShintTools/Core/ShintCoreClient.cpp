@@ -1,12 +1,10 @@
 // Copyright ShintTools. All Rights Reserved.
-
 #include "ShintCoreClient.h"
 #include "ShintTools/ShintTools.h"
 
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
-
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "HAL/FileManager.h"
@@ -15,730 +13,436 @@
 #include "Serialization/JsonWriter.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "Engine/Blueprint.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraph/EdGraphNode.h"
+#include "EdGraph/EdGraphPin.h"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Construction
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── JSON micro-helpers ───────────────────────────────────────────────────────
 
-FShintCoreClient::FShintCoreClient()  { LoadConfig(); }
-FShintCoreClient::~FShintCoreClient() {}
+static TSharedRef<FJsonObject> JO()  { return MakeShared<FJsonObject>(); }
+static TSharedPtr<FJsonValue>  JS(const FString& S) { return MakeShared<FJsonValueString>(S); }
+static TSharedPtr<FJsonValue>  JV(TSharedRef<FJsonObject> O) { return MakeShared<FJsonValueObject>(O); }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Config
-// ─────────────────────────────────────────────────────────────────────────────
-
-bool FShintCoreClient::LoadConfig()
+FString FShintClient::ToJson(TSharedRef<FJsonObject> O)
 {
-	Config = FShintCoreConfig();
-	const FString CfgPath = FPaths::Combine(FPaths::ProjectDir(), TEXT("shinttools.config.json"));
-	if (!FPaths::FileExists(CfgPath)) return false;
+	FString S; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&S);
+	FJsonSerializer::Serialize(O, W); return S;
+}
 
-	FString Raw;
-	if (!FFileHelper::LoadFileToString(Raw, *CfgPath)) return false;
+// ─── Construction / Config ────────────────────────────────────────────────────
 
-	TSharedPtr<FJsonObject> Json;
-	TSharedRef<TJsonReader<>> R = TJsonReaderFactory<>::Create(Raw);
-	if (!FJsonSerializer::Deserialize(R, Json) || !Json.IsValid()) return false;
+FShintClient::FShintClient() { LoadConfig(); }
 
-	int32 Port = 0;
-	if (Json->TryGetNumberField(TEXT("core_port"), Port) && Port > 0) Config.CorePort = Port;
+bool FShintClient::LoadConfig()
+{
+	C = FShintCfg();
+	const FString P = FPaths::Combine(FPaths::ProjectDir(), TEXT("shinttools.config.json"));
+	if (!FPaths::FileExists(P)) return false;
+	FString Raw; if (!FFileHelper::LoadFileToString(Raw, *P)) return false;
+	TSharedPtr<FJsonObject> J; TSharedRef<TJsonReader<>> R = TJsonReaderFactory<>::Create(Raw);
+	if (!FJsonSerializer::Deserialize(R, J) || !J.IsValid()) return false;
 
-	bool bAuto = false;
-	if (Json->TryGetBoolField(TEXT("auto_start_core"), bAuto)) Config.bAutoStartCore = bAuto;
-
+	int32 Port=0; if (J->TryGetNumberField(TEXT("core_port"),Port)&&Port>0) C.Port=Port;
 	FString S;
-	if (Json->TryGetStringField(TEXT("project_name"), S)) Config.ProjectName = S;
-	if (Json->TryGetStringField(TEXT("project_id"),   S)) Config.ProjectId   = S;
-	if (Json->TryGetStringField(TEXT("api_key"),      S)) Config.ApiKey      = S;
-	if (Json->TryGetStringField(TEXT("dashboard_url"),S)) Config.DashboardUrl= S;
-
-	UE_LOG(LogShintTools, Log,
-		TEXT("ShintCoreClient: Config loaded. Port=%d, Dashboard=%s, HasKey=%s"),
-		Config.CorePort, *Config.DashboardUrl,
-		Config.ApiKey.IsEmpty() ? TEXT("no") : TEXT("yes"));
+	if (J->TryGetStringField(TEXT("project_name"), S)) C.Name      = S;
+	if (J->TryGetStringField(TEXT("project_id"),   S)) C.ProjectId = S;
+	if (J->TryGetStringField(TEXT("api_key"),      S)) C.Key       = S;
+	if (J->TryGetStringField(TEXT("dashboard_url"),S)) C.DashUrl   = S;
+	UE_LOG(LogShintTools,Log,TEXT("ShintClient: Port=%d Key=%s"),C.Port,C.HasDash()?TEXT("ok"):TEXT("missing"));
 	return true;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Connectivity
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Connectivity ─────────────────────────────────────────────────────────────
 
-void FShintCoreClient::CheckHealth(FOnShintRequestComplete OnComplete)
+void FShintClient::Health(FOnRaw Done) { Get(C.Base()+TEXT("/health"), Done); }
+
+// ─── ScanProject ─────────────────────────────────────────────────────────────
+
+void FShintClient::ScanProject(const FString& SrcDir, FOnValidate Done)
 {
-	SendRequest(Config.GetBaseUrl() + TEXT("/health"), EShintHttpMethod::GET, TEXT(""), OnComplete);
-}
+	TArray<FString> Abs; CollectCpp(SrcDir, Abs);
+	UE_LOG(LogShintTools,Log,TEXT("ShintClient: ScanProject — %d files"),Abs.Num());
 
-void FShintCoreClient::Ping(FOnShintRequestComplete OnComplete)
-{
-	SendRequest(Config.GetBaseUrl() + TEXT("/ping"), EShintHttpMethod::GET, TEXT(""), OnComplete);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Code Validator — single file
-// ─────────────────────────────────────────────────────────────────────────────
-
-void FShintCoreClient::ValidateCode(
-	const FString& AbsFilePath, const FString& Content,
-	const FString& Engine, FOnShintValidateComplete OnComplete)
-{
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("file_path"), AbsFilePath);
-	Body->SetStringField(TEXT("content"),   Content);
-	Body->SetStringField(TEXT("engine"),    Engine);
-
-	FString Str; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Str);
-	FJsonSerializer::Serialize(Body, W);
-
-	SendRequest(Config.GetBaseUrl() + TEXT("/validate/code"), EShintHttpMethod::POST, Str,
-		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
-			OnComplete.ExecuteIfBound(FShintCoreClient::ParseValidateResponse(Raw));
+	TArray<TSharedPtr<FJsonValue>> FA;
+	for (const FString& F : Abs)
+	{
+		FString Cnt; if (!FFileHelper::LoadFileToString(Cnt,*F)) continue;
+		TSharedRef<FJsonObject> O=JO(); O->SetStringField(TEXT("file_path"),F); O->SetStringField(TEXT("content"),Cnt);
+		FA.Add(JV(O));
+	}
+	TSharedRef<FJsonObject> B=JO(); B->SetArrayField(TEXT("files"),FA); B->SetStringField(TEXT("engine"),TEXT("unreal"));
+	TArray<FString> Cap=Abs;
+	Post(C.Base()+TEXT("/validate/project"), ToJson(B),
+		FOnRaw::CreateLambda([Done,Cap](const FShintRaw& Raw) mutable {
+			FValidateResult R = ParseValidate(Raw); R.ScannedPaths=Cap; Done.ExecuteIfBound(R);
 		}));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Code Validator — full project
-//
-// KEY FIX: We store ABSOLUTE paths in file_path so that:
-//   a) ApplyCodeFixes can read/write the exact disk location
-//   b) SendCodeValidatorToDashboard can re-read the content
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── ReadBP (editor API only — no K2Node specialisations) ────────────────────
 
-void FShintCoreClient::ValidateProject(
-	const FString& SourceDir, FOnShintValidateComplete OnComplete)
+TSharedPtr<FJsonObject> FShintClient::ReadBP(const FString& ObjPath) const
 {
-	TArray<FString> AbsFiles;
-	CollectSourceFiles(SourceDir, AbsFiles);
+	UBlueprint* BP = Cast<UBlueprint>(StaticLoadObject(UBlueprint::StaticClass(),nullptr,*ObjPath));
+	if (!BP) return nullptr;
 
-	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Scanning %d source files."), AbsFiles.Num());
-
-	TArray<TSharedPtr<FJsonValue>> FilesArr;
-	for (const FString& Abs : AbsFiles)
-	{
-		FString Content;
-		if (!FFileHelper::LoadFileToString(Content, *Abs)) continue;
-
-		TSharedRef<FJsonObject> FO = MakeShared<FJsonObject>();
-		FO->SetStringField(TEXT("file_path"), Abs);  // ← ABSOLUTE path
-		FO->SetStringField(TEXT("content"),   Content);
-		FilesArr.Add(MakeShared<FJsonValueObject>(FO));
+	FString BpType=TEXT("Actor");
+	if (BP->ParentClass) {
+		const FString P=BP->ParentClass->GetName();
+		if      (P.Contains(TEXT("Character"))) BpType=TEXT("Character");
+		else if (P.Contains(TEXT("Pawn")))       BpType=TEXT("Pawn");
+		else if (P.Contains(TEXT("Widget")))     BpType=TEXT("Widget");
+		else if (P.Contains(TEXT("Component")))  BpType=TEXT("Component");
 	}
 
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetArrayField(TEXT("files"),  FilesArr);
-	Body->SetStringField(TEXT("engine"), TEXT("unreal"));
+	int32 TotalNodes=0, TotalCasts=0, Disconn=0; bool bTick=false;
 
-	FString Str; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Str);
-	FJsonSerializer::Serialize(Body, W);
+	auto ProcGraph=[&](UEdGraph* G, const FString& GType) -> TSharedPtr<FJsonValue>
+	{
+		if(!G) return nullptr;
+		int32 NC=0,Conns=0,Casts=0; TMap<FString,int32> Types;
+		for(UEdGraphNode* N : G->Nodes)
+		{
+			if(!N) continue; ++NC;
+			for(UEdGraphPin* Pin : N->Pins) if(Pin&&Pin->Direction==EGPD_Output) Conns+=Pin->LinkedTo.Num();
+			const FString Cls=N->GetClass()->GetName();
+			Types.FindOrAdd(Cls)++;
+			const FString Title=N->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
+			if(Title.Contains(TEXT("Tick"))) bTick=true;
+			if(Cls.Contains(TEXT("Cast"))||Cls.Contains(TEXT("DynamicCast"))) ++Casts;
+			bool bAny=false; for(UEdGraphPin* Pin:N->Pins) if(Pin&&Pin->LinkedTo.Num()>0){bAny=true;break;}
+			if(!bAny&&NC>1) ++Disconn;
+		}
+		TotalNodes+=NC; TotalCasts+=Casts;
+		TArray<TPair<FString,int32>> Sorted(Types.Array());
+		Sorted.Sort([](const TPair<FString,int32>&A,const TPair<FString,int32>&B){return A.Value>B.Value;});
+		TArray<TSharedPtr<FJsonValue>> NA;
+		for(int32 i=0;i<FMath::Min(5,Sorted.Num());++i){
+			TSharedRef<FJsonObject> NO=JO(); NO->SetStringField(TEXT("type"),Sorted[i].Key); NO->SetNumberField(TEXT("count"),Sorted[i].Value); NA.Add(JV(NO));
+		}
+		TSharedRef<FJsonObject> GO=JO();
+		GO->SetStringField(TEXT("name"),G->GetName()); GO->SetStringField(TEXT("type"),GType);
+		GO->SetNumberField(TEXT("nodes_count"),NC); GO->SetNumberField(TEXT("connections"),Conns);
+		GO->SetNumberField(TEXT("max_exec_depth"),NC/FMath::Max(1,4)); GO->SetNumberField(TEXT("cast_nodes"),Casts);
+		GO->SetArrayField(TEXT("nodes"),NA);
+		return JV(GO);
+	};
 
-	// Capture absolute file list so the result can be used for dashboard
-	TArray<FString> CapturedFiles = AbsFiles;
+	TArray<TSharedPtr<FJsonValue>> Graphs,Vars,Funcs;
+	for(UEdGraph* G:BP->UbergraphPages) { auto V=ProcGraph(G,TEXT("event_graph")); if(V.IsValid()) Graphs.Add(V); }
+	for(UEdGraph* G:BP->FunctionGraphs){ auto V=ProcGraph(G,TEXT("function_graph")); if(V.IsValid()) Graphs.Add(V); }
 
-	SendRequest(Config.GetBaseUrl() + TEXT("/validate/project"), EShintHttpMethod::POST, Str,
-		FOnShintRequestComplete::CreateLambda(
-			[OnComplete, CapturedFiles](const FShintRequestResult& Raw) mutable {
-				FShintValidateResult Result = FShintCoreClient::ParseValidateResponse(Raw);
-				Result.ScannedFilePaths = CapturedFiles;
-				OnComplete.ExecuteIfBound(Result);
-			}));
+	for(FBPVariableDescription& Var:BP->NewVariables)
+	{
+		const FString VN=Var.VarName.ToString(); bool bUsed=false;
+		for(UEdGraph* G:BP->UbergraphPages){ if(!G) continue;
+			for(UEdGraphNode* N:G->Nodes){ if(!N) continue;
+				for(UEdGraphPin* Pin:N->Pins){ if(Pin&&Pin->PinName.ToString().Contains(VN)){bUsed=true;break;} }
+				if(bUsed) break; } if(bUsed) break; }
+		TSharedRef<FJsonObject> VO=JO(); VO->SetStringField(TEXT("name"),VN); VO->SetStringField(TEXT("type"),Var.VarType.PinCategory.ToString()); VO->SetBoolField(TEXT("used"),bUsed);
+		Vars.Add(JV(VO));
+	}
+	for(UEdGraph* G:BP->FunctionGraphs){ if(!G) continue;
+		int32 Cx=1; for(UEdGraphNode* N:G->Nodes) if(N&&N->GetNodeTitle(ENodeTitleType::FullTitle).ToString().Contains(TEXT("Branch"))) ++Cx;
+		TSharedRef<FJsonObject> FO=JO(); FO->SetStringField(TEXT("name"),G->GetName()); FO->SetNumberField(TEXT("complexity"),Cx); FO->SetNumberField(TEXT("nodes_count"),G->Nodes.Num());
+		Funcs.Add(JV(FO));
+	}
+
+	TSharedRef<FJsonObject> Stats=JO();
+	Stats->SetNumberField(TEXT("total_nodes"),TotalNodes); Stats->SetNumberField(TEXT("cast_nodes"),TotalCasts);
+	Stats->SetBoolField(TEXT("tick_enabled"),bTick); Stats->SetBoolField(TEXT("has_construction_script"),BP->SimpleConstructionScript!=nullptr);
+	Stats->SetNumberField(TEXT("disconnected_nodes"),Disconn);
+
+	TSharedRef<FJsonObject> Bp=JO();
+	Bp->SetStringField(TEXT("name"),BP->GetName()); Bp->SetStringField(TEXT("path"),ObjPath);
+	Bp->SetStringField(TEXT("type"),TEXT("blueprint")); Bp->SetStringField(TEXT("blueprint_type"),BpType);
+	Bp->SetStringField(TEXT("parent_class"),BP->ParentClass?BP->ParentClass->GetName():TEXT("AActor"));
+	Bp->SetArrayField(TEXT("graphs"),Graphs); Bp->SetArrayField(TEXT("variables"),Vars);
+	Bp->SetArrayField(TEXT("functions"),Funcs); Bp->SetObjectField(TEXT("stats"),Stats);
+	return Bp;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Code Validator — blueprints
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── AnalyseBP — client-side rules ───────────────────────────────────────────
 
-void FShintCoreClient::ValidateBlueprints(
-	const FString& ContentDir, FOnShintValidateComplete OnComplete)
+void FShintClient::AnalyseBP(const TSharedPtr<FJsonObject>& Bp, TArray<FShintIssue>& Out)
 {
-	TArray<FString> Assets;
-	IFileManager::Get().FindFilesRecursive(Assets, *ContentDir, TEXT("*.uasset"), true, false);
+	if(!Bp.IsValid()) return;
+	FString Name,Path; Bp->TryGetStringField(TEXT("name"),Name); Bp->TryGetStringField(TEXT("path"),Path);
 
-	TArray<TSharedPtr<FJsonValue>> Arr;
-	for (const FString& P : Assets)
-		Arr.Add(MakeShared<FJsonValueString>(P));   // ← also absolute
+	auto Add=[&](const FString& Rule, const FString& Sev, const FString& Msg,
+		const FString& Snip=TEXT(""), const FString& Fix=TEXT("")) {
+		FShintIssue I; I.Rule=Rule; I.Sev=Sev; I.Msg=Msg; I.File=Path; I.Snippet=Snip; I.FixHint=Fix; I.bFixable=false; Out.Add(I);
+	};
 
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetArrayField(TEXT("asset_paths"), Arr);
-	Body->SetStringField(TEXT("engine"), TEXT("unreal"));
+	const TSharedPtr<FJsonObject>* SP=nullptr;
+	if(Bp->TryGetObjectField(TEXT("stats"),SP)&&SP)
+	{
+		int32 Casts=0,Disc=0,Total=0; bool Tick=false;
+		(*SP)->TryGetNumberField(TEXT("cast_nodes"),Casts);
+		(*SP)->TryGetNumberField(TEXT("disconnected_nodes"),Disc);
+		(*SP)->TryGetNumberField(TEXT("total_nodes"),Total);
+		(*SP)->TryGetBoolField(TEXT("tick_enabled"),Tick);
 
-	FString Str; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Str);
-	FJsonSerializer::Serialize(Body, W);
+		if(Casts>5) Add(TEXT("BP-CAST"),TEXT("warning"),
+			FString::Printf(TEXT("[%s] High cast count (%d). Use interfaces to reduce coupling."),*Name,Casts),
+			FString::Printf(TEXT("cast_nodes: %d"),Casts),
+			TEXT("Replace Cast nodes with BlueprintImplementableEvent interfaces."));
+		if(Tick&&Total>30) Add(TEXT("BP-TICK"),TEXT("warning"),
+			FString::Printf(TEXT("[%s] Tick enabled with %d nodes. Move infrequent work to timers."),*Name,Total),
+			TEXT("tick_enabled: true"),TEXT("Use GetWorldTimerManager().SetTimer() for periodic logic."));
+		if(Disc>3) Add(TEXT("BP-DISC"),TEXT("warning"),
+			FString::Printf(TEXT("[%s] %d disconnected node(s). Clean up unused nodes."),*Name,Disc),
+			FString::Printf(TEXT("disconnected_nodes: %d"),Disc));
+	}
 
-	SendRequest(Config.GetBaseUrl() + TEXT("/validate/blueprints"), EShintHttpMethod::POST, Str,
-		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
-			OnComplete.ExecuteIfBound(FShintCoreClient::ParseValidateResponse(Raw));
-		}));
+	const TArray<TSharedPtr<FJsonValue>>* FA=nullptr;
+	if(Bp->TryGetArrayField(TEXT("functions"),FA)&&FA)
+	{
+		for(const TSharedPtr<FJsonValue>& V:*FA){
+			const TSharedPtr<FJsonObject>* O=nullptr; if(!V->TryGetObject(O)||!O) continue;
+			FString FN; int32 Cx=0,NC=0;
+			(*O)->TryGetStringField(TEXT("name"),FN); (*O)->TryGetNumberField(TEXT("complexity"),Cx); (*O)->TryGetNumberField(TEXT("nodes_count"),NC);
+			if(Cx>10||NC>50) Add(TEXT("BP-CMPLX"),TEXT("warning"),
+				FString::Printf(TEXT("[%s] Function '%s' too complex (cx=%d, nodes=%d). Split it."),*Name,*FN,Cx,NC),
+				FString::Printf(TEXT("%s: cx=%d, nodes=%d"),*FN,Cx,NC));
+		}
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* VA=nullptr;
+	if(Bp->TryGetArrayField(TEXT("variables"),VA)&&VA)
+	{
+		for(const TSharedPtr<FJsonValue>& V:*VA){
+			const TSharedPtr<FJsonObject>* O=nullptr; if(!V->TryGetObject(O)||!O) continue;
+			FString VN; bool Used=true;
+			(*O)->TryGetStringField(TEXT("name"),VN); (*O)->TryGetBoolField(TEXT("used"),Used);
+			if(!Used) Add(TEXT("BP-UVAR"),TEXT("warning"),
+				FString::Printf(TEXT("[%s] Variable '%s' declared but never used."),*Name,*VN),
+				FString::Printf(TEXT("variable: %s"),*VN));
+		}
+	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Code Validator — apply fixes
-//
-// KEY FIX: file_path in issues is now absolute → no path combination needed.
-// We read content, POST to server, server rewrites, we write back.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── ScanBlueprints ───────────────────────────────────────────────────────────
 
-void FShintCoreClient::ApplyCodeFixes(
-	const TArray<FShintCodeIssue>& AcceptedIssues, FOnShintFixComplete OnComplete)
+void FShintClient::ScanBlueprints(const FString& ContentDir, FOnValidate Done)
 {
-	// Group issues by absolute file path
-	TMap<FString, TArray<const FShintCodeIssue*>> ByFile;
-	for (const FShintCodeIssue& Issue : AcceptedIssues)
-	{
-		if (Issue.bIsAutoFixable && !Issue.FilePath.IsEmpty())
-			ByFile.FindOrAdd(Issue.FilePath).Add(&Issue);
-	}
+	FAssetRegistryModule& ARM = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+	FARFilter F; F.ClassPaths.Add(FTopLevelAssetPath(TEXT("/Script/Engine"),TEXT("Blueprint")));
+	F.PackagePaths.Add(FName(TEXT("/Game"))); F.bRecursivePaths=true; F.bRecursiveClasses=true;
+	TArray<FAssetData> Assets; ARM.Get().GetAssets(F,Assets);
 
-	if (ByFile.IsEmpty())
-	{
-		FShintFixResult Empty;
-		Empty.bSuccess          = true;
-		Empty.TotalFixesSkipped = AcceptedIssues.Num();
-		OnComplete.ExecuteIfBound(Empty);
-		return;
-	}
+	UE_LOG(LogShintTools,Log,TEXT("ShintClient: ScanBlueprints — %d BPs"),Assets.Num());
 
+	BPs.Empty();
+	TArray<FShintIssue> Issues;
 	TArray<TSharedPtr<FJsonValue>> FilesArr;
 
-	for (auto& Pair : ByFile)
+	for(const FAssetData& D:Assets)
 	{
-		const FString& AbsPath = Pair.Key;   // already absolute
-
-		FString Content;
-		if (!FFileHelper::LoadFileToString(Content, *AbsPath))
-		{
-			UE_LOG(LogShintTools, Error,
-				TEXT("ShintCoreClient: Cannot read file for fix: %s"), *AbsPath);
-			continue;
-		}
-
-		TArray<TSharedPtr<FJsonValue>> IssArr;
-		for (const FShintCodeIssue* Issue : Pair.Value)
-		{
-			TSharedRef<FJsonObject> IObj = MakeShared<FJsonObject>();
-			IObj->SetStringField(TEXT("rule_id"),  Issue->RuleId);
-			IObj->SetNumberField(TEXT("line"),      Issue->Line);
-			IObj->SetStringField(TEXT("severity"), Issue->Severity);
-			IssArr.Add(MakeShared<FJsonValueObject>(IObj));
-		}
-
-		TSharedRef<FJsonObject> FO = MakeShared<FJsonObject>();
-		FO->SetStringField(TEXT("file_path"), AbsPath);
-		FO->SetStringField(TEXT("content"),   Content);
-		FO->SetArrayField (TEXT("issues"),    IssArr);
-		FilesArr.Add(MakeShared<FJsonValueObject>(FO));
+		TSharedPtr<FJsonObject> Bp=ReadBP(D.GetObjectPathString());
+		if(!Bp.IsValid()) continue;
+		BPs.Add(Bp); FilesArr.Add(JV(Bp.ToSharedRef()));
+		AnalyseBP(Bp,Issues);
 	}
 
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetArrayField(TEXT("files"), FilesArr);
-	FString BodyStr; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&BodyStr);
-	FJsonSerializer::Serialize(Body, W);
+	UE_LOG(LogShintTools,Log,TEXT("ShintClient: BP analysis — %d issues from %d BPs"),Issues.Num(),BPs.Num());
 
-	SendRequest(Config.GetBaseUrl() + TEXT("/validate/fix"), EShintHttpMethod::POST, BodyStr,
-		FOnShintRequestComplete::CreateLambda(
-			[OnComplete](const FShintRequestResult& Raw) mutable
+	// Return client-side results immediately
+	FValidateResult R; R.bOk=true; R.Files=BPs.Num();
+	for(const FShintIssue& I:Issues){ R.List.Add(I); if(I.Sev==TEXT("error")) ++R.Errors; else ++R.Warns; ++R.Issues; }
+	Done.ExecuteIfBound(R);
+
+	// Fire-and-forget to server for persistence
+	if(!FilesArr.IsEmpty())
+	{
+		TSharedRef<FJsonObject> B=JO(); B->SetArrayField(TEXT("files"),FilesArr); B->SetStringField(TEXT("engine"),TEXT("unreal")); B->SetStringField(TEXT("type"),TEXT("blueprint"));
+		Post(C.Base()+TEXT("/validate/blueprints"),ToJson(B), FOnRaw::CreateLambda([](const FShintRaw&){}));
+	}
+}
+
+// ─── ApplyFixes ───────────────────────────────────────────────────────────────
+
+void FShintClient::ApplyFixes(const TArray<FFixFileRequest>& Reqs, FOnFix Done)
+{
+	if(Reqs.IsEmpty()){ FFixResult R; R.bIsSuccess=true; Done.ExecuteIfBound(R); return; }
+	TArray<TSharedPtr<FJsonValue>> FA;
+	for(const FFixFileRequest& Req:Reqs)
+	{
+		TArray<TSharedPtr<FJsonValue>> IA;
+		for(const FAcceptedFix& F:Req.Fixes){ TSharedRef<FJsonObject> IO=JO(); IO->SetStringField(TEXT("rule_id"),F.RuleId); IO->SetNumberField(TEXT("line"),F.Line); IO->SetStringField(TEXT("severity"),TEXT("warning")); IA.Add(JV(IO)); }
+		TSharedRef<FJsonObject> FO=JO(); FO->SetStringField(TEXT("file_path"),Req.FilePath); FO->SetStringField(TEXT("content"),Req.Source); FO->SetArrayField(TEXT("issues"),IA);
+		FA.Add(JV(FO));
+		UE_LOG(LogShintTools,Log,TEXT("ShintClient: ApplyFixes — %d fix(es) for %s"),Req.Fixes.Num(),*FPaths::GetCleanFilename(Req.FilePath));
+	}
+	TSharedRef<FJsonObject> B=JO(); B->SetArrayField(TEXT("files"),FA);
+	Post(C.Base()+TEXT("/validate/fix"),ToJson(B),
+		FOnRaw::CreateLambda([Done](const FShintRaw& Raw) mutable {
+			FFixResult Result=ParseFix(Raw);
+			//if(!Result.bIsSuccess){ UE_LOG(LogShintTools,Error,TEXT("ShintClient: Fix failed — %s"),*Result.Err); Done.ExecuteIfBound(Result); return; }
+			for(FFixedFile& FF:Result.Message)
 			{
-				FShintFixResult Result = FShintCoreClient::ParseFixResponse(Raw);
-				if (!Result.bSuccess)
+				if(FF.Applied==0||FF.Path.IsEmpty()) continue;
+				if(FFileHelper::SaveStringToFile(FF.Content,*FF.Path,FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 				{
-					OnComplete.ExecuteIfBound(Result);
-					return;
+					UE_LOG(LogShintTools,Log,TEXT("ShintClient: ✔ Wrote %d fix(es) → %s"),FF.Applied,*FF.Path);
 				}
-
-				// Write corrected files back to disk using the absolute path
-				for (FShintFixedFile& FF : Result.FixedFiles)
+				else
 				{
-					if (FF.FixesApplied == 0 || FF.FilePath.IsEmpty()) continue;
-
-					// FF.FilePath IS the absolute path (we sent it that way)
-					const FString SaveEncoding = TEXT("UTF-8");
-					if (!FFileHelper::SaveStringToFile(
-						FF.CorrectedContent, *FF.FilePath,
-						FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
-					{
-						UE_LOG(LogShintTools, Error,
-							TEXT("ShintCoreClient: Failed to write fixed file: %s"), *FF.FilePath);
-						Result.bSuccess      = false;
-						Result.ErrorMessage += FString::Printf(TEXT("Write failed: %s\n"), *FF.FilePath);
-					}
-					else
-					{
-						UE_LOG(LogShintTools, Log,
-							TEXT("ShintCoreClient: ✔ Wrote %d fix(es) → %s"),
-							FF.FixesApplied, *FF.FilePath);
-					}
+					Result.bIsSuccess=false; UE_LOG(LogShintTools,Error,TEXT("ShintClient: ✘ Write failed → %s"),*FF.Path); }
 				}
-
-				OnComplete.ExecuteIfBound(Result);
-			}));
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// External Web Dashboard — Code Validator
-//
-// POST {DashboardUrl}/api/code-validator/analyze
-// Body matches exactly what the ShintTools web dashboard expects.
-// ─────────────────────────────────────────────────────────────────────────────
-
-void FShintCoreClient::SendCodeValidatorToDashboard(
-	const FShintValidateResult& LastResult, FOnShintWebDashboardComplete OnComplete)
-{
-	if (!Config.HasExternalDashboard())
-	{
-		FShintWebDashboardResult Err;
-		Err.bSuccess     = false;
-		Err.ErrorMessage = TEXT("api_key, project_id, or dashboard_url not set in shinttools.config.json");
-		OnComplete.ExecuteIfBound(Err);
-		return;
-	}
-
-	// Build files array — re-read from disk using stored absolute paths
-	TArray<TSharedPtr<FJsonValue>> FilesArr;
-	TSet<FString> SeenPaths;
-
-	for (const FShintCodeIssue& Issue : LastResult.Issues)
-	{
-		if (Issue.FilePath.IsEmpty()) continue;
-		if (SeenPaths.Contains(Issue.FilePath)) continue;
-		SeenPaths.Add(Issue.FilePath);
-	}
-
-	// Add all scanned files (even those with no issues) from stored path list
-	for (const FString& AbsPath : LastResult.ScannedFilePaths)
-		SeenPaths.Add(AbsPath);
-
-	for (const FString& AbsPath : SeenPaths)
-	{
-		FString Content;
-		FFileHelper::LoadFileToString(Content, *AbsPath);  // best-effort
-
-		const FString Filename = FPaths::GetCleanFilename(AbsPath);
-		const FString RelPath  = FPaths::GetPath(AbsPath);
-		const FString Ext      = FPaths::GetExtension(AbsPath).ToLower();
-		const FString TypeStr  = (Ext == TEXT("h") || Ext == TEXT("hpp")) ? TEXT("header") : TEXT("cpp");
-		TArray<FString> Lines;
-		const int32 LineCount  = Content.IsEmpty() ? 0 : Content.ParseIntoArray(Lines, TEXT("\n"), false);
-
-		TSharedRef<FJsonObject> FO = MakeShared<FJsonObject>();
-		FO->SetStringField(TEXT("name"),        Filename);
-		FO->SetStringField(TEXT("path"),        RelPath);
-		FO->SetStringField(TEXT("type"),        TypeStr);
-		FO->SetStringField(TEXT("content"),     Content);
-		FO->SetNumberField(TEXT("lines_count"), LineCount);
-		FilesArr.Add(MakeShared<FJsonValueObject>(FO));
-	}
-
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("project_id"),   Config.ProjectId);
-	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
-	Body->SetStringField(TEXT("api_key"),      Config.ApiKey);
-	Body->SetArrayField (TEXT("files"),        FilesArr);
-
-	FString BodyStr; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&BodyStr);
-	FJsonSerializer::Serialize(Body, W);
-
-	const FString Url = Config.DashboardUrl / TEXT("api/code-validator/analyze");
-
-	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d files to Code Validator dashboard."),
-		FilesArr.Num());
-
-	SendRequest(Url, EShintHttpMethod::POST, BodyStr,
-		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
-			FShintWebDashboardResult R;
-			R.bSuccess     = Raw.bSuccess;
-			R.ErrorMessage = Raw.bSuccess ? TEXT("") : Raw.ErrorMessage;
-			R.ResponseBody = Raw.ResponseBody;
-			OnComplete.ExecuteIfBound(R);
+				{ 
+			}
+			Done.ExecuteIfBound(Result);
 		}));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Asset Naming Bot — scan
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Dashboard pushes ─────────────────────────────────────────────────────────
 
-void FShintCoreClient::ScanAssetNaming(
-	const FString& ContentDir, FOnShintAssetScanComplete OnComplete)
+void FShintClient::PushCode(const FValidateResult& R, FOnWeb Done)
 {
-	TArray<FString> Assets;
-	IFileManager::Get().FindFilesRecursive(Assets, *ContentDir, TEXT("*.uasset"), true, false);
-
-	TArray<TSharedPtr<FJsonValue>> Arr;
-	for (const FString& P : Assets)
-	{
-		// Convert disk path to UE package-style path for the server
-		FString RelPath = P;
-		FPaths::MakePathRelativeTo(RelPath, *ContentDir);
-		RelPath = TEXT("/Game/") + RelPath.Replace(TEXT("\\"), TEXT("/"));
-		RelPath = FPaths::GetBaseFilename(RelPath, false);   // remove .uasset
-		Arr.Add(MakeShared<FJsonValueString>(RelPath));
-	}
-
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetArrayField(TEXT("asset_paths"), Arr);
-	Body->SetStringField(TEXT("engine"),     TEXT("unreal"));
-	FString Str; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Str);
-	FJsonSerializer::Serialize(Body, W);
-
-	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Scanning %d assets."), Assets.Num());
-
-	SendRequest(Config.GetBaseUrl() + TEXT("/assets/scan"), EShintHttpMethod::POST, Str,
-		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
-			OnComplete.ExecuteIfBound(FShintCoreClient::ParseAssetScanResponse(Raw));
-		}));
+	if(!C.HasDash()){ Done.ExecuteIfBound({false,TEXT("Fill api_key + project_id in Dashboard Config."),TEXT("")}); return; }
+	TArray<TSharedPtr<FJsonValue>> FA; TSet<FString> Seen;
+	for(const FString& A:R.ScannedPaths){ if(!Seen.Add(A).IsValidId()) continue;
+		FString Cnt; FFileHelper::LoadFileToString(Cnt,*A);
+		const FString Ext=FPaths::GetExtension(A).ToLower(); int32 Lines=0; for(TCHAR Ch:Cnt) if(Ch=='\n') ++Lines;
+		TSharedRef<FJsonObject> FO=JO(); FO->SetStringField(TEXT("name"),FPaths::GetCleanFilename(A)); FO->SetStringField(TEXT("path"),FPaths::GetPath(A));
+		FO->SetStringField(TEXT("type"),(Ext==TEXT("h")||Ext==TEXT("hpp"))?TEXT("header"):TEXT("cpp")); FO->SetStringField(TEXT("content"),Cnt); FO->SetNumberField(TEXT("lines_count"),Lines);
+		FA.Add(JV(FO)); }
+	TSharedRef<FJsonObject> B=JO(); B->SetStringField(TEXT("project_id"),C.ProjectId); B->SetStringField(TEXT("project_name"),C.Name); B->SetStringField(TEXT("api_key"),C.Key); B->SetArrayField(TEXT("files"),FA);
+	Post(C.DashUrl/TEXT("api/code-validator/analyze"),ToJson(B), FOnRaw::CreateLambda([Done](const FShintRaw& R) mutable{ Done.ExecuteIfBound({R.bOk,R.Err,R.Body}); }));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Asset Naming Bot — report server-side (the actual rename happens in the panel
-// via IAssetTools; this just records it for MongoDB / local history)
-// ─────────────────────────────────────────────────────────────────────────────
-
-void FShintCoreClient::ReportAssetFixesToServer(
-	const TArray<FShintAssetIssue>& Fixed, FOnShintAssetFixComplete OnComplete)
+void FShintClient::PushBlueprints(const TArray<TSharedPtr<FJsonObject>>& Bps, FOnWeb Done)
 {
-	TArray<TSharedPtr<FJsonValue>> Arr;
-	for (const FShintAssetIssue& I : Fixed)
-	{
-		TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
-		O->SetStringField(TEXT("asset_path"),     I.AssetPath);
-		O->SetStringField(TEXT("current_name"),   I.CurrentName);
-		O->SetStringField(TEXT("suggested_name"), I.SuggestedName);
-		O->SetStringField(TEXT("asset_type"),     I.AssetType);
-		Arr.Add(MakeShared<FJsonValueObject>(O));
-	}
-
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetArrayField(TEXT("issues"), Arr);
-	FString Str; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Str);
-	FJsonSerializer::Serialize(Body, W);
-
-	SendRequest(Config.GetBaseUrl() + TEXT("/assets/fix"), EShintHttpMethod::POST, Str,
-		FOnShintRequestComplete::CreateLambda([OnComplete, Count = Fixed.Num()](const FShintRequestResult& Raw) mutable {
-			FShintAssetFixResult Result;
-			Result.bSuccess      = Raw.bSuccess;
-			Result.AssetsRenamed = Count;
-			Result.ErrorMessage  = Raw.bSuccess ? TEXT("") : Raw.ErrorMessage;
-			OnComplete.ExecuteIfBound(Result);
-		}));
+	if(!C.HasDash()){ Done.ExecuteIfBound({false,TEXT("Fill api_key + project_id."),TEXT("")}); return; }
+	TArray<TSharedPtr<FJsonValue>> FA; for(const TSharedPtr<FJsonObject>& Bp:Bps) if(Bp.IsValid()) FA.Add(JV(Bp.ToSharedRef()));
+	TSharedRef<FJsonObject> B=JO(); B->SetStringField(TEXT("project_id"),C.ProjectId); B->SetStringField(TEXT("project_name"),C.Name); B->SetStringField(TEXT("api_key"),C.Key); B->SetArrayField(TEXT("files"),FA);
+	Post(C.DashUrl/TEXT("api/code-validator/analyze"),ToJson(B), FOnRaw::CreateLambda([Done](const FShintRaw& R) mutable{ Done.ExecuteIfBound({R.bOk,R.Err,R.Body}); }));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// External Web Dashboard — Asset Naming Bot
-//
-// POST {DashboardUrl}/api/naming-bot/analyze
-// ─────────────────────────────────────────────────────────────────────────────
-
-void FShintCoreClient::SendAssetNamingToDashboard(
-	const FShintAssetScanResult& LastResult, FOnShintWebDashboardComplete OnComplete)
+void FShintClient::PushAssets(const FAssetScan& R, FOnWeb Done)
 {
-	if (!Config.HasExternalDashboard())
-	{
-		FShintWebDashboardResult Err;
-		Err.bSuccess     = false;
-		Err.ErrorMessage = TEXT("api_key, project_id, or dashboard_url not set in shinttools.config.json");
-		OnComplete.ExecuteIfBound(Err);
-		return;
-	}
-
-	// Build items array from all violations
-	TArray<TSharedPtr<FJsonValue>> ItemsArr;
-	for (const FShintAssetIssue& Issue : LastResult.Issues)
-	{
-		// AssetPath is like /Game/Characters/Player/hero_body
-		const FString Name     = FPaths::GetBaseFilename(Issue.AssetPath);
-		const FString Path     = FPaths::GetPath(Issue.AssetPath);
-		const FString Category = AssetTypeToCategory(Issue.AssetType);
-
-		TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
-		O->SetStringField(TEXT("name"),     Name);
-		O->SetStringField(TEXT("path"),     Path);
-		O->SetStringField(TEXT("type"),     TEXT("asset"));
-		O->SetStringField(TEXT("category"), Category);
-		ItemsArr.Add(MakeShared<FJsonValueObject>(O));
-	}
-
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("project_id"),   Config.ProjectId);
-	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
-	Body->SetStringField(TEXT("api_key"),      Config.ApiKey);
-	Body->SetArrayField (TEXT("items"),        ItemsArr);
-
-	FString BodyStr; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&BodyStr);
-	FJsonSerializer::Serialize(Body, W);
-
-	const FString Url = Config.DashboardUrl / TEXT("api/naming-bot/analyze");
-
-	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d asset items to naming-bot dashboard."),
-		ItemsArr.Num());
-
-	SendRequest(Url, EShintHttpMethod::POST, BodyStr,
-		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
-			FShintWebDashboardResult R;
-			R.bSuccess     = Raw.bSuccess;
-			R.ErrorMessage = Raw.bSuccess ? TEXT("") : Raw.ErrorMessage;
-			R.ResponseBody = Raw.ResponseBody;
-			OnComplete.ExecuteIfBound(R);
-		}));
+	if(!C.HasDash()){ Done.ExecuteIfBound({false,TEXT("Fill api_key + project_id."),TEXT("")}); return; }
+	TArray<TSharedPtr<FJsonValue>> IA; for(const FAssetIssue& I:R.List){
+		TSharedRef<FJsonObject> O=JO(); O->SetStringField(TEXT("name"),FPaths::GetBaseFilename(I.Path)); O->SetStringField(TEXT("path"),FPaths::GetPath(I.Path)); O->SetStringField(TEXT("type"),TEXT("asset")); O->SetStringField(TEXT("category"),AssetCat(I.Type)); IA.Add(JV(O)); }
+	TSharedRef<FJsonObject> B=JO(); B->SetStringField(TEXT("project_id"),C.ProjectId); B->SetStringField(TEXT("project_name"),C.Name); B->SetStringField(TEXT("api_key"),C.Key); B->SetArrayField(TEXT("items"),IA);
+	Post(C.DashUrl/TEXT("api/naming-bot/analyze"),ToJson(B), FOnRaw::CreateLambda([Done](const FShintRaw& R) mutable{ Done.ExecuteIfBound({R.bOk,R.Err,R.Body}); }));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Local MongoDB dashboard (legacy)
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Asset Naming ─────────────────────────────────────────────────────────────
 
-void FShintCoreClient::SendDashboardReport(
-	const FShintDashboardReport& Report, FOnShintDashboardComplete OnComplete)
+void FShintClient::ScanAssets(const FString& ContentDir, FOnAssetScan Done)
 {
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("project_name"), Report.ProjectName);
-	Body->SetStringField(TEXT("engine"),       Report.Engine);
-	Body->SetStringField(TEXT("report_type"),  Report.ReportType);
-
-	if (Report.ReportType == TEXT("code_validator"))
-	{
-		TSharedRef<FJsonObject> D = MakeShared<FJsonObject>();
-		D->SetNumberField(TEXT("files_scanned"),  Report.Code_FilesScanned);
-		D->SetNumberField(TEXT("total_issues"),   Report.Code_TotalIssues);
-		D->SetNumberField(TEXT("total_errors"),   Report.Code_TotalErrors);
-		D->SetNumberField(TEXT("total_warnings"), Report.Code_TotalWarnings);
-		Body->SetObjectField(TEXT("code_validator"), D);
-	}
-	else if (Report.ReportType == TEXT("asset_naming"))
-	{
-		TSharedRef<FJsonObject> D = MakeShared<FJsonObject>();
-		D->SetNumberField(TEXT("total_scanned"),  Report.Asset_TotalScanned);
-		D->SetNumberField(TEXT("invalid_assets"), Report.Asset_InvalidAssets);
-		D->SetNumberField(TEXT("scan_time_s"),    Report.Asset_ScanTime);
-		Body->SetObjectField(TEXT("asset_naming"), D);
-	}
-
-	FString Str; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Str);
-	FJsonSerializer::Serialize(Body, W);
-
-	SendRequest(Config.GetBaseUrl() + TEXT("/dashboard/report"), EShintHttpMethod::POST, Str,
-		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
-			FShintDashboardResult R;
-			R.bSuccess     = Raw.bSuccess;
-			R.ErrorMessage = Raw.bSuccess ? TEXT("") : Raw.ErrorMessage;
-			OnComplete.ExecuteIfBound(R);
-		}));
+	TArray<FString> Files; IFileManager::Get().FindFilesRecursive(Files,*ContentDir,TEXT("*.uasset"),true,false);
+	TArray<TSharedPtr<FJsonValue>> A;
+	for(const FString& P:Files){ FString Rel=P; FPaths::MakePathRelativeTo(Rel,*ContentDir); Rel=Rel.Replace(TEXT("\\"),TEXT("/")); A.Add(JS(TEXT("/Game/")+FPaths::GetBaseFilename(Rel,false))); }
+	TSharedRef<FJsonObject> B=JO(); B->SetArrayField(TEXT("asset_paths"),A); B->SetStringField(TEXT("engine"),TEXT("unreal"));
+	UE_LOG(LogShintTools,Log,TEXT("ShintClient: ScanAssets — %d assets"),Files.Num());
+	Post(C.Base()+TEXT("/assets/scan"),ToJson(B), FOnRaw::CreateLambda([Done](const FShintRaw& Raw) mutable{ Done.ExecuteIfBound(ParseAssets(Raw)); }));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Generic HTTP request
-// ─────────────────────────────────────────────────────────────────────────────
-
-void FShintCoreClient::SendRequest(
-	const FString& FullUrl, EShintHttpMethod Method,
-	const FString& Body, FOnShintRequestComplete OnComplete,
-	const TMap<FString, FString>& ExtraHeaders)
+void FShintClient::ReportFixes(const TArray<FAssetIssue>& Fixed, FOnAssetFix Done)
 {
-	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: %s %s"), *MethodToString(Method), *FullUrl);
-
-	FHttpModule& Http = FHttpModule::Get();
-	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Req = Http.CreateRequest();
-
-	Req->SetURL(FullUrl);
-	Req->SetVerb(MethodToString(Method));
-	Req->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
-	Req->SetHeader(TEXT("Accept"),       TEXT("application/json"));
-	Req->SetHeader(TEXT("User-Agent"),   TEXT("ShintTools-UE5/3.0"));
-
-	for (const auto& KV : ExtraHeaders)
-		Req->SetHeader(KV.Key, KV.Value);
-
-	if (!Body.IsEmpty() &&
-	    (Method == EShintHttpMethod::POST || Method == EShintHttpMethod::PUT))
-	{
-		Req->SetContentAsString(Body);
-	}
-
-	Req->OnProcessRequestComplete().BindRaw(
-		this, &FShintCoreClient::OnHttpRequestComplete, OnComplete);
-	Req->SetTimeout(90.0f);  // generous for full-project scans
-
-	if (!Req->ProcessRequest())
-	{
-		FShintRequestResult Err;
-		Err.bSuccess     = false;
-		Err.ErrorMessage = TEXT("Failed to dispatch HTTP request.");
-		OnComplete.ExecuteIfBound(Err);
-	}
+	TArray<TSharedPtr<FJsonValue>> A; for(const FAssetIssue& I:Fixed){ TSharedRef<FJsonObject> O=JO(); O->SetStringField(TEXT("asset_path"),I.Path); O->SetStringField(TEXT("current_name"),I.Current); O->SetStringField(TEXT("suggested_name"),I.Suggested); O->SetStringField(TEXT("asset_type"),I.Type); A.Add(JV(O)); }
+	TSharedRef<FJsonObject> B=JO(); B->SetArrayField(TEXT("issues"),A); const int32 N=Fixed.Num();
+	Post(C.Base()+TEXT("/assets/fix"),ToJson(B), FOnRaw::CreateLambda([Done,N](const FShintRaw& R) mutable{ Done.ExecuteIfBound({R.bOk,N,R.bOk?TEXT(""):R.Err}); }));
 }
 
-void FShintCoreClient::OnHttpRequestComplete(
-	FHttpRequestPtr Request, FHttpResponsePtr Response,
-	bool bConnectedSuccessfully, FOnShintRequestComplete OnComplete)
+// ─── HTTP ─────────────────────────────────────────────────────────────────────
+
+void FShintClient::Post(const FString& Url, const FString& Body, FOnRaw Done) { Http(Url,TEXT("POST"),Body,Done); }
+void FShintClient::Get (const FString& Url, FOnRaw Done)                      { Http(Url,TEXT("GET"), TEXT(""),Done); }
+
+void FShintClient::Http(const FString& Url, const FString& Verb, const FString& Body, FOnRaw Done)
 {
-	FShintRequestResult Result;
-	if (!bConnectedSuccessfully || !Response.IsValid())
-	{
-		Result.bSuccess     = false;
-		Result.ErrorMessage = TEXT("Connection failed — Core Engine may not be running.");
-		OnComplete.ExecuteIfBound(Result); return;
-	}
-	Result.StatusCode   = Response->GetResponseCode();
-	Result.ResponseBody = Response->GetContentAsString();
-	Result.bSuccess     = (Result.StatusCode >= 200 && Result.StatusCode < 300);
-	if (!Result.bSuccess)
-		Result.ErrorMessage = FString::Printf(TEXT("HTTP %d: %s"),
-			Result.StatusCode, *Result.ResponseBody);
-	OnComplete.ExecuteIfBound(Result);
+	UE_LOG(LogShintTools,Verbose,TEXT("ShintClient: %s %s"),*Verb,*Url);
+	TSharedRef<IHttpRequest,ESPMode::ThreadSafe> Req=FHttpModule::Get().CreateRequest();
+	Req->SetURL(Url); Req->SetVerb(Verb);
+	Req->SetHeader(TEXT("Content-Type"),TEXT("application/json")); Req->SetHeader(TEXT("Accept"),TEXT("application/json")); Req->SetHeader(TEXT("User-Agent"),TEXT("ShintTools-UE5/7.0"));
+	if(!Body.IsEmpty()&&Verb==TEXT("POST")) Req->SetContentAsString(Body);
+	Req->OnProcessRequestComplete().BindRaw(this,&FShintClient::OnDone,Done); Req->SetTimeout(120.f);
+	if(!Req->ProcessRequest()) Done.ExecuteIfBound({false,0,TEXT(""),FString::Printf(TEXT("Dispatch failed → %s"),*Url)});
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Parse helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequestResult& Raw)
+void FShintClient::OnDone(FHttpRequestPtr,FHttpResponsePtr Resp,bool bOk,FOnRaw Done)
 {
-	FShintValidateResult R;
-	R.StatusCode = Raw.StatusCode;
-	if (!Raw.bSuccess) { R.bSuccess = false; R.ErrorMessage = Raw.ErrorMessage; return R; }
+	FShintRaw R;
+	if(!bOk||!Resp.IsValid()){ R.Err=TEXT("Connection failed — Core Engine running?"); Done.ExecuteIfBound(R); return; }
+	R.Code=Resp->GetResponseCode(); R.Body=Resp->GetContentAsString(); R.bOk=(R.Code>=200&&R.Code<300);
+	if(!R.bOk) R.Err=FString::Printf(TEXT("HTTP %d: %s"),R.Code,*R.Body.Left(200));
+	Done.ExecuteIfBound(R);
+}
 
-	TSharedPtr<FJsonObject> J;
-	TSharedRef<TJsonReader<>> Rd = TJsonReaderFactory<>::Create(Raw.ResponseBody);
-	if (!FJsonSerializer::Deserialize(Rd, J) || !J.IsValid())
-	{ R.bSuccess = false; R.ErrorMessage = TEXT("Failed to parse validate response."); return R; }
+// ─── Parsers ──────────────────────────────────────────────────────────────────
 
-	R.bSuccess = true;
-	const TSharedPtr<FJsonObject>* Sum = nullptr;
-	if (J->TryGetObjectField(TEXT("summary"), Sum) && Sum)
-	{
-		(*Sum)->TryGetNumberField(TEXT("total"),         R.TotalIssues);
-		(*Sum)->TryGetNumberField(TEXT("errors"),        R.TotalErrors);
-		(*Sum)->TryGetNumberField(TEXT("warnings"),      R.TotalWarnings);
-		(*Sum)->TryGetNumberField(TEXT("files_scanned"), R.FilesScanned);
-	}
-
-	const TArray<TSharedPtr<FJsonValue>>* IssArr = nullptr;
-	if (J->TryGetArrayField(TEXT("issues"), IssArr) && IssArr)
-	{
-		for (const TSharedPtr<FJsonValue>& V : *IssArr)
-		{
-			const TSharedPtr<FJsonObject>* O = nullptr;
-			if (!V->TryGetObject(O) || !O) continue;
-			FShintCodeIssue Issue;
-			(*O)->TryGetStringField(TEXT("rule_id"),        Issue.RuleId);
-			(*O)->TryGetStringField(TEXT("severity"),       Issue.Severity);
-			(*O)->TryGetStringField(TEXT("message"),        Issue.Message);
-			(*O)->TryGetStringField(TEXT("file_path"),      Issue.FilePath);
-			(*O)->TryGetNumberField(TEXT("line"),           Issue.Line);
-			(*O)->TryGetStringField(TEXT("snippet"),        Issue.Snippet);
-			(*O)->TryGetStringField(TEXT("fix_suggestion"), Issue.FixSuggestion);
-			(*O)->TryGetBoolField  (TEXT("is_auto_fixable"),Issue.bIsAutoFixable);
-			Issue.bChecked = Issue.bIsAutoFixable;
-			R.Issues.Add(MoveTemp(Issue));
-		}
+FValidateResult FShintClient::ParseValidate(const FShintRaw& Raw)
+{
+	FValidateResult R; if(!Raw.bOk){R.Err=Raw.Err;return R;}
+	TSharedPtr<FJsonObject> J; TSharedRef<TJsonReader<>> Rd=TJsonReaderFactory<>::Create(Raw.Body);
+	if(!FJsonSerializer::Deserialize(Rd,J)||!J.IsValid()){R.Err=TEXT("Parse failed.");return R;}
+	R.bOk=true;
+	const TSharedPtr<FJsonObject>* S=nullptr;
+	if(J->TryGetObjectField(TEXT("summary"),S)&&S){ (*S)->TryGetNumberField(TEXT("total"),R.Issues); (*S)->TryGetNumberField(TEXT("errors"),R.Errors); (*S)->TryGetNumberField(TEXT("warnings"),R.Warns); (*S)->TryGetNumberField(TEXT("files_scanned"),R.Files); }
+	const TArray<TSharedPtr<FJsonValue>>* A=nullptr;
+	if(J->TryGetArrayField(TEXT("issues"),A)&&A) for(const TSharedPtr<FJsonValue>& V:*A){
+		const TSharedPtr<FJsonObject>* O=nullptr; if(!V->TryGetObject(O)||!O) continue;
+		FShintIssue I;
+		(*O)->TryGetStringField(TEXT("rule_id"),I.Rule); (*O)->TryGetStringField(TEXT("severity"),I.Sev); (*O)->TryGetStringField(TEXT("message"),I.Msg);
+		(*O)->TryGetStringField(TEXT("file_path"),I.File); (*O)->TryGetNumberField(TEXT("line"),I.Line);
+		(*O)->TryGetStringField(TEXT("snippet"),I.Snippet); (*O)->TryGetStringField(TEXT("fix_suggestion"),I.FixHint);
+		(*O)->TryGetBoolField(TEXT("is_auto_fixable"),I.bFixable);
+		R.List.Add(MoveTemp(I));
 	}
 	return R;
 }
 
-FShintAssetScanResult FShintCoreClient::ParseAssetScanResponse(const FShintRequestResult& Raw)
+FAssetScan FShintClient::ParseAssets(const FShintRaw& Raw)
 {
-	FShintAssetScanResult R;
-	R.StatusCode = Raw.StatusCode;
-	if (!Raw.bSuccess) { R.bSuccess = false; R.ErrorMessage = Raw.ErrorMessage; return R; }
-
-	TSharedPtr<FJsonObject> J;
-	TSharedRef<TJsonReader<>> Rd = TJsonReaderFactory<>::Create(Raw.ResponseBody);
-	if (!FJsonSerializer::Deserialize(Rd, J) || !J.IsValid())
-	{ R.bSuccess = false; R.ErrorMessage = TEXT("Parse failed."); return R; }
-
-	R.bSuccess = true;
-	const TSharedPtr<FJsonObject>* Sum = nullptr;
-	if (J->TryGetObjectField(TEXT("summary"), Sum) && Sum)
-	{
-		(*Sum)->TryGetNumberField(TEXT("total_assets"),       R.TotalAssets);
-		(*Sum)->TryGetNumberField(TEXT("invalid_assets"),     R.InvalidAssets);
-		(*Sum)->TryGetNumberField(TEXT("scan_time_seconds"),  R.ScanTimeSeconds);
-	}
-
-	const TArray<TSharedPtr<FJsonValue>>* IssArr = nullptr;
-	if (J->TryGetArrayField(TEXT("issues"), IssArr) && IssArr)
-	{
-		for (const TSharedPtr<FJsonValue>& V : *IssArr)
-		{
-			const TSharedPtr<FJsonObject>* O = nullptr;
-			if (!V->TryGetObject(O) || !O) continue;
-			FShintAssetIssue Issue;
-			(*O)->TryGetStringField(TEXT("asset_path"),     Issue.AssetPath);
-			(*O)->TryGetStringField(TEXT("current_name"),   Issue.CurrentName);
-			(*O)->TryGetStringField(TEXT("suggested_name"), Issue.SuggestedName);
-			(*O)->TryGetStringField(TEXT("reason"),         Issue.Reason);
-			(*O)->TryGetStringField(TEXT("asset_type"),     Issue.AssetType);
-			Issue.bChecked = true;
-			R.Issues.Add(MoveTemp(Issue));
-		}
+	FAssetScan R; if(!Raw.bOk){R.Err=Raw.Err;return R;}
+	TSharedPtr<FJsonObject> J; TSharedRef<TJsonReader<>> Rd=TJsonReaderFactory<>::Create(Raw.Body);
+	if(!FJsonSerializer::Deserialize(Rd,J)||!J.IsValid()){R.Err=TEXT("Parse failed.");return R;}
+	R.bOk=true;
+	const TSharedPtr<FJsonObject>* S=nullptr;
+	if(J->TryGetObjectField(TEXT("summary"),S)&&S){ (*S)->TryGetNumberField(TEXT("total_assets"),R.Total); (*S)->TryGetNumberField(TEXT("invalid_assets"),R.Invalid); (*S)->TryGetNumberField(TEXT("scan_time_seconds"),R.Secs); }
+	const TArray<TSharedPtr<FJsonValue>>* A=nullptr;
+	if(J->TryGetArrayField(TEXT("issues"),A)&&A) for(const TSharedPtr<FJsonValue>& V:*A){
+		const TSharedPtr<FJsonObject>* O=nullptr; if(!V->TryGetObject(O)||!O) continue;
+		FAssetIssue I; (*O)->TryGetStringField(TEXT("asset_path"),I.Path); (*O)->TryGetStringField(TEXT("current_name"),I.Current); (*O)->TryGetStringField(TEXT("suggested_name"),I.Suggested); (*O)->TryGetStringField(TEXT("reason"),I.Reason); (*O)->TryGetStringField(TEXT("asset_type"),I.Type);
+		R.List.Add(MoveTemp(I));
 	}
 	return R;
 }
 
-FShintFixResult FShintCoreClient::ParseFixResponse(const FShintRequestResult& Raw)
+FFixResult FShintClient::ParseFix(const FShintRaw& Raw)
 {
-	FShintFixResult R;
-	if (!Raw.bSuccess) { R.bSuccess = false; R.ErrorMessage = Raw.ErrorMessage; return R; }
-
-	TSharedPtr<FJsonObject> J;
-	TSharedRef<TJsonReader<>> Rd = TJsonReaderFactory<>::Create(Raw.ResponseBody);
-	if (!FJsonSerializer::Deserialize(Rd, J) || !J.IsValid())
-	{ R.bSuccess = false; R.ErrorMessage = TEXT("Failed to parse fix response."); return R; }
-
-	R.bSuccess = true;
-	J->TryGetNumberField(TEXT("total_fixes_applied"), R.TotalFixesApplied);
-	J->TryGetNumberField(TEXT("total_fixes_skipped"), R.TotalFixesSkipped);
-
-	const TArray<TSharedPtr<FJsonValue>>* FilesArr = nullptr;
-	if (J->TryGetArrayField(TEXT("fixed_files"), FilesArr) && FilesArr)
-	{
-		for (const TSharedPtr<FJsonValue>& V : *FilesArr)
-		{
-			const TSharedPtr<FJsonObject>* O = nullptr;
-			if (!V->TryGetObject(O) || !O) continue;
-			FShintFixedFile FF;
-			(*O)->TryGetStringField(TEXT("file_path"),         FF.FilePath);
-			(*O)->TryGetStringField(TEXT("corrected_content"), FF.CorrectedContent);
-			(*O)->TryGetNumberField(TEXT("fixes_applied"),     FF.FixesApplied);
-			(*O)->TryGetNumberField(TEXT("fixes_skipped"),     FF.FixesSkipped);
-			R.FixedFiles.Add(MoveTemp(FF));
-		}
+	FFixResult R; if(!Raw.bOk){}
+	TSharedPtr<FJsonObject> J; TSharedRef<TJsonReader<>> Rd=TJsonReaderFactory<>::Create(Raw.Body);
+	if(!FJsonSerializer::Deserialize(Rd,J)||!J.IsValid()){return R;}
+	//R.bIsSuccess=true; J->TryGetNumberField(TEXT("total_fixes_applied"),R); J->TryGetNumberField(TEXT("total_fixes_skipped"),R.Skipped);
+	const TArray<TSharedPtr<FJsonValue>>* A=nullptr;
+	if(J->TryGetArrayField(TEXT("fixed_files"),A)&&A) for(const TSharedPtr<FJsonValue>& V:*A){
+		const TSharedPtr<FJsonObject>* O=nullptr; if(!V->TryGetObject(O)||!O) continue;
+		FFixedFile FF; (*O)->TryGetStringField(TEXT("file_path"),FF.Path); (*O)->TryGetStringField(TEXT("corrected_content"),FF.Content); (*O)->TryGetNumberField(TEXT("fixes_applied"),FF.Applied); (*O)->TryGetNumberField(TEXT("fixes_skipped"),FF.Skipped);
+		//R.Message.ad(MoveTemp(FF));
 	}
 	return R;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-void FShintCoreClient::CollectSourceFiles(const FString& Dir, TArray<FString>& Out)
+void FShintClient::CollectCpp(const FString& Dir, TArray<FString>& Out)
 {
-	TArray<FString> Cpp, H;
-	IFileManager::Get().FindFilesRecursive(Cpp, *Dir, TEXT("*.cpp"), true, false);
-	IFileManager::Get().FindFilesRecursive(H,   *Dir, TEXT("*.h"),   true, false);
-	Out.Append(Cpp); Out.Append(H);
+	TArray<FString> A,B; IFileManager::Get().FindFilesRecursive(A,*Dir,TEXT("*.cpp"),true,false); IFileManager::Get().FindFilesRecursive(B,*Dir,TEXT("*.h"),true,false); Out.Append(A); Out.Append(B);
 }
 
-FString FShintCoreClient::AssetTypeToCategory(const FString& AssetType)
+FString FShintClient::AssetCat(const FString& T)
 {
-	if (AssetType == TEXT("Texture2D") || AssetType.Contains(TEXT("Texture")))
-		return TEXT("texture");
-	if (AssetType.Contains(TEXT("Mesh")))
-		return TEXT("mesh");
-	if (AssetType.Contains(TEXT("Material")))
-		return TEXT("material");
-	if (AssetType.Contains(TEXT("Blueprint")) || AssetType.Contains(TEXT("Widget")))
-		return TEXT("blueprint");
-	if (AssetType.Contains(TEXT("Sound")) || AssetType.Contains(TEXT("Audio")))
-		return TEXT("audio");
-	if (AssetType.Contains(TEXT("Anim")))
-		return TEXT("animation");
+	if(T.Contains(TEXT("Texture")))  return TEXT("texture");
+	if(T.Contains(TEXT("Mesh")))     return TEXT("mesh");
+	if(T.Contains(TEXT("Material"))) return TEXT("material");
+	if(T.Contains(TEXT("Blueprint"))||T.Contains(TEXT("Widget"))) return TEXT("blueprint");
+	if(T.Contains(TEXT("Sound")))    return TEXT("audio");
+	if(T.Contains(TEXT("Anim")))     return TEXT("animation");
 	return TEXT("asset");
-}
-
-FString FShintCoreClient::MethodToString(EShintHttpMethod Method)
-{
-	switch (Method)
-	{
-	case EShintHttpMethod::GET:     return TEXT("GET");
-	case EShintHttpMethod::POST:    return TEXT("POST");
-	case EShintHttpMethod::PUT:     return TEXT("PUT");
-	case EShintHttpMethod::DELETE_: return TEXT("DELETE");
-	default:                        return TEXT("GET");
-	}
 }
