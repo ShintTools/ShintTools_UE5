@@ -26,8 +26,6 @@
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "AssetRegistry/AssetRegistryModule.h"
-// Misc
-#include "Misc/DateTime.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Algo/Count.h"
@@ -125,7 +123,7 @@ void SShintToolsPanel::LoadBannerBrush()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Divider helper
+// Static helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 TSharedRef<SWidget> SShintToolsPanel::Divider()
@@ -134,8 +132,58 @@ TSharedRef<SWidget> SShintToolsPanel::Divider()
 		[ SNew(SBorder).BorderImage(ST4::Solid(C_Border())).Padding(0.f) ];
 }
 
+TSharedRef<SWidget> SShintToolsPanel::BuildSectionTitle(const FText& Title, const FText& Subtitle)
+{
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 3.f)
+		[
+			SNew(STextBlock).Text(Title).Font(F_H2())
+			.ColorAndOpacity(FSlateColor(C_White()))
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 16.f)
+		[
+			SNew(STextBlock).Text(Subtitle).Font(F_Label())
+			.ColorAndOpacity(FSlateColor(C_Gray()))
+		];
+}
+
+TSharedRef<SWidget> SShintToolsPanel::BuildDiffLine(
+	const FString& Icon, const FString& Text,
+	const FLinearColor& IconColor, const FLinearColor& TextColor)
+{
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
+		[
+			SNew(STextBlock).Text(FText::FromString(Icon)).Font(F_Mono())
+			.ColorAndOpacity(FSlateColor(IconColor))
+		]
+		+ SHorizontalBox::Slot().FillWidth(1.f)
+		[
+			SNew(STextBlock).Text(FText::FromString(Text)).Font(F_Mono())
+			.ColorAndOpacity(FSlateColor(TextColor)).AutoWrapText(true)
+		];
+}
+
+TSharedRef<SWidget> SShintToolsPanel::BuildModuleProgressBar(
+	TSharedPtr<SProgressBar>& OutBar,
+	TAttribute<TOptional<float>> PercentAttr)
+{
+	return SNew(SBox).HeightOverride(2.f)
+		[
+			SAssignNew(OutBar, SProgressBar)
+			.Percent(PercentAttr)
+			.FillColorAndOpacity(FSlateColor(C_Blue()))
+			.BackgroundImage(FAppStyle::GetBrush("ProgressBar.Background"))
+		];
+}
+
+FString SShintToolsPanel::FmtN(int32 N)
+{
+	return N < 0 ? TEXT("\u2014") : FString::Printf(TEXT("%d"), N);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Header — black strip, bold "ShintTools", banner image upper-right
+// Header
 // ─────────────────────────────────────────────────────────────────────────────
 
 TSharedRef<SWidget> SShintToolsPanel::BuildHeader()
@@ -259,17 +307,11 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 		[
 			SNew(SVerticalBox)
 
-			// Title
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,3.f)
+			+ SVerticalBox::Slot().AutoHeight()
 			[
-				SNew(STextBlock).Text(LOCTEXT("CVTitle","CODE VALIDATOR")).Font(F_H2())
-				.ColorAndOpacity(FSlateColor(C_White()))
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,16.f)
-			[
-				SNew(STextBlock)
-				.Text(LOCTEXT("CVSub","Analyse C++ source and Blueprints · review issues · apply fixes · send to dashboard"))
-				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray()))
+				BuildSectionTitle(
+					LOCTEXT("CVTitle","CODE VALIDATOR"),
+					LOCTEXT("CVSub","Analyse C++ source and Blueprints · review issues · apply fixes · send to dashboard"))
 			]
 
 			// Stats
@@ -284,17 +326,11 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 				[ StatBadge(CodeWarnings_Label, LOCTEXT("CVW","WARNINGS"), C_Yellow()) ]
 			]
 
-			// Progress bar
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,14.f)
 			[
-				SNew(SBox).HeightOverride(2.f)
-				[
-					SAssignNew(CodeProgressBar, SProgressBar)
-					.Percent(TAttribute<TOptional<float>>::Create(
+				BuildModuleProgressBar(CodeProgressBar,
+					TAttribute<TOptional<float>>::Create(
 						TAttribute<TOptional<float>>::FGetter::CreateSP(this, &SShintToolsPanel::GetCodeProgress)))
-					.FillColorAndOpacity(FSlateColor(C_Blue()))
-					.BackgroundImage(FAppStyle::GetBrush("ProgressBar.Background"))
-				]
 			]
 
 			// Scan buttons
@@ -514,43 +550,23 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 						.ColorAndOpacity(FSlateColor(C_White())).AutoWrapText(true)
 					]
 
-					// Row 3: code diff (▸ bad → ✓ good)
 					+ SVerticalBox::Slot().AutoHeight()
 					[
 						SNew(SBorder)
 						.Visibility(Item->Snippet.IsEmpty()
 							? EVisibility::Collapsed : EVisibility::Visible)
-						.BorderImage(ST4::Solid(FLinearColor(0.055f,0.055f,0.055f,1.f)))
+						.BorderImage(ST4::Solid(C_CodeBG()))
 						.Padding(FMargin(8.f,5.f))
 						[
 							SNew(SVerticalBox)
-
-							// Current (red)
 							+ SVerticalBox::Slot().AutoHeight()
-							[
-								SNew(SHorizontalBox)
-								+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f)
-								[ SNew(STextBlock).Text(FText::FromString(TEXT("▸"))).Font(F_Mono())
-								  .ColorAndOpacity(FSlateColor(C_Red())) ]
-								+ SHorizontalBox::Slot().FillWidth(1.f)
-								[ SNew(STextBlock).Text(FText::FromString(Item->Snippet))
-								  .Font(F_Mono()).ColorAndOpacity(FSlateColor(
-								      FLinearColor(0.90f,0.48f,0.48f,1.f))).AutoWrapText(true) ]
-							]
-
-							// Fix suggestion (green)
+							[ BuildDiffLine(TEXT("\u25B8"), Item->Snippet, C_Red(), C_DiffRed()) ]
 							+ SVerticalBox::Slot().AutoHeight().Padding(0.f,3.f,0.f,0.f)
 							[
-								SNew(SHorizontalBox)
+								SNew(SBox)
 								.Visibility(Item->FixSuggestion.IsEmpty()
 									? EVisibility::Collapsed : EVisibility::Visible)
-								+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f)
-								[ SNew(STextBlock).Text(FText::FromString(TEXT("→"))).Font(F_Mono())
-								  .ColorAndOpacity(FSlateColor(C_Green())) ]
-								+ SHorizontalBox::Slot().FillWidth(1.f)
-								[ SNew(STextBlock).Text(FText::FromString(Item->FixSuggestion))
-								  .Font(F_Mono()).ColorAndOpacity(FSlateColor(
-								      FLinearColor(0.48f,0.90f,0.48f,1.f))).AutoWrapText(true) ]
+								[ BuildDiffLine(TEXT("\u2192"), Item->FixSuggestion, C_Green(), C_DiffGreen()) ]
 							]
 						]
 					]
@@ -571,16 +587,11 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 		[
 			SNew(SVerticalBox)
 
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,3.f)
+			+ SVerticalBox::Slot().AutoHeight()
 			[
-				SNew(STextBlock).Text(LOCTEXT("ANBTitle","ASSET NAMING BOT")).Font(F_H2())
-				.ColorAndOpacity(FSlateColor(C_White()))
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,16.f)
-			[
-				SNew(STextBlock)
-				.Text(LOCTEXT("ANBSub","Scan entire project · detect invalid names · apply UE5 rename (refs preserved) · send to dashboard"))
-				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray()))
+				BuildSectionTitle(
+					LOCTEXT("ANBTitle","ASSET NAMING BOT"),
+					LOCTEXT("ANBSub","Scan entire project · detect invalid names · apply UE5 rename (refs preserved) · send to dashboard"))
 			]
 
 			// Stats
@@ -595,17 +606,11 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 				[ StatBadge(AssetTime_Label,    LOCTEXT("ANBMS","TIME (s)"), C_Gray()) ]
 			]
 
-			// Progress
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,14.f)
 			[
-				SNew(SBox).HeightOverride(2.f)
-				[
-					SAssignNew(AssetProgressBar, SProgressBar)
-					.Percent(TAttribute<TOptional<float>>::Create(
+				BuildModuleProgressBar(AssetProgressBar,
+					TAttribute<TOptional<float>>::Create(
 						TAttribute<TOptional<float>>::FGetter::CreateSP(this, &SShintToolsPanel::GetAssetProgress)))
-					.FillColorAndOpacity(FSlateColor(C_Blue()))
-					.BackgroundImage(FAppStyle::GetBrush("ProgressBar.Background"))
-				]
 			]
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,18.f)
@@ -739,25 +744,24 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateAssetIssueRow(
 						]
 					]
 
-					// Current → suggested
 					+ SVerticalBox::Slot().AutoHeight()
 					[
-						SNew(SBorder).BorderImage(ST4::Solid(FLinearColor(0.055f,0.055f,0.055f,1.f)))
+						SNew(SBorder).BorderImage(ST4::Solid(C_CodeBG()))
 						.Padding(FMargin(8.f,4.f))
 						[
 							SNew(SHorizontalBox)
 							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f)
-							[ SNew(STextBlock).Text(FText::FromString(TEXT("▸"))).Font(F_Mono())
+							[ SNew(STextBlock).Text(FText::FromString(TEXT("\u25B8"))).Font(F_Mono())
 							  .ColorAndOpacity(FSlateColor(C_Red())) ]
 							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,12.f,0.f)
 							[ SNew(STextBlock).Text(FText::FromString(Item->CurrentName))
-							  .Font(F_Mono()).ColorAndOpacity(FSlateColor(FLinearColor(0.9f,0.45f,0.45f,1.f))) ]
+							  .Font(F_Mono()).ColorAndOpacity(FSlateColor(C_DiffRed())) ]
 							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f)
-							[ SNew(STextBlock).Text(FText::FromString(TEXT("→"))).Font(F_Mono())
+							[ SNew(STextBlock).Text(FText::FromString(TEXT("\u2192"))).Font(F_Mono())
 							  .ColorAndOpacity(FSlateColor(C_Green())) ]
 							+ SHorizontalBox::Slot().FillWidth(1.f)
 							[ SNew(STextBlock).Text(FText::FromString(Item->SuggestedName))
-							  .Font(F_Mono()).ColorAndOpacity(FSlateColor(FLinearColor(0.45f,0.9f,0.45f,1.f))) ]
+							  .Font(F_Mono()).ColorAndOpacity(FSlateColor(C_DiffGreen())) ]
 						]
 					]
 				]
@@ -929,23 +933,31 @@ void SShintToolsPanel::OnHealthCheckComplete(const FShintRequestResult& Result)
 
 void SShintToolsPanel::OnProjectValidateComplete(const FShintValidateResult& Result)
 {
-	if (!Result.bSuccess) { SetCodeState(EModuleState::Error); return; }
-	LastCodeResult = Result;
-	SetCodeState(EModuleState::Done);
-	PopulateCodeIssueList(Result);
-	RefreshCodeStats();
+	HandleValidateResult(Result, false);
 }
 
 void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& Result)
 {
+	HandleValidateResult(Result, true);
+}
+
+void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, bool bMerge)
+{
 	if (!Result.bSuccess) { SetCodeState(EModuleState::Error); return; }
-	// Merge
-	LastCodeResult.bSuccess       = true;
-	LastCodeResult.TotalIssues   += Result.TotalIssues;
-	LastCodeResult.TotalErrors   += Result.TotalErrors;
-	LastCodeResult.TotalWarnings += Result.TotalWarnings;
-	LastCodeResult.FilesScanned  += Result.FilesScanned;
-	for (const FShintCodeIssue& I : Result.Issues) LastCodeResult.Issues.Add(I);
+
+	if (bMerge)
+	{
+		LastCodeResult.bSuccess       = true;
+		LastCodeResult.TotalIssues   += Result.TotalIssues;
+		LastCodeResult.TotalErrors   += Result.TotalErrors;
+		LastCodeResult.TotalWarnings += Result.TotalWarnings;
+		LastCodeResult.FilesScanned  += Result.FilesScanned;
+		LastCodeResult.Issues.Append(Result.Issues);
+	}
+	else
+	{
+		LastCodeResult = Result;
+	}
 
 	SetCodeState(EModuleState::Done);
 	PopulateCodeIssueList(LastCodeResult);
@@ -1157,14 +1169,5 @@ TOptional<float> SShintToolsPanel::GetAssetProgress() const
 	if (AssetState == EModuleState::Done)    return TOptional<float>(1.f);
 	return TOptional<float>(0.f);
 }
-
-FString SShintToolsPanel::TimeStr()
-{
-	const FDateTime N = FDateTime::Now();
-	return FString::Printf(TEXT("[%02d:%02d:%02d]"), N.GetHour(), N.GetMinute(), N.GetSecond());
-}
-
-FString SShintToolsPanel::FmtN(int32 N)
-{ return N < 0 ? TEXT("—") : FString::Printf(TEXT("%d"), N); }
 
 #undef LOCTEXT_NAMESPACE

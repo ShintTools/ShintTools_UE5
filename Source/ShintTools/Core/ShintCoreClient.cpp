@@ -84,10 +84,7 @@ void FShintCoreClient::ValidateCode(
 	Body->SetStringField(TEXT("content"),   Content);
 	Body->SetStringField(TEXT("engine"),    Engine);
 
-	FString Str; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Str);
-	FJsonSerializer::Serialize(Body, W);
-
-	SendRequest(Config.GetBaseUrl() + TEXT("/validate/code"), EShintHttpMethod::POST, Str,
+	SendRequest(Config.GetBaseUrl() + TEXT("/validate/code"), EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
 			OnComplete.ExecuteIfBound(FShintCoreClient::ParseValidateResponse(Raw));
 		}));
@@ -121,12 +118,10 @@ void FShintCoreClient::ValidateProject(
 	Body->SetArrayField(TEXT("files"),  FilesArr);
 	Body->SetStringField(TEXT("engine"), TEXT("unreal"));
 
-	FString Str; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Str);
-	FJsonSerializer::Serialize(Body, W);
-
 	TArray<FString> CapturedFiles = AbsFiles;
+	const FString BodyStr = SerializeJson(Body);
 
-	SendRequest(Config.GetBaseUrl() + TEXT("/validate/project"), EShintHttpMethod::POST, Str,
+	SendRequest(Config.GetBaseUrl() + TEXT("/validate/project"), EShintHttpMethod::POST, BodyStr,
 		FOnShintRequestComplete::CreateLambda(
 			[OnComplete, CapturedFiles](const FShintRequestResult& Raw) mutable {
 				FShintValidateResult Result = FShintCoreClient::ParseValidateResponse(Raw);
@@ -153,10 +148,7 @@ void FShintCoreClient::ValidateBlueprints(
 	Body->SetArrayField(TEXT("asset_paths"), Arr);
 	Body->SetStringField(TEXT("engine"), TEXT("unreal"));
 
-	FString Str; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Str);
-	FJsonSerializer::Serialize(Body, W);
-
-	SendRequest(Config.GetBaseUrl() + TEXT("/validate/blueprints"), EShintHttpMethod::POST, Str,
+	SendRequest(Config.GetBaseUrl() + TEXT("/validate/blueprints"), EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
 			OnComplete.ExecuteIfBound(FShintCoreClient::ParseValidateResponse(Raw));
 		}));
@@ -219,10 +211,8 @@ void FShintCoreClient::ApplyCodeFixes(
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetArrayField(TEXT("files"), FilesArr);
-	FString BodyStr; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&BodyStr);
-	FJsonSerializer::Serialize(Body, W);
 
-	SendRequest(Config.GetBaseUrl() + TEXT("/validate/fix"), EShintHttpMethod::POST, BodyStr,
+	SendRequest(Config.GetBaseUrl() + TEXT("/validate/fix"), EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda(
 			[OnComplete](const FShintRequestResult& Raw) mutable
 			{
@@ -317,14 +307,10 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 	Body->SetStringField(TEXT("api_key"),      Config.ApiKey);
 	Body->SetArrayField (TEXT("files"),        FilesArr);
 
-	FString BodyStr; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&BodyStr);
-	FJsonSerializer::Serialize(Body, W);
-
 	const FString Url = Config.DashboardUrl / TEXT("api/code-validator/analyze");
-
 	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Sending %d files to dashboard."), FilesArr.Num());
 
-	SendRequest(Url, EShintHttpMethod::POST, BodyStr,
+	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
 			FShintWebDashboardResult R;
 			R.bSuccess     = Raw.bSuccess;
@@ -358,12 +344,10 @@ void FShintCoreClient::ScanAssetNaming(
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetArrayField(TEXT("asset_paths"), Arr);
 	Body->SetStringField(TEXT("engine"),     TEXT("unreal"));
-	FString Str; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Str);
-	FJsonSerializer::Serialize(Body, W);
 
 	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Scanning %d assets."), Assets.Num());
 
-	SendRequest(Config.GetBaseUrl() + TEXT("/assets/scan"), EShintHttpMethod::POST, Str,
+	SendRequest(Config.GetBaseUrl() + TEXT("/assets/scan"), EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
 			OnComplete.ExecuteIfBound(FShintCoreClient::ParseAssetScanResponse(Raw));
 		}));
@@ -390,10 +374,8 @@ void FShintCoreClient::ReportAssetFixesToServer(
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetArrayField(TEXT("issues"), Arr);
-	FString Str; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Str);
-	FJsonSerializer::Serialize(Body, W);
 
-	SendRequest(Config.GetBaseUrl() + TEXT("/assets/fix"), EShintHttpMethod::POST, Str,
+	SendRequest(Config.GetBaseUrl() + TEXT("/assets/fix"), EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete, Count = Fixed.Num()](const FShintRequestResult& Raw) mutable {
 			FShintAssetFixResult Result;
 			Result.bSuccess      = Raw.bSuccess;
@@ -440,14 +422,10 @@ void FShintCoreClient::SendAssetNamingToDashboard(
 	Body->SetStringField(TEXT("api_key"),      Config.ApiKey);
 	Body->SetArrayField (TEXT("items"),        ItemsArr);
 
-	FString BodyStr; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&BodyStr);
-	FJsonSerializer::Serialize(Body, W);
-
 	const FString Url = Config.DashboardUrl / TEXT("api/naming-bot/analyze");
-
 	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Sending %d asset items to dashboard."), ItemsArr.Num());
 
-	SendRequest(Url, EShintHttpMethod::POST, BodyStr,
+	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
 			FShintWebDashboardResult R;
 			R.bSuccess     = Raw.bSuccess;
@@ -487,10 +465,7 @@ void FShintCoreClient::SendDashboardReport(
 		Body->SetObjectField(TEXT("asset_naming"), D);
 	}
 
-	FString Str; TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Str);
-	FJsonSerializer::Serialize(Body, W);
-
-	SendRequest(Config.GetBaseUrl() + TEXT("/dashboard/report"), EShintHttpMethod::POST, Str,
+	SendRequest(Config.GetBaseUrl() + TEXT("/dashboard/report"), EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
 			FShintDashboardResult R;
 			R.bSuccess     = Raw.bSuccess;
@@ -720,4 +695,12 @@ FString FShintCoreClient::MethodToString(EShintHttpMethod Method)
 	case EShintHttpMethod::DELETE_: return TEXT("DELETE");
 	default:                        return TEXT("GET");
 	}
+}
+
+FString FShintCoreClient::SerializeJson(const TSharedRef<FJsonObject>& Obj)
+{
+	FString Out;
+	TSharedRef<TJsonWriter<>> W = TJsonWriterFactory<>::Create(&Out);
+	FJsonSerializer::Serialize(Obj, W);
+	return Out;
 }

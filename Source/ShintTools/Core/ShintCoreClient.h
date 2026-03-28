@@ -233,6 +233,7 @@ private:
 	                           bool bConnectedSuccessfully, FOnShintRequestComplete OnComplete);
 
 	static FString MethodToString(EShintHttpMethod Method);
+	static FString SerializeJson(const TSharedRef<FJsonObject>& Obj);
 	static FShintValidateResult  ParseValidateResponse (const FShintRequestResult& Raw);
 	static FShintAssetScanResult ParseAssetScanResponse(const FShintRequestResult& Raw);
 	static FShintFixResult       ParseFixResponse      (const FShintRequestResult& Raw);
