@@ -465,15 +465,15 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f) [ BuildCodeFilterBar() ]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f) [ Divider() ]
 
-		// Virtual list — fixed item height for performance with hundreds of rows
+		// Virtual list
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			SNew(SBox).MaxDesiredHeight(420.f)
+			SNew(SBox).MaxDesiredHeight(900.f)
 			[
 				SAssignNew(CodeIssueListView, SListView<FShintIssueItemPtr>)
 				.ListItemsSource(&CodeIssueItems)
 				.OnGenerateRow(this, &SShintToolsPanel::GenerateCodeIssueRow)
-				.SelectionMode(ESelectionMode::None)// fixed height → no re-measure per row → fast scroll
+				.SelectionMode(ESelectionMode::None)
 				.AllowOverscroll(EAllowOverscroll::Yes)
 			]
 		]
@@ -691,7 +691,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f) [ Divider() ]
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			SNew(SBox).MaxDesiredHeight(360.f)
+			SNew(SBox).MaxDesiredHeight(900.f)
 			[
 				SAssignNew(AssetIssueListView, SListView<FShintAssetItemPtr>)
 				.ListItemsSource(&AssetIssueItems)
@@ -854,28 +854,102 @@ FReply SShintToolsPanel::OnDeselectAllCodeClicked()
 
 FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 {
-	TArray<FShintCodeIssue> Accepted;
-
+	// Group selected fixable items by file path
+	TMap<FString, TArray<FShintIssueItemPtr>> ByFile;
 	for (const FShintIssueItemPtr& Item : AllCodeItems)
 	{
-		if (!Item->bChecked || !Item->bIsAutoFixable) continue;
-
-		FShintCodeIssue I;
-		I.RuleId         = Item->RuleId;
-		I.Severity       = Item->Severity;
-		I.Message        = Item->Message;
-		I.FilePath       = Item->FilePath;
-		I.Line           = Item->Line;
-		I.bIsAutoFixable = true;
-		I.bChecked       = true;
-		Accepted.Add(I);
+		if (!Item->bChecked) continue;
+		if (Item->Snippet.IsEmpty() || Item->FixSuggestion.IsEmpty()) continue;
+		ByFile.FindOrAdd(Item->FilePath).Add(Item);
 	}
 
-	if (Accepted.IsEmpty()) return FReply::Handled();
+	if (ByFile.IsEmpty()) return FReply::Handled();
 
 	SetCodeState(EModuleState::Running);
-	CoreClient->ApplyCodeFixes(Accepted,
-		FOnShintFixComplete::CreateSP(this, &SShintToolsPanel::OnCodeFixComplete));
+	int32 TotalApplied = 0;
+
+	for (auto& Pair : ByFile)
+	{
+		FString Content;
+		if (!FFileHelper::LoadFileToString(Content, *Pair.Key))
+		{
+			UE_LOG(LogShintTools, Error, TEXT("ApplyFix: Cannot read %s"), *Pair.Key);
+			continue;
+		}
+
+		// Sort by line DESC so earlier replacements don't shift line numbers
+		Pair.Value.Sort([](const FShintIssueItemPtr& A, const FShintIssueItemPtr& B) {
+			return A->Line > B->Line;
+		});
+
+		TArray<FString> Lines;
+		Content.ParseIntoArray(Lines, TEXT("\n"), false);
+
+		for (const FShintIssueItemPtr& Item : Pair.Value)
+		{
+			const FString Snip = Item->Snippet.TrimStartAndEnd();
+			const FString Fix  = Item->FixSuggestion.TrimStartAndEnd();
+			if (Snip.IsEmpty()) continue;
+
+			bool bApplied = false;
+
+			// Try targeted replacement at the reported line
+			if (Item->Line > 0 && Item->Line <= Lines.Num())
+			{
+				const int32 Idx = Item->Line - 1;
+				if (Lines[Idx].Contains(Snip))
+				{
+					Lines[Idx] = Lines[Idx].Replace(*Snip, *Fix);
+					bApplied = true;
+				}
+				else
+				{
+					// Check surrounding lines (snippet may span or be offset by ±2)
+					const int32 Lo = FMath::Max(0, Idx - 2);
+					const int32 Hi = FMath::Min(Lines.Num() - 1, Idx + 2);
+					for (int32 L = Lo; L <= Hi && !bApplied; ++L)
+					{
+						if (Lines[L].Contains(Snip))
+						{
+							Lines[L] = Lines[L].Replace(*Snip, *Fix);
+							bApplied = true;
+						}
+					}
+				}
+			}
+
+			// Fallback: global search in the whole file content
+			if (!bApplied)
+			{
+				FString Joined = FString::Join(Lines, TEXT("\n"));
+				if (Joined.Contains(Snip))
+				{
+					Joined.ReplaceInline(*Snip, *Fix, ESearchCase::CaseSensitive);
+					Joined.ParseIntoArray(Lines, TEXT("\n"), false);
+					bApplied = true;
+				}
+			}
+
+			if (bApplied)
+			{
+				Item->bChecked = false;
+				TotalApplied++;
+			}
+		}
+
+		const FString Final = FString::Join(Lines, TEXT("\n"));
+		if (!FFileHelper::SaveStringToFile(Final, *Pair.Key,
+			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+		{
+			UE_LOG(LogShintTools, Error, TEXT("ApplyFix: Failed to write %s"), *Pair.Key);
+		}
+	}
+
+	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Applied %d fix(es)."), TotalApplied);
+
+	SetCodeState(EModuleState::Done);
+	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
+	RefreshApplyCodeLabel();
 	return FReply::Handled();
 }
 
@@ -1025,10 +1099,10 @@ void SShintToolsPanel::OnCodeDashboardComplete(const FShintWebDashboardResult& R
 		UE_LOG(LogShintTools, Error, TEXT("Dashboard send failed: %s"), *Result.ErrorMessage);
 	}
 
-	TWeakPtr<SShintToolsPanel> WeakThis = SharedThis(this);
+	TWeakPtr<SShintToolsPanel> weak_this = SharedThis(this);
 	FTSTicker::GetCoreTicker().AddTicker(
-		FTickerDelegate::CreateLambda([WeakThis](float) -> bool {
-			if (TSharedPtr<SShintToolsPanel> Pin = WeakThis.Pin())
+		FTickerDelegate::CreateLambda([weak_this](float) -> bool {
+			if (TSharedPtr<SShintToolsPanel> Pin = weak_this.Pin())
 			{
 				if (Pin->SendCodeBtnLabel.IsValid())
 				{
@@ -1070,15 +1144,15 @@ void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& 
 		UE_LOG(LogShintTools, Error, TEXT("Dashboard send failed: %s"), *Result.ErrorMessage);
 	}
 
-	TWeakPtr<SShintToolsPanel> WeakThis = SharedThis(this);
+	TWeakPtr<SShintToolsPanel> weak_this = SharedThis(this);
 	FTSTicker::GetCoreTicker().AddTicker(
-		FTickerDelegate::CreateLambda([WeakThis](float) -> bool {
-			if (TSharedPtr<SShintToolsPanel> Pin = WeakThis.Pin())
+		FTickerDelegate::CreateLambda([weak_this](float) -> bool {
+			if (const TSharedPtr<SShintToolsPanel> pin = weak_this.Pin())
 			{
-				if (Pin->SendAssetBtnLabel.IsValid())
+				if (pin->SendAssetBtnLabel.IsValid())
 				{
-					Pin->SendAssetBtnLabel->SetText(LOCTEXT("SendAssetRst", "↑  Send to Dashboard"));
-					Pin->SendAssetBtnLabel->SetColorAndOpacity(FSlateColor(C_Blue()));
+					pin->SendAssetBtnLabel->SetText(LOCTEXT("SendAssetRst", "↑  Send to Dashboard"));
+					pin->SendAssetBtnLabel->SetColorAndOpacity(FSlateColor(C_Blue()));
 				}
 			}
 			return false;
