@@ -206,6 +206,8 @@ private:
 
 	TSharedPtr<STextBlock> ApplyCodeBtnLabel;
 	TSharedPtr<STextBlock> ApplyAssetBtnLabel;
+	TSharedPtr<STextBlock> SendCodeBtnLabel;
+	TSharedPtr<STextBlock> SendAssetBtnLabel;
 
 	TSharedPtr<SWidget>    CodeEmptyState;
 	TSharedPtr<SWidget>    AssetEmptyState;

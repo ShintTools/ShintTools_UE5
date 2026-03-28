@@ -26,6 +26,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Algo/Count.h"
+#include "Containers/Ticker.h"
 
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
 
@@ -500,7 +501,8 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 				.IsEnabled(false).ContentPadding(FMargin(14.f,7.f))
 				.OnClicked(this, &SShintToolsPanel::OnSendCodeToDashboardClicked)
 				[
-					SNew(STextBlock).Text(LOCTEXT("SendCode","↑  Send to Dashboard"))
+					SAssignNew(SendCodeBtnLabel, STextBlock)
+					.Text(LOCTEXT("SendCode","↑  Send to Dashboard"))
 					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Blue()))
 				]
 			]
@@ -718,7 +720,8 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 				.IsEnabled(false).ContentPadding(FMargin(14.f,7.f))
 				.OnClicked(this, &SShintToolsPanel::OnSendAssetToDashboardClicked)
 				[
-					SNew(STextBlock).Text(LOCTEXT("SendAsset","↑  Send to Dashboard"))
+					SAssignNew(SendAssetBtnLabel, STextBlock)
+					.Text(LOCTEXT("SendAsset","↑  Send to Dashboard"))
 					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Blue()))
 				]
 			]
@@ -1008,6 +1011,33 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result)
 
 void SShintToolsPanel::OnCodeDashboardComplete(const FShintWebDashboardResult& Result)
 {
+	if (!SendCodeBtnLabel.IsValid()) return;
+
+	if (Result.bSuccess)
+	{
+		SendCodeBtnLabel->SetText(LOCTEXT("SendCodeOk", "✓  Sent!"));
+		SendCodeBtnLabel->SetColorAndOpacity(FSlateColor(C_Green()));
+	}
+	else
+	{
+		SendCodeBtnLabel->SetText(LOCTEXT("SendCodeErr", "✗  Send failed"));
+		SendCodeBtnLabel->SetColorAndOpacity(FSlateColor(C_Red()));
+		UE_LOG(LogShintTools, Error, TEXT("Dashboard send failed: %s"), *Result.ErrorMessage);
+	}
+
+	TWeakPtr<SShintToolsPanel> WeakThis = SharedThis(this);
+	FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateLambda([WeakThis](float) -> bool {
+			if (TSharedPtr<SShintToolsPanel> Pin = WeakThis.Pin())
+			{
+				if (Pin->SendCodeBtnLabel.IsValid())
+				{
+					Pin->SendCodeBtnLabel->SetText(LOCTEXT("SendCodeRst", "↑  Send to Dashboard"));
+					Pin->SendCodeBtnLabel->SetColorAndOpacity(FSlateColor(C_Blue()));
+				}
+			}
+			return false;
+		}), 3.f);
 }
 
 void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
@@ -1026,6 +1056,33 @@ void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
 
 void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& Result)
 {
+	if (!SendAssetBtnLabel.IsValid()) return;
+
+	if (Result.bSuccess)
+	{
+		SendAssetBtnLabel->SetText(LOCTEXT("SendAssetOk", "✓  Sent!"));
+		SendAssetBtnLabel->SetColorAndOpacity(FSlateColor(C_Green()));
+	}
+	else
+	{
+		SendAssetBtnLabel->SetText(LOCTEXT("SendAssetErr", "✗  Send failed"));
+		SendAssetBtnLabel->SetColorAndOpacity(FSlateColor(C_Red()));
+		UE_LOG(LogShintTools, Error, TEXT("Dashboard send failed: %s"), *Result.ErrorMessage);
+	}
+
+	TWeakPtr<SShintToolsPanel> WeakThis = SharedThis(this);
+	FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateLambda([WeakThis](float) -> bool {
+			if (TSharedPtr<SShintToolsPanel> Pin = WeakThis.Pin())
+			{
+				if (Pin->SendAssetBtnLabel.IsValid())
+				{
+					Pin->SendAssetBtnLabel->SetText(LOCTEXT("SendAssetRst", "↑  Send to Dashboard"));
+					Pin->SendAssetBtnLabel->SetColorAndOpacity(FSlateColor(C_Blue()));
+				}
+			}
+			return false;
+		}), 3.f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
