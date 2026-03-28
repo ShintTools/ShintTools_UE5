@@ -1,15 +1,4 @@
 // Copyright ShintTools. All Rights Reserved.
-//
-// ShintTools Panel v4
-// Fixes:
-//   [1] Apply code fixes — sends absolute paths, server rewrites, plugin writes back
-//   [2] Asset rename    — uses IAssetTools::RenameAssets (UE5 native, updates refs)
-//   [3] Typography      — all small fonts increased to legible sizes
-//   [4] Banner image    — loads ShintTools_Banner.png from plugin Resources dir
-//   [5] Dashboard API   — sends to web API matching Emergent /api/code-validator/analyze
-//                         and /api/naming-bot/analyze with api_key + project_id
-//   [6] Responsive      — SListView with filter bar (All / Errors / Warnings / Fixable)
-//                         and virtual row rendering for hundreds of issues
 
 #include "SShintToolsPanel.h"
 #include "ShintTools/ShintTools.h"
@@ -121,8 +110,6 @@ SShintToolsPanel::~SShintToolsPanel()
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Banner loader
-// Looks for ShintTools_Banner.png in the plugin's Resources directory.
-// User must copy the PNG there with that exact filename.
 // ─────────────────────────────────────────────────────────────────────────────
 
 void SShintToolsPanel::LoadBannerBrush()
@@ -316,7 +303,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 				SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f,6.f))
 				+ SWrapBox::Slot()
 				[
-					SNew(SButton).ContentPadding(FMargin(16.f,7.f))
+					SNew(SButton).ContentPadding(FMargin(14.f,7.f))
 					.OnClicked(this, &SShintToolsPanel::OnScanProjectClicked)
 					[
 						SNew(STextBlock).Text(LOCTEXT("ScanSrc","⟳  Scan All Source")).Font(F_Small())
@@ -325,7 +312,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 				]
 				+ SWrapBox::Slot()
 				[
-					SNew(SButton).ContentPadding(FMargin(16.f,7.f))
+					SNew(SButton).ContentPadding(FMargin(14.f,7.f))
 					.OnClicked(this, &SShintToolsPanel::OnScanBlueprintsClicked)
 					[
 						SNew(STextBlock).Text(LOCTEXT("ScanBP","⟳  Scan Blueprints")).Font(F_Small())
@@ -432,7 +419,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 			+ SWrapBox::Slot()
 			[
 				SAssignNew(ApplyCodeBtn, SButton)
-				.IsEnabled(false).ContentPadding(FMargin(16.f,7.f))
+				.IsEnabled(false).ContentPadding(FMargin(14.f,7.f))
 				.OnClicked(this, &SShintToolsPanel::OnApplySelectedCodeFixesClicked)
 				[
 					SAssignNew(ApplyCodeBtnLabel, STextBlock)
@@ -443,7 +430,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 			+ SWrapBox::Slot()
 			[
 				SAssignNew(SendCodeBtn, SButton)
-				.IsEnabled(false).ContentPadding(FMargin(16.f,7.f))
+				.IsEnabled(false).ContentPadding(FMargin(14.f,7.f))
 				.OnClicked(this, &SShintToolsPanel::OnSendCodeToDashboardClicked)
 				[
 					SNew(STextBlock).Text(LOCTEXT("SendCode","↑  Send to Dashboard"))
@@ -458,7 +445,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Code issue row — shows rule, filepath, message, snippet ▸ suggestion
+// Code issue row
 // ─────────────────────────────────────────────────────────────────────────────
 
 TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
@@ -623,7 +610,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,18.f)
 			[
-				SNew(SButton).ContentPadding(FMargin(16.f,7.f)).HAlign(HAlign_Left)
+				SNew(SButton).ContentPadding(FMargin(14.f,7.f)).HAlign(HAlign_Left)
 				.OnClicked(this, &SShintToolsPanel::OnScanAssetsClicked)
 				[
 					SNew(STextBlock).Text(LOCTEXT("ScanAssets","⟳  Scan All Assets")).Font(F_Small())
@@ -681,7 +668,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 			+ SWrapBox::Slot()
 			[
 				SAssignNew(ApplyAssetBtn, SButton)
-				.IsEnabled(false).ContentPadding(FMargin(16.f,7.f))
+				.IsEnabled(false).ContentPadding(FMargin(14.f,7.f))
 				.OnClicked(this, &SShintToolsPanel::OnApplySelectedAssetFixesClicked)
 				[
 					SAssignNew(ApplyAssetBtnLabel, STextBlock)
@@ -692,7 +679,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 			+ SWrapBox::Slot()
 			[
 				SAssignNew(SendAssetBtn, SButton)
-				.IsEnabled(false).ContentPadding(FMargin(16.f,7.f))
+				.IsEnabled(false).ContentPadding(FMargin(14.f,7.f))
 				.OnClicked(this, &SShintToolsPanel::OnSendAssetToDashboardClicked)
 				[
 					SNew(STextBlock).Text(LOCTEXT("SendAsset","↑  Send to Dashboard"))
@@ -809,30 +796,30 @@ FReply SShintToolsPanel::OnScanBlueprintsClicked()
 
 FReply SShintToolsPanel::OnSelectAllCodeClicked()
 {
-	for (FShintIssueItemPtr& I : CodeIssueItems)
+	for (FShintIssueItemPtr& I : AllCodeItems)
 		if (I->bIsAutoFixable) I->bChecked = true;
-	if (CodeIssueListView.IsValid()) CodeIssueListView->RequestListRefresh();
+	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
 	RefreshApplyCodeLabel();
 	return FReply::Handled();
 }
 
 FReply SShintToolsPanel::OnDeselectAllCodeClicked()
 {
-	for (FShintIssueItemPtr& I : CodeIssueItems) I->bChecked = false;
-	if (CodeIssueListView.IsValid()) CodeIssueListView->RequestListRefresh();
+	for (FShintIssueItemPtr& I : AllCodeItems) I->bChecked = false;
+	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
 	RefreshApplyCodeLabel();
 	return FReply::Handled();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Apply code fixes — sends to /validate/fix → server rewrites → plugin writes back
+// Apply code fixes
 // ─────────────────────────────────────────────────────────────────────────────
 
 FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 {
 	TArray<FShintCodeIssue> Accepted;
 
-	for (const FShintIssueItemPtr& Item : CodeIssueItems)
+	for (const FShintIssueItemPtr& Item : AllCodeItems)
 	{
 		if (!Item->bChecked || !Item->bIsAutoFixable) continue;
 
@@ -840,22 +827,14 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 		I.RuleId         = Item->RuleId;
 		I.Severity       = Item->Severity;
 		I.Message        = Item->Message;
-		I.FilePath       = Item->FilePath;   // absolute path
+		I.FilePath       = Item->FilePath;
 		I.Line           = Item->Line;
 		I.bIsAutoFixable = true;
 		I.bChecked       = true;
 		Accepted.Add(I);
 	}
 
-	if (Accepted.IsEmpty())
-	{
-		UE_LOG(LogShintTools, Warning,
-			TEXT("ShintTools: No auto-fixable issues checked. Select issues with the AUTO badge."));
-		return FReply::Handled();
-	}
-
-	UE_LOG(LogShintTools, Log,
-		TEXT("ShintTools: Sending %d issue(s) to /validate/fix..."), Accepted.Num());
+	if (Accepted.IsEmpty()) return FReply::Handled();
 
 	SetCodeState(EModuleState::Running);
 	CoreClient->ApplyCodeFixes(Accepted,
@@ -882,23 +861,18 @@ FReply SShintToolsPanel::OnScanAssetsClicked()
 FReply SShintToolsPanel::OnSelectAllAssetsClicked()
 {
 	for (FShintAssetItemPtr& I : AssetIssueItems) I->bChecked = true;
-	if (AssetIssueListView.IsValid()) AssetIssueListView->RequestListRefresh();
+	if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
 	RefreshApplyAssetLabel();
 	return FReply::Handled();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Apply asset fixes — uses IAssetTools::RenameAssets (proper UE5 rename with
-// reference fixup). Then reports the operation to the local server.
+// Apply asset fixes
 // ─────────────────────────────────────────────────────────────────────────────
 
 FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 {
-	if (!FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools")))
-	{
-		UE_LOG(LogShintTools, Error, TEXT("ShintTools: AssetTools module not available."));
-		return FReply::Handled();
-	}
+	if (!FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools"))) return FReply::Handled();
 
 	const FAssetToolsModule& AssetToolsModule =
 	FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
@@ -914,12 +888,7 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 		// Load the UObject from its package path (/Game/...AssetName)
 		UObject* Asset = StaticLoadObject(UObject::StaticClass(), nullptr, *Item->AssetPath);
-		if (!Asset)
-		{
-			UE_LOG(LogShintTools, Warning,
-				TEXT("ShintTools: Could not load asset for rename: %s"), *Item->AssetPath);
-			continue;
-		}
+		if (!Asset) continue;
 
 		const FString NewPackagePath = FPaths::GetPath(Item->AssetPath);
 		RenameData.Add(FAssetRenameData(Asset, NewPackagePath, Item->SuggestedName));
@@ -932,19 +901,10 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 		ForServer.Add(I);
 	}
 
-	if (RenameData.IsEmpty())
-	{
-		UE_LOG(LogShintTools, Warning, TEXT("ShintTools: No assets could be loaded for rename."));
-		return FReply::Handled();
-	}
+	if (RenameData.IsEmpty()) return FReply::Handled();
 
-	// Execute the rename — UE5 updates .uasset on disk + all redirectors + references
 	AssetTools.RenameAssets(RenameData);
 
-	UE_LOG(LogShintTools, Log,
-		TEXT("ShintTools: ✔ Renamed %d asset(s) via IAssetTools."), RenameData.Num());
-
-	// Report to local server (for MongoDB history / dashboard sync)
 	CoreClient->ReportAssetFixesToServer(ForServer,
 		FOnShintAssetFixComplete::CreateSP(this, &SShintToolsPanel::OnAssetFixComplete));
 
@@ -965,24 +925,11 @@ FReply SShintToolsPanel::OnSendAssetToDashboardClicked()
 void SShintToolsPanel::OnHealthCheckComplete(const FShintRequestResult& Result)
 {
 	SetStatus(Result.bSuccess ? ECoreStatus::Online : ECoreStatus::Offline);
-	if (Result.bSuccess)
-	{
-		UE_LOG(LogShintTools, Log, TEXT("ShintTools: Core Engine ONLINE"));
-	}
-	else
-	{
-		UE_LOG(LogShintTools, Warning, TEXT("ShintTools: Core Engine %s"), *FString::Printf(TEXT("OFFLINE — %s"), *Result.ErrorMessage));
-	}
 }
 
 void SShintToolsPanel::OnProjectValidateComplete(const FShintValidateResult& Result)
 {
-	if (!Result.bSuccess)
-	{
-		SetCodeState(EModuleState::Error);
-		UE_LOG(LogShintTools, Error, TEXT("ShintTools: Scan failed — %s"), *Result.ErrorMessage);
-		return;
-	}
+	if (!Result.bSuccess) { SetCodeState(EModuleState::Error); return; }
 	LastCodeResult = Result;
 	SetCodeState(EModuleState::Done);
 	PopulateCodeIssueList(Result);
@@ -991,12 +938,7 @@ void SShintToolsPanel::OnProjectValidateComplete(const FShintValidateResult& Res
 
 void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& Result)
 {
-	if (!Result.bSuccess)
-	{
-		SetCodeState(EModuleState::Error);
-		UE_LOG(LogShintTools, Error, TEXT("ShintTools: BP scan failed — %s"), *Result.ErrorMessage);
-		return;
-	}
+	if (!Result.bSuccess) { SetCodeState(EModuleState::Error); return; }
 	// Merge
 	LastCodeResult.bSuccess       = true;
 	LastCodeResult.TotalIssues   += Result.TotalIssues;
@@ -1013,42 +955,22 @@ void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& R
 void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result)
 {
 	SetCodeState(EModuleState::Done);
-	if (!Result.bSuccess)
-	{
-		UE_LOG(LogShintTools, Error, TEXT("ShintTools: Fix failed — %s"), *Result.ErrorMessage);
-		return;
-	}
-	UE_LOG(LogShintTools, Log, TEXT("ShintTools: ✔ %d fix(es) applied, %d skipped."),
-		Result.TotalFixesApplied, Result.TotalFixesSkipped);
+	if (!Result.bSuccess) return;
 
-	// Uncheck successfully fixed items
-	for (FShintIssueItemPtr& I : CodeIssueItems)
+	for (FShintIssueItemPtr& I : AllCodeItems)
 		if (I->bChecked && I->bIsAutoFixable) I->bChecked = false;
 
-	if (CodeIssueListView.IsValid()) CodeIssueListView->RequestListRefresh();
+	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
 	RefreshApplyCodeLabel();
 }
 
 void SShintToolsPanel::OnCodeDashboardComplete(const FShintWebDashboardResult& Result)
 {
-	if (Result.bSuccess)
-	{
-		UE_LOG(LogShintTools, Log, TEXT("ShintTools: Code Validator dashboard ✔ synced"));
-	}
-	else
-	{
-		UE_LOG(LogShintTools, Warning, TEXT("ShintTools: Code Validator dashboard ✘ failed — %s"), *Result.ErrorMessage);
-	}
 }
 
 void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
 {
-	if (!Result.bSuccess)
-	{
-		SetAssetState(EModuleState::Error);
-		UE_LOG(LogShintTools, Error, TEXT("ShintTools: Asset scan failed — %s"), *Result.ErrorMessage);
-		return;
-	}
+	if (!Result.bSuccess) { SetAssetState(EModuleState::Error); return; }
 	LastAssetResult = Result;
 	SetAssetState(EModuleState::Done);
 	PopulateAssetIssueList(Result);
@@ -1058,26 +980,10 @@ void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
 void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
 {
 	SetAssetState(EModuleState::Done);
-	if (Result.bSuccess)
-	{
-		UE_LOG(LogShintTools, Log,     TEXT("ShintTools: Asset fix ✔ (%d renamed)"), Result.AssetsRenamed);
-	}
-	else
-	{
-		UE_LOG(LogShintTools, Warning, TEXT("ShintTools: Asset fix ✘ (%d renamed)"), Result.AssetsRenamed);
-	}
 }
 
 void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& Result)
 {
-	if (Result.bSuccess)
-	{
-		UE_LOG(LogShintTools, Log,     TEXT("ShintTools: Asset Naming dashboard ✔ synced"));
-	}
-	else
-	{
-		UE_LOG(LogShintTools, Warning, TEXT("ShintTools: Asset Naming dashboard ✘ failed — %s"), *Result.ErrorMessage);
-	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1185,7 +1091,7 @@ void SShintToolsPanel::RefreshAssetStats()
 
 void SShintToolsPanel::RefreshApplyCodeLabel()
 {
-	const int32 N = Algo::CountIf(CodeIssueItems,
+	const int32 N = Algo::CountIf(AllCodeItems,
 		[](const FShintIssueItemPtr& P){ return P->bChecked && P->bIsAutoFixable; });
 	if (ApplyCodeBtnLabel.IsValid())
 		ApplyCodeBtnLabel->SetText(FText::FromString(
