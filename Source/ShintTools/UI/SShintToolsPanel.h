@@ -6,14 +6,13 @@
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SBorder.h"
-#include "Widgets/Images/SImage.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Views/SListView.h"
 #include "Widgets/Views/STableRow.h"
-#include "Brushes/SlateDynamicImageBrush.h"
 
 class FCoreProcessManager;
 
@@ -101,6 +100,7 @@ public:
 private:
 	// ── Widget builders ───────────────────────────────────────────────────────
 	TSharedRef<SWidget> BuildHeader();
+	TSharedRef<SWidget> BuildConfigSection();
 	TSharedRef<SWidget> BuildStatusBar();
 	TSharedRef<SWidget> BuildCodeValidatorSection();
 	TSharedRef<SWidget> BuildCodeResultsPanel();
@@ -148,7 +148,7 @@ private:
 	void RefreshAssetStats();
 	void RefreshApplyCodeLabel();
 	void RefreshApplyAssetLabel();
-	void LoadBannerBrush();
+	void SaveConfigOverrides();
 
 	FSlateColor GetStatusColor()        const;
 	FText       GetStatusText()         const;
@@ -210,6 +210,8 @@ private:
 	TSharedPtr<SWidget>    CodeEmptyState;
 	TSharedPtr<SWidget>    AssetEmptyState;
 
-	// Banner image brush (loaded from plugin Resources/ShintTools_Banner.png)
-	TSharedPtr<FSlateDynamicImageBrush> BannerBrush;
+	// Config field widgets
+	TSharedPtr<SEditableTextBox> ProjectIdField;
+	TSharedPtr<SEditableTextBox> ApiKeyField;
+	TSharedPtr<SEditableTextBox> DashboardUrlField;
 };

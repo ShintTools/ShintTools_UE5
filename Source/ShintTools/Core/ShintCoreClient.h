@@ -182,7 +182,9 @@ public:
 	~FShintCoreClient();
 
 	bool LoadConfig();
+	bool SaveConfig() const;
 	const FShintCoreConfig& GetConfig() const { return Config; }
+	FShintCoreConfig& GetConfigMutable() { return Config; }
 
 	// ── Connectivity ─────────────────────────────────────────────────────────
 	void CheckHealth(FOnShintRequestComplete OnComplete);

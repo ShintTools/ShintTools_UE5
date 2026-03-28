@@ -15,13 +15,10 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
-#include "Widgets/Images/SImage.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Views/SListView.h"
 // Style
 #include "Styling/AppStyle.h"
-// Plugin manager (for banner path)
-#include "Interfaces/IPluginManager.h"
 // Asset tools (for IAssetTools::RenameAssets)
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
@@ -84,8 +81,6 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 	CoreClient     = MakeShared<FShintCoreClient>();
 	ProcessManager = MakeShared<FCoreProcessManager>();
 
-	LoadBannerBrush();
-
 	ChildSlot
 	[
 		SNew(SBorder)
@@ -94,6 +89,7 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 		[
 			SNew(SScrollBox).Orientation(Orient_Vertical)
 			+ SScrollBox::Slot().Padding(0.f) [ BuildHeader()               ]
+			+ SScrollBox::Slot().Padding(0.f) [ BuildConfigSection()        ]
 			+ SScrollBox::Slot().Padding(0.f) [ BuildStatusBar()            ]
 			+ SScrollBox::Slot().Padding(0.f) [ BuildCodeValidatorSection() ]
 			+ SScrollBox::Slot().Padding(0.f) [ BuildAssetNamingSection()   ]
@@ -103,23 +99,6 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 
 SShintToolsPanel::~SShintToolsPanel()
 {
-	BannerBrush.Reset();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Banner loader
-// ─────────────────────────────────────────────────────────────────────────────
-
-void SShintToolsPanel::LoadBannerBrush()
-{
-	TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("ShintTools"));
-	if (!Plugin.IsValid()) return;
-
-	const FString BannerPath = Plugin->GetBaseDir() / TEXT("Resources/ShintTools_Banner.png");
-	if (!FPaths::FileExists(BannerPath)) return;
-
-	// Display at 240×48 in the panel header (scaled from 4K source)
-	BannerBrush = MakeShared<FSlateDynamicImageBrush>(*BannerPath, FVector2D(240.f, 48.f));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -188,42 +167,94 @@ FString SShintToolsPanel::FmtN(int32 N)
 
 TSharedRef<SWidget> SShintToolsPanel::BuildHeader()
 {
-	// Right side: banner or fallback version text
-	TSharedRef<SWidget> RightWidget = BannerBrush.IsValid()
-		? StaticCastSharedRef<SWidget>(
-			SNew(SBox).WidthOverride(240.f).HeightOverride(48.f).VAlign(VAlign_Center)
-			[ SNew(SImage).Image(BannerBrush.Get()) ])
-		: StaticCastSharedRef<SWidget>(
-			SNew(STextBlock).Text(LOCTEXT("Ver","v4.0")).Font(F_Label())
-			.ColorAndOpacity(FSlateColor(C_DimGray())));
-
 	return SNew(SBorder)
 		.BorderImage(ST4::Solid(C_BG()))
 		.Padding(FMargin(20.f, 18.f, 20.f, 14.f))
 		[
-			SNew(SHorizontalBox)
-
-			// Left: Brand text
-			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight()
 			[
-				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().AutoHeight()
+				SNew(STextBlock).Text(LOCTEXT("Brand","ShintTools"))
+				.Font(F_Title()).ColorAndOpacity(FSlateColor(C_White()))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,4.f,0.f,0.f)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("Sub","Automation and optimization tools for Unreal Engine and Unity"))
+				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray()))
+			]
+		];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Config section
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
+{
+	const FShintCoreConfig& Cfg = CoreClient->GetConfig();
+
+	auto ConfigRow = [this](const FText& Label, TSharedPtr<SEditableTextBox>& OutField,
+		const FString& InitialValue, const FText& Hint) -> TSharedRef<SWidget>
+	{
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f,0.f,10.f,0.f)
+			[
+				SNew(SBox).WidthOverride(110.f)
 				[
-					SNew(STextBlock).Text(LOCTEXT("Brand","ShintTools"))
-					.Font(F_Title()).ColorAndOpacity(FSlateColor(C_White()))
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0.f,4.f,0.f,0.f)
-				[
-					SNew(STextBlock)
-					.Text(LOCTEXT("Sub","Automation and optimization tools for Unreal Engine and Unity"))
-					.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray()))
+					SNew(STextBlock).Text(Label).Font(F_Label())
+					.ColorAndOpacity(FSlateColor(C_DimGray()))
 				]
 			]
+			+ SHorizontalBox::Slot().FillWidth(1.f)
+			[
+				SAssignNew(OutField, SEditableTextBox)
+				.Text(FText::FromString(InitialValue))
+				.HintText(Hint)
+				.Font(F_Mono())
+				.OnTextCommitted_Lambda([this](const FText&, ETextCommit::Type) { SaveConfigOverrides(); })
+			];
+	};
 
-			// Right: banner image (upper-right corner)
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12.f,0.f,0.f,0.f)
-			[ RightWidget ]
+	return SNew(SBorder)
+		.BorderImage(ST4::Outline(C_Surface(), C_Border()))
+		.Padding(FMargin(20.f, 12.f))
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f)
+			[
+				SNew(STextBlock).Text(LOCTEXT("CfgTitle","PROJECT CONFIG"))
+				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,6.f)
+			[
+				ConfigRow(LOCTEXT("CfgProjId","Project ID"), ProjectIdField,
+					Cfg.ProjectId, LOCTEXT("CfgProjIdHint","proj_..."))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,6.f)
+			[
+				ConfigRow(LOCTEXT("CfgApiKey","API Key"), ApiKeyField,
+					Cfg.ApiKey, LOCTEXT("CfgApiKeyHint","shint_..."))
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				ConfigRow(LOCTEXT("CfgDashUrl","Dashboard URL"), DashboardUrlField,
+					Cfg.DashboardUrl, LOCTEXT("CfgDashUrlHint","https://shint.tools"))
+			]
 		];
+}
+
+void SShintToolsPanel::SaveConfigOverrides()
+{
+	if (!CoreClient.IsValid()) return;
+
+	FShintCoreConfig& Cfg = CoreClient->GetConfigMutable();
+
+	if (ProjectIdField.IsValid())    Cfg.ProjectId    = ProjectIdField->GetText().ToString();
+	if (ApiKeyField.IsValid())       Cfg.ApiKey       = ApiKeyField->GetText().ToString();
+	if (DashboardUrlField.IsValid()) Cfg.DashboardUrl = DashboardUrlField->GetText().ToString();
+
+	CoreClient->SaveConfig();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -800,8 +831,7 @@ FReply SShintToolsPanel::OnScanBlueprintsClicked()
 
 FReply SShintToolsPanel::OnSelectAllCodeClicked()
 {
-	for (FShintIssueItemPtr& I : AllCodeItems)
-		if (I->bIsAutoFixable) I->bChecked = true;
+	for (FShintIssueItemPtr& I : AllCodeItems) I->bChecked = true;
 	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
 	RefreshApplyCodeLabel();
 	return FReply::Handled();
@@ -1104,7 +1134,7 @@ void SShintToolsPanel::RefreshAssetStats()
 void SShintToolsPanel::RefreshApplyCodeLabel()
 {
 	const int32 N = Algo::CountIf(AllCodeItems,
-		[](const FShintIssueItemPtr& P){ return P->bChecked && P->bIsAutoFixable; });
+		[](const FShintIssueItemPtr& P){ return P->bChecked; });
 	if (ApplyCodeBtnLabel.IsValid())
 		ApplyCodeBtnLabel->SetText(FText::FromString(
 			FString::Printf(TEXT("✓  Apply Selected (%d)"), N)));

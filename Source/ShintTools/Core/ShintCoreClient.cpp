@@ -57,6 +57,33 @@ bool FShintCoreClient::LoadConfig()
 	return true;
 }
 
+bool FShintCoreClient::SaveConfig() const
+{
+	const FString CfgPath = FPaths::Combine(FPaths::ProjectDir(), TEXT("shinttools.config.json"));
+
+	// Read the existing JSON so we preserve unknown fields (modules, naming, etc.)
+	TSharedPtr<FJsonObject> Json;
+	FString Raw;
+	if (FFileHelper::LoadFileToString(Raw, *CfgPath))
+	{
+		TSharedRef<TJsonReader<>> R = TJsonReaderFactory<>::Create(Raw);
+		FJsonSerializer::Deserialize(R, Json);
+	}
+	if (!Json.IsValid()) Json = MakeShared<FJsonObject>();
+
+	// Overwrite config fields
+	Json->SetNumberField(TEXT("core_port"),       Config.CorePort);
+	Json->SetBoolField(TEXT("auto_start_core"),   Config.bAutoStartCore);
+	Json->SetStringField(TEXT("project_name"),    Config.ProjectName);
+	Json->SetStringField(TEXT("project_id"),      Config.ProjectId);
+	Json->SetStringField(TEXT("api_key"),         Config.ApiKey);
+	Json->SetStringField(TEXT("dashboard_url"),   Config.DashboardUrl);
+
+	const FString Out = SerializeJson(Json.ToSharedRef());
+	return FFileHelper::SaveStringToFile(Out, *CfgPath,
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Connectivity
 // ─────────────────────────────────────────────────────────────────────────────
@@ -492,7 +519,7 @@ void FShintCoreClient::SendRequest(
 	Req->SetVerb(MethodToString(Method));
 	Req->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
 	Req->SetHeader(TEXT("Accept"),       TEXT("application/json"));
-	Req->SetHeader(TEXT("User-Agent"),   TEXT("ShintTools-UE5/3.0"));
+	Req->SetHeader(TEXT("User-Agent"),   TEXT("ShintTools-UE5/1.1"));
 
 	for (const auto& KV : ExtraHeaders)
 		Req->SetHeader(KV.Key, KV.Value);
