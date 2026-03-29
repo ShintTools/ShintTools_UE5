@@ -857,124 +857,32 @@ FReply SShintToolsPanel::OnDeselectAllCodeClicked()
 
 FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 {
-	// Group selected items by file path
-	TMap<FString, TArray<FShintIssueItemPtr>> ByFile;
+	TArray<FShintCodeIssue> Accepted;
+
 	for (const FShintIssueItemPtr& Item : AllCodeItems)
 	{
 		if (!Item->bChecked) continue;
-		if (Item->Snippet.IsEmpty() || Item->FixSuggestion.IsEmpty()) continue;
-		ByFile.FindOrAdd(Item->FilePath).Add(Item);
+
+		FShintCodeIssue I;
+		I.RuleId         = Item->RuleId;
+		I.Severity       = Item->Severity;
+		I.Message        = Item->Message;
+		I.FilePath       = Item->FilePath;
+		I.Line           = Item->Line;
+		I.Snippet        = Item->Snippet;
+		I.FixSuggestion  = Item->FixSuggestion;
+		I.bIsAutoFixable = Item->bIsAutoFixable;
+		I.bChecked       = true;
+		Accepted.Add(I);
 	}
 
-	if (ByFile.IsEmpty()) return FReply::Handled();
+	if (Accepted.IsEmpty()) return FReply::Handled();
 
-	// Helper: extract leading whitespace from a line
-	auto GetIndent = [](const FString& Line) -> FString
-	{
-		FString Indent;
-		for (const TCHAR C : Line)
-		{
-			if (C == TEXT(' ') || C == TEXT('\t')) Indent.AppendChar(C);
-			else break;
-		}
-		return Indent;
-	};
+	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Sending %d issue(s) to Core Engine."), Accepted.Num());
 
 	SetCodeState(EModuleState::Running);
-	int32 TotalApplied = 0;
-
-	for (auto& Pair : ByFile)
-	{
-		FString Content;
-		if (!FFileHelper::LoadFileToString(Content, *Pair.Key))
-		{
-			UE_LOG(LogShintTools, Error, TEXT("ApplyFix: Cannot read %s"), *Pair.Key);
-			continue;
-		}
-
-		// Sort by line DESC so replacements don't shift line numbers
-		Pair.Value.Sort([](const FShintIssueItemPtr& A, const FShintIssueItemPtr& B) {
-			return A->Line > B->Line;
-		});
-
-		for (const FShintIssueItemPtr& Item : Pair.Value)
-		{
-			const FString TrimSnip = Item->Snippet.TrimStartAndEnd();
-			const FString TrimFix  = Item->FixSuggestion.TrimStartAndEnd();
-			if (TrimSnip.IsEmpty()) continue;
-
-			// Re-split Content into lines for each fix (since prior fixes may have changed it)
-			TArray<FString> Lines;
-			Content.ParseIntoArray(Lines, TEXT("\n"), false);
-
-			bool bApplied = false;
-			const int32 Idx = Item->Line - 1;
-
-			// Strategy 1: find trimmed snippet at the target line, replace preserving indent
-			if (Idx >= 0 && Idx < Lines.Num())
-			{
-				const FString LineTrimmed = Lines[Idx].TrimStartAndEnd();
-				if (LineTrimmed.Contains(TrimSnip))
-				{
-					Lines[Idx] = GetIndent(Lines[Idx]) + LineTrimmed.Replace(*TrimSnip, *TrimFix);
-					Content = FString::Join(Lines, TEXT("\n"));
-					bApplied = true;
-				}
-			}
-
-			// Strategy 2: search ±3 lines around target
-			if (!bApplied && Idx >= 0)
-			{
-				const int32 Lo = FMath::Max(0, Idx - 3);
-				const int32 Hi = FMath::Min(Lines.Num() - 1, Idx + 3);
-				for (int32 L = Lo; L <= Hi && !bApplied; ++L)
-				{
-					const FString LT = Lines[L].TrimStartAndEnd();
-					if (LT.Contains(TrimSnip))
-					{
-						Lines[L] = GetIndent(Lines[L]) + LT.Replace(*TrimSnip, *TrimFix);
-						Content = FString::Join(Lines, TEXT("\n"));
-						bApplied = true;
-					}
-				}
-			}
-
-			// Strategy 3: global search nearest to target line
-			if (!bApplied)
-			{
-				int32 CharOffset = 0;
-				for (int32 L = 0; L < FMath::Min(Idx, Lines.Num()); ++L)
-					CharOffset += Lines[L].Len() + 1;
-
-				const int32 SearchStart = FMath::Max(0, CharOffset - 500);
-				const int32 Pos = Content.Find(TrimSnip, ESearchCase::CaseSensitive,
-					ESearchDir::FromStart, SearchStart);
-				if (Pos != INDEX_NONE)
-				{
-					Content = Content.Left(Pos) + TrimFix + Content.Mid(Pos + TrimSnip.Len());
-					bApplied = true;
-				}
-			}
-
-			if (bApplied)
-			{
-				Item->bChecked = false;
-				TotalApplied++;
-			}
-		}
-
-		if (!FFileHelper::SaveStringToFile(Content, *Pair.Key,
-			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
-		{
-			UE_LOG(LogShintTools, Error, TEXT("ApplyFix: Failed to write %s"), *Pair.Key);
-		}
-	}
-
-	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Applied %d fix(es)."), TotalApplied);
-
-	SetCodeState(EModuleState::Done);
-	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
-	RefreshApplyCodeLabel();
+	CoreClient->ApplyCodeFixes(Accepted,
+		FOnShintFixComplete::CreateSP(this, &SShintToolsPanel::OnCodeFixComplete));
 	return FReply::Handled();
 }
 
@@ -1099,10 +1007,20 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result)
 {
 	SetCodeState(EModuleState::Done);
-	if (!Result.bSuccess) return;
 
-	for (FShintIssueItemPtr& I : AllCodeItems)
-		if (I->bChecked && I->bIsAutoFixable) I->bChecked = false;
+	if (Result.bSuccess)
+	{
+		UE_LOG(LogShintTools, Log,
+			TEXT("ApplyFix: %d fix(es) applied, %d skipped."),
+			Result.TotalFixesApplied, Result.TotalFixesSkipped);
+
+		for (FShintIssueItemPtr& I : AllCodeItems)
+			if (I->bChecked) I->bChecked = false;
+	}
+	else
+	{
+		UE_LOG(LogShintTools, Error, TEXT("ApplyFix failed: %s"), *Result.ErrorMessage);
+	}
 
 	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
 	RefreshApplyCodeLabel();

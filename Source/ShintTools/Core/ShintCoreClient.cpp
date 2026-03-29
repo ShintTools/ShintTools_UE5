@@ -127,7 +127,7 @@ void FShintCoreClient::ValidateProject(
 	TArray<FString> AbsFiles;
 	CollectSourceFiles(SourceDir, AbsFiles);
 
-	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Scanning %d source files."), AbsFiles.Num());
+	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Scanning %d source files from %s"), AbsFiles.Num(), *SourceDir);
 
 	TArray<TSharedPtr<FJsonValue>> FilesArr;
 	for (const FString& Abs : AbsFiles)
@@ -192,7 +192,7 @@ void FShintCoreClient::ApplyCodeFixes(
 	TMap<FString, TArray<const FShintCodeIssue*>> ByFile;
 	for (const FShintCodeIssue& Issue : AcceptedIssues)
 	{
-		if (Issue.bIsAutoFixable && !Issue.FilePath.IsEmpty())
+		if (!Issue.FilePath.IsEmpty())
 			ByFile.FindOrAdd(Issue.FilePath).Add(&Issue);
 	}
 
@@ -223,9 +223,13 @@ void FShintCoreClient::ApplyCodeFixes(
 		for (const FShintCodeIssue* Issue : Pair.Value)
 		{
 			TSharedRef<FJsonObject> IObj = MakeShared<FJsonObject>();
-			IObj->SetStringField(TEXT("rule_id"),  Issue->RuleId);
-			IObj->SetNumberField(TEXT("line"),      Issue->Line);
-			IObj->SetStringField(TEXT("severity"), Issue->Severity);
+			IObj->SetStringField(TEXT("rule_id"),        Issue->RuleId);
+			IObj->SetNumberField(TEXT("line"),            Issue->Line);
+			IObj->SetStringField(TEXT("severity"),       Issue->Severity);
+			IObj->SetStringField(TEXT("message"),        Issue->Message);
+			IObj->SetStringField(TEXT("snippet"),        Issue->Snippet);
+			IObj->SetStringField(TEXT("fix_suggestion"), Issue->FixSuggestion);
+			IObj->SetBoolField  (TEXT("is_auto_fixable"),Issue->bIsAutoFixable);
 			IssArr.Add(MakeShared<FJsonValueObject>(IObj));
 		}
 
@@ -335,7 +339,7 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 	Body->SetArrayField (TEXT("files"),        FilesArr);
 
 	const FString Url = Config.DashboardUrl / TEXT("api/code-validator/analyze");
-	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Sending %d files to dashboard."), FilesArr.Num());
+	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d files to dashboard at %s"), FilesArr.Num(), *Url);
 
 	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
@@ -372,7 +376,7 @@ void FShintCoreClient::ScanAssetNaming(
 	Body->SetArrayField(TEXT("asset_paths"), Arr);
 	Body->SetStringField(TEXT("engine"),     TEXT("unreal"));
 
-	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Scanning %d assets."), Assets.Num());
+	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Scanning %d assets from %s"), Assets.Num(), *ContentDir);
 
 	SendRequest(Config.GetBaseUrl() + TEXT("/assets/scan"), EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
@@ -450,7 +454,7 @@ void FShintCoreClient::SendAssetNamingToDashboard(
 	Body->SetArrayField (TEXT("items"),        ItemsArr);
 
 	const FString Url = Config.DashboardUrl / TEXT("api/naming-bot/analyze");
-	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Sending %d asset items to dashboard."), ItemsArr.Num());
+	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d asset items to dashboard at %s"), ItemsArr.Num(), *Url);
 
 	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
