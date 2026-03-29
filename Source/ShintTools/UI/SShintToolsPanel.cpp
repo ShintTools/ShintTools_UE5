@@ -818,7 +818,9 @@ FReply SShintToolsPanel::OnCheckConnectionClicked()
 FReply SShintToolsPanel::OnScanProjectClicked()
 {
 	SetCodeState(EModuleState::Running);
+	// Reset everything — fresh scan
 	AllCodeItems.Empty(); CodeIssueItems.Empty();
+	LastCodeResult = FShintValidateResult();
 	CoreClient->ValidateProject(FPaths::GameSourceDir(),
 		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnProjectValidateComplete));
 	return FReply::Handled();
@@ -827,6 +829,7 @@ FReply SShintToolsPanel::OnScanProjectClicked()
 FReply SShintToolsPanel::OnScanBlueprintsClicked()
 {
 	SetCodeState(EModuleState::Running);
+	// Merge into existing results (append to source scan)
 	CoreClient->ValidateBlueprints(FPaths::ProjectContentDir(),
 		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnBlueprintValidateComplete));
 	return FReply::Handled();
@@ -854,7 +857,7 @@ FReply SShintToolsPanel::OnDeselectAllCodeClicked()
 
 FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 {
-	// Group selected fixable items by file path
+	// Group selected items by file path
 	TMap<FString, TArray<FShintIssueItemPtr>> ByFile;
 	for (const FShintIssueItemPtr& Item : AllCodeItems)
 	{
@@ -864,6 +867,18 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 	}
 
 	if (ByFile.IsEmpty()) return FReply::Handled();
+
+	// Helper: extract leading whitespace from a line
+	auto GetIndent = [](const FString& Line) -> FString
+	{
+		FString Indent;
+		for (const TCHAR C : Line)
+		{
+			if (C == TEXT(' ') || C == TEXT('\t')) Indent.AppendChar(C);
+			else break;
+		}
+		return Indent;
+	};
 
 	SetCodeState(EModuleState::Running);
 	int32 TotalApplied = 0;
@@ -877,55 +892,66 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 			continue;
 		}
 
-		// Sort by line DESC so earlier replacements don't shift line numbers
+		// Sort by line DESC so replacements don't shift line numbers
 		Pair.Value.Sort([](const FShintIssueItemPtr& A, const FShintIssueItemPtr& B) {
 			return A->Line > B->Line;
 		});
 
-		TArray<FString> Lines;
-		Content.ParseIntoArray(Lines, TEXT("\n"), false);
-
 		for (const FShintIssueItemPtr& Item : Pair.Value)
 		{
-			const FString Snip = Item->Snippet.TrimStartAndEnd();
-			const FString Fix  = Item->FixSuggestion.TrimStartAndEnd();
-			if (Snip.IsEmpty()) continue;
+			const FString TrimSnip = Item->Snippet.TrimStartAndEnd();
+			const FString TrimFix  = Item->FixSuggestion.TrimStartAndEnd();
+			if (TrimSnip.IsEmpty()) continue;
+
+			// Re-split Content into lines for each fix (since prior fixes may have changed it)
+			TArray<FString> Lines;
+			Content.ParseIntoArray(Lines, TEXT("\n"), false);
 
 			bool bApplied = false;
+			const int32 Idx = Item->Line - 1;
 
-			// Try targeted replacement at the reported line
-			if (Item->Line > 0 && Item->Line <= Lines.Num())
+			// Strategy 1: find trimmed snippet at the target line, replace preserving indent
+			if (Idx >= 0 && Idx < Lines.Num())
 			{
-				const int32 Idx = Item->Line - 1;
-				if (Lines[Idx].Contains(Snip))
+				const FString LineTrimmed = Lines[Idx].TrimStartAndEnd();
+				if (LineTrimmed.Contains(TrimSnip))
 				{
-					Lines[Idx] = Lines[Idx].Replace(*Snip, *Fix);
+					Lines[Idx] = GetIndent(Lines[Idx]) + LineTrimmed.Replace(*TrimSnip, *TrimFix);
+					Content = FString::Join(Lines, TEXT("\n"));
 					bApplied = true;
 				}
-				else
+			}
+
+			// Strategy 2: search ±3 lines around target
+			if (!bApplied && Idx >= 0)
+			{
+				const int32 Lo = FMath::Max(0, Idx - 3);
+				const int32 Hi = FMath::Min(Lines.Num() - 1, Idx + 3);
+				for (int32 L = Lo; L <= Hi && !bApplied; ++L)
 				{
-					// Check surrounding lines (snippet may span or be offset by ±2)
-					const int32 Lo = FMath::Max(0, Idx - 2);
-					const int32 Hi = FMath::Min(Lines.Num() - 1, Idx + 2);
-					for (int32 L = Lo; L <= Hi && !bApplied; ++L)
+					const FString LT = Lines[L].TrimStartAndEnd();
+					if (LT.Contains(TrimSnip))
 					{
-						if (Lines[L].Contains(Snip))
-						{
-							Lines[L] = Lines[L].Replace(*Snip, *Fix);
-							bApplied = true;
-						}
+						Lines[L] = GetIndent(Lines[L]) + LT.Replace(*TrimSnip, *TrimFix);
+						Content = FString::Join(Lines, TEXT("\n"));
+						bApplied = true;
 					}
 				}
 			}
 
-			// Fallback: global search in the whole file content
+			// Strategy 3: global search nearest to target line
 			if (!bApplied)
 			{
-				FString Joined = FString::Join(Lines, TEXT("\n"));
-				if (Joined.Contains(Snip))
+				int32 CharOffset = 0;
+				for (int32 L = 0; L < FMath::Min(Idx, Lines.Num()); ++L)
+					CharOffset += Lines[L].Len() + 1;
+
+				const int32 SearchStart = FMath::Max(0, CharOffset - 500);
+				const int32 Pos = Content.Find(TrimSnip, ESearchCase::CaseSensitive,
+					ESearchDir::FromStart, SearchStart);
+				if (Pos != INDEX_NONE)
 				{
-					Joined.ReplaceInline(*Snip, *Fix, ESearchCase::CaseSensitive);
-					Joined.ParseIntoArray(Lines, TEXT("\n"), false);
+					Content = Content.Left(Pos) + TrimFix + Content.Mid(Pos + TrimSnip.Len());
 					bApplied = true;
 				}
 			}
@@ -937,8 +963,7 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 			}
 		}
 
-		const FString Final = FString::Join(Lines, TEXT("\n"));
-		if (!FFileHelper::SaveStringToFile(Final, *Pair.Key,
+		if (!FFileHelper::SaveStringToFile(Content, *Pair.Key,
 			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 		{
 			UE_LOG(LogShintTools, Error, TEXT("ApplyFix: Failed to write %s"), *Pair.Key);
