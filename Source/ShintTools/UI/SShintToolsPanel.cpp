@@ -834,8 +834,11 @@ FReply SShintToolsPanel::OnCheckConnectionClicked()
 FReply SShintToolsPanel::OnScanProjectClicked()
 {
 	SetCodeState(EModuleState::Running);
-	// Reset everything — fresh scan
-	AllCodeItems.Empty(); CodeIssueItems.Empty();
+	// Reset everything — fresh scan.  Clear visible list and notify Slate
+	// BEFORE emptying backing data, so no stale pointers are accessed.
+	CodeIssueItems.Empty();
+	AllCodeItems.Empty();
+	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
 	LastCodeResult = FShintValidateResult();
 	CoreClient->ValidateProject(FPaths::GameSourceDir(),
 		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnProjectValidateComplete));
@@ -916,6 +919,7 @@ FReply SShintToolsPanel::OnScanAssetsClicked()
 {
 	SetAssetState(EModuleState::Running);
 	AssetIssueItems.Empty();
+	if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
 	CoreClient->ScanAssetNaming(FPaths::ProjectContentDir(),
 		FOnShintAssetScanComplete::CreateSP(this, &SShintToolsPanel::OnAssetScanComplete));
 	return FReply::Handled();
@@ -1146,6 +1150,10 @@ void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& 
 
 void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result)
 {
+	// Clear visible list FIRST so Slate never references stale items during a paint tick
+	CodeIssueItems.Reset();
+	if (CodeIssueListView.IsValid()) CodeIssueListView->RequestListRefresh();
+
 	AllCodeItems.Reset();
 	AllCodeItems.Reserve(Result.Issues.Num());
 
