@@ -22,7 +22,6 @@
 // Asset tools (for IAssetTools::RenameAssets)
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
-#include "AssetRegistry/AssetRegistryModule.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Algo/Count.h"
@@ -525,6 +524,24 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 	const FLinearColor RowBG     = (Item->OriginalIndex % 2 == 0) ? C_RowEven() : C_RowOdd();
 	const FString      AutoBadge = Item->bIsAutoFixable ? TEXT("  AUTO") : TEXT("");
 
+	// Location string: for blueprints show "ClassName > GraphName", for C++ show "File:Line"
+	const bool bIsBlueprintIssue = !Item->Graph.IsEmpty();
+	FString LocationStr;
+	if (bIsBlueprintIssue)
+	{
+		LocationStr = Item->Class.IsEmpty()
+			? FString::Printf(TEXT("%s > %s"), *Item->FileName, *Item->Graph)
+			: FString::Printf(TEXT("%s > %s"), *Item->Class, *Item->Graph);
+	}
+	else if (!Item->Class.IsEmpty())
+	{
+		LocationStr = FString::Printf(TEXT("%s :: %s : %d"), *Item->Class, *Item->FileName, Item->Line);
+	}
+	else
+	{
+		LocationStr = FString::Printf(TEXT("%s : %d"), *Item->FileName, Item->Line);
+	}
+
 	return SNew(STableRow<FShintIssueItemPtr>, Owner)
 		.Style(FAppStyle::Get(), "TableView.Row").Padding(0.f)
 		[
@@ -548,7 +565,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 				[
 					SNew(SVerticalBox)
 
-					// Row 1: severity ● + rule_id + file:line + AUTO badge
+					// Row 1: severity ● + rule_id + location + AUTO badge
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,4.f)
 					[
 						SNew(SHorizontalBox)
@@ -565,8 +582,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 						+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 						[
 							SNew(STextBlock)
-							.Text(FText::FromString(
-								FString::Printf(TEXT("%s : %d"), *Item->FileName, Item->Line)))
+							.Text(FText::FromString(LocationStr))
 							.Font(F_Mono()).ColorAndOpacity(FSlateColor(C_Gray()))
 						]
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
@@ -872,6 +888,9 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 		I.Snippet        = Item->Snippet;
 		I.FixSuggestion  = Item->FixSuggestion;
 		I.bIsAutoFixable = Item->bIsAutoFixable;
+		I.Class          = Item->Class;
+		I.Category       = Item->Category;
+		I.Graph          = Item->Graph;
 		I.bChecked       = true;
 		Accepted.Add(I);
 	}
@@ -1014,8 +1033,12 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result)
 			TEXT("ApplyFix: %d fix(es) applied, %d skipped."),
 			Result.TotalFixesApplied, Result.TotalFixesSkipped);
 
-		for (FShintIssueItemPtr& I : AllCodeItems)
-			if (I->bChecked) I->bChecked = false;
+		// Remove fixed issues from the master list
+		AllCodeItems.RemoveAll([](const FShintIssueItemPtr& I) { return I->bChecked; });
+
+		// Re-apply current filter so the visible list is updated
+		ApplyCodeFilter();
+		RefreshCodeStats();
 	}
 	else
 	{
@@ -1069,6 +1092,21 @@ void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
 void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
 {
 	SetAssetState(EModuleState::Done);
+
+	if (Result.bSuccess)
+	{
+		UE_LOG(LogShintTools, Log, TEXT("AssetFix: %d asset(s) renamed."), Result.AssetsRenamed);
+
+		// Remove renamed assets from the list
+		AssetIssueItems.RemoveAll([](const FShintAssetItemPtr& I) { return I->bChecked; });
+		if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
+		RefreshAssetStats();
+		RefreshApplyAssetLabel();
+	}
+	else
+	{
+		UE_LOG(LogShintTools, Error, TEXT("AssetFix failed: %s"), *Result.ErrorMessage);
+	}
 }
 
 void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& Result)
@@ -1126,6 +1164,9 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result)
 		Item->bIsAutoFixable = Src.bIsAutoFixable;
 		Item->bChecked       = Src.bIsAutoFixable;
 		Item->OriginalIndex  = i;
+		Item->Class          = Src.Class;
+		Item->Category       = Src.Category;
+		Item->Graph          = Src.Graph;
 		AllCodeItems.Add(MoveTemp(Item));
 	}
 

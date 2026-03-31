@@ -37,6 +37,11 @@ struct FShintCodeIssue
 	bool    bIsAutoFixable   = false;
 	int32   LinesCount       = 0;  // total lines in file (for dashboard)
 
+	// Extended fields from server response
+	FString Class;            // e.g. "ABrokenTestActor" or blueprint class name
+	FString Category;         // e.g. "memory", "style", "performance", "blueprint"
+	FString Graph;            // blueprint graph name (empty for C++ issues)
+
 	// Runtime UI state — not sent over wire
 	bool    bChecked         = false;
 };

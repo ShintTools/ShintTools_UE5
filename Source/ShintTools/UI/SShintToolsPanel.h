@@ -41,6 +41,11 @@ struct FShintIssueItem
 	bool    bIsAutoFixable = false;
 	bool    bChecked       = false;
 	int32   OriginalIndex  = -1;
+
+	// Extended fields
+	FString Class;
+	FString Category;
+	FString Graph;
 };
 using FShintIssueItemPtr = TSharedPtr<FShintIssueItem>;
 
