@@ -180,7 +180,7 @@ struct FShintCoreConfig
 // Client
 // ─────────────────────────────────────────────────────────────────────────────
 
-class SHINTTOOLS_API FShintCoreClient
+class SHINTTOOLS_API FShintCoreClient : public TSharedFromThis<FShintCoreClient>
 {
 public:
 	FShintCoreClient();

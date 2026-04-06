@@ -15,6 +15,7 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SComboButton.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Views/SListView.h"
 // Style
@@ -35,23 +36,25 @@
 
 namespace ST4
 {
-	static TMap<FString, FSlateBrush> BC;
+	// TUniquePtr keeps FSlateBrush at a stable heap address — TMap reallocation
+	// does NOT invalidate the brush pointer stored in Slate widget attributes.
+	static TMap<FString, TUniquePtr<FSlateBrush>> BC;
 
 	static const FSlateBrush* Solid(const FLinearColor& C, float R = 0.f)
 	{
 		const FString K = FString::Printf(TEXT("S%.3f%.3f%.3f%.1f"), C.R, C.G, C.B, R);
 		if (!BC.Contains(K))
 		{
-			FSlateBrush B;
-			B.TintColor = FSlateColor(C);
-			B.DrawAs    = R > 0.f ? ESlateBrushDrawType::RoundedBox : ESlateBrushDrawType::Box;
+			TUniquePtr<FSlateBrush> B = MakeUnique<FSlateBrush>();
+			B->TintColor = FSlateColor(C);
+			B->DrawAs    = R > 0.f ? ESlateBrushDrawType::RoundedBox : ESlateBrushDrawType::Box;
 			if (R > 0.f) {
-				B.OutlineSettings.CornerRadii  = FVector4(R,R,R,R);
-				B.OutlineSettings.RoundingType = ESlateBrushRoundingType::FixedRadius;
+				B->OutlineSettings.CornerRadii  = FVector4(R,R,R,R);
+				B->OutlineSettings.RoundingType = ESlateBrushRoundingType::FixedRadius;
 			}
-			BC.Add(K, B);
+			BC.Add(K, MoveTemp(B));
 		}
-		return &BC[K];
+		return BC[K].Get();
 	}
 
 	static const FSlateBrush* Outline(const FLinearColor& Fill, const FLinearColor& Brd, float R = 4.f)
@@ -59,16 +62,16 @@ namespace ST4
 		const FString K = FString::Printf(TEXT("O%.3f%.3f%.1f"), Fill.R, Brd.R, R);
 		if (!BC.Contains(K))
 		{
-			FSlateBrush B;
-			B.TintColor = FSlateColor(Fill);
-			B.DrawAs    = ESlateBrushDrawType::RoundedBox;
-			B.OutlineSettings.CornerRadii  = FVector4(R,R,R,R);
-			B.OutlineSettings.RoundingType = ESlateBrushRoundingType::FixedRadius;
-			B.OutlineSettings.Color        = FSlateColor(Brd);
-			B.OutlineSettings.Width        = 1.f;
-			BC.Add(K, B);
+			TUniquePtr<FSlateBrush> B = MakeUnique<FSlateBrush>();
+			B->TintColor = FSlateColor(Fill);
+			B->DrawAs    = ESlateBrushDrawType::RoundedBox;
+			B->OutlineSettings.CornerRadii  = FVector4(R,R,R,R);
+			B->OutlineSettings.RoundingType = ESlateBrushRoundingType::FixedRadius;
+			B->OutlineSettings.Color        = FSlateColor(Brd);
+			B->OutlineSettings.Width        = 1.f;
+			BC.Add(K, MoveTemp(B));
 		}
-		return &BC[K];
+		return BC[K].Get();
 	}
 }
 
@@ -398,49 +401,176 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 // Code filter bar
 // ─────────────────────────────────────────────────────────────────────────────
 
-TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
+TSharedRef<SWidget> SShintToolsPanel::BuildCategoryMenuContent()
 {
-	auto FilterBtn = [this](const FText& Label, EIssueFilter Filter) -> TSharedRef<SWidget>
+	struct FCatEntry { FText Label; EIssueCategoryFilter Value; };
+	const TArray<FCatEntry> Entries = {
+		{ LOCTEXT("CatAll",  "All Categories"),   EIssueCategoryFilter::All            },
+		{ LOCTEXT("CatPerf", "Performance"),      EIssueCategoryFilter::Performance    },
+		{ LOCTEXT("CatBest", "Best Practices"),   EIssueCategoryFilter::BestPractices  },
+		{ LOCTEXT("CatSec",  "Security"),         EIssueCategoryFilter::Security       },
+		{ LOCTEXT("CatMain", "Maintainability"),  EIssueCategoryFilter::Maintainability},
+	};
+
+	TSharedRef<SVerticalBox> Menu = SNew(SVerticalBox);
+	for (const FCatEntry& E : Entries)
 	{
-		return SNew(SButton).ContentPadding(FMargin(10.f,4.f))
-			.OnClicked_Lambda([this, Filter]() -> FReply {
-				CurrentFilter = Filter;
+		Menu->AddSlot().AutoHeight()
+		[
+			SNew(SButton)
+			.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+			.ContentPadding(FMargin(12.f, 6.f))
+			.OnClicked_Lambda([this, Value = E.Value, Label = E.Label]() -> FReply
+			{
+				CurrentCategoryFilter = Value;
+				if (CategoryFilterLabel.IsValid())
+					CategoryFilterLabel->SetText(Label);
 				ApplyCodeFilter();
 				return FReply::Handled();
 			})
 			[
-				SNew(STextBlock).Text(Label).Font(F_Label())
-				.ColorAndOpacity(FSlateColor(C_Gray()))
-			];
+				SNew(STextBlock).Text(E.Label).Font(F_Label())
+				.ColorAndOpacity(FSlateColor(C_White()))
+			]
+		];
+	}
+	return SNew(SBorder)
+		.BorderImage(ST4::Solid(C_Surface()))
+		.Padding(2.f)
+		[ Menu ];
+}
+
+TSharedRef<SWidget> SShintToolsPanel::BuildSeverityMenuContent()
+{
+	struct FSevEntry { FText Label; EIssueSeverityFilter Value; };
+	const TArray<FSevEntry> Entries = {
+		{ LOCTEXT("SevAll",  "All Severities"), EIssueSeverityFilter::All      },
+		{ LOCTEXT("SevCrit", "Critical"),       EIssueSeverityFilter::Critical  },
+		{ LOCTEXT("SevErr",  "Error"),          EIssueSeverityFilter::Error     },
+		{ LOCTEXT("SevWarn", "Warning"),        EIssueSeverityFilter::Warning   },
+		{ LOCTEXT("SevInfo", "Info"),           EIssueSeverityFilter::Info      },
 	};
 
-	return SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+	TSharedRef<SVerticalBox> Menu = SNew(SVerticalBox);
+	for (const FSevEntry& E : Entries)
+	{
+		Menu->AddSlot().AutoHeight()
 		[
-			SNew(STextBlock).Text(LOCTEXT("ResLbl","RESULTS")).Font(F_Label())
-			.ColorAndOpacity(FSlateColor(C_DimGray()))
-		]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,4.f,0.f)
-		[ FilterBtn(LOCTEXT("FAll","All"),         EIssueFilter::All)        ]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,4.f,0.f)
-		[ FilterBtn(LOCTEXT("FErr","Errors"),      EIssueFilter::ErrorsOnly) ]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,4.f,0.f)
-		[ FilterBtn(LOCTEXT("FWrn","Warnings"),    EIssueFilter::WarningsOnly)]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,10.f,0.f)
-		[ FilterBtn(LOCTEXT("FFix","Fixable"),     EIssueFilter::FixableOnly) ]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,4.f,0.f)
+			SNew(SButton)
+			.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+			.ContentPadding(FMargin(12.f, 6.f))
+			.OnClicked_Lambda([this, Value = E.Value, Label = E.Label]() -> FReply
+			{
+				CurrentSeverityFilter = Value;
+				if (SeverityFilterLabel.IsValid())
+					SeverityFilterLabel->SetText(Label);
+				ApplyCodeFilter();
+				return FReply::Handled();
+			})
+			[
+				SNew(STextBlock).Text(E.Label).Font(F_Label())
+				.ColorAndOpacity(FSlateColor(C_White()))
+			]
+		];
+	}
+	return SNew(SBorder)
+		.BorderImage(ST4::Solid(C_Surface()))
+		.Padding(2.f)
+		[ Menu ];
+}
+
+TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
+{
+	// Category dropdown
+	TSharedRef<SWidget> CategoryCombo =
+		SNew(SComboButton)
+		.ContentPadding(FMargin(8.f, 4.f))
+		.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+		.OnGetMenuContent(this, &SShintToolsPanel::BuildCategoryMenuContent)
+		.ButtonContent()
 		[
-			SNew(SButton).ContentPadding(FMargin(10.f,4.f))
-			.OnClicked(this, &SShintToolsPanel::OnSelectAllCodeClicked)
-			[ SNew(STextBlock).Text(LOCTEXT("SelAll","Select All")).Font(F_Label())
-			  .ColorAndOpacity(FSlateColor(C_Blue())) ]
-		]
-		+ SHorizontalBox::Slot().AutoWidth()
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SAssignNew(CategoryFilterLabel, STextBlock)
+				.Text(LOCTEXT("CatAll","All Categories"))
+				.Font(F_Label())
+				.ColorAndOpacity(FSlateColor(C_Gray()))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
+			[
+				SNew(STextBlock).Text(FText::FromString(TEXT("\u25BE")))
+				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
+			]
+		];
+
+	// Severity dropdown
+	TSharedRef<SWidget> SeverityCombo =
+		SNew(SComboButton)
+		.ContentPadding(FMargin(8.f, 4.f))
+		.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+		.OnGetMenuContent(this, &SShintToolsPanel::BuildSeverityMenuContent)
+		.ButtonContent()
 		[
-			SNew(SButton).ContentPadding(FMargin(10.f,4.f))
-			.OnClicked(this, &SShintToolsPanel::OnDeselectAllCodeClicked)
-			[ SNew(STextBlock).Text(LOCTEXT("DeselAll","Deselect All")).Font(F_Label())
-			  .ColorAndOpacity(FSlateColor(C_Gray())) ]
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SAssignNew(SeverityFilterLabel, STextBlock)
+				.Text(LOCTEXT("SevAll","All Severities"))
+				.Font(F_Label())
+				.ColorAndOpacity(FSlateColor(C_Gray()))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
+			[
+				SNew(STextBlock).Text(FText::FromString(TEXT("\u25BE")))
+				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
+			]
+		];
+
+	// Fixable toggle
+	TSharedRef<SWidget> FixableBtn =
+		SNew(SButton).ContentPadding(FMargin(8.f, 4.f))
+		.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+		.OnClicked_Lambda([this]() -> FReply
+		{
+			CurrentFilter = (CurrentFilter == EIssueFilter::FixableOnly)
+				? EIssueFilter::All : EIssueFilter::FixableOnly;
+			ApplyCodeFilter();
+			return FReply::Handled();
+		})
+		[
+			SNew(STextBlock).Text(LOCTEXT("FFix","Fixable Only")).Font(F_Label())
+			.ColorAndOpacity(FSlateColor(C_Green()))
+		];
+
+	return SNew(SVerticalBox)
+
+		// Row 1: "RESULTS" label + dropdowns + fixable toggle
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,6.f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock).Text(LOCTEXT("ResLbl","RESULTS")).Font(F_Label())
+				.ColorAndOpacity(FSlateColor(C_DimGray()))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f) [ CategoryCombo ]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f) [ SeverityCombo ]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,10.f,0.f) [ FixableBtn    ]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,4.f,0.f)
+			[
+				SNew(SButton).ContentPadding(FMargin(8.f, 4.f))
+				.OnClicked(this, &SShintToolsPanel::OnSelectAllCodeClicked)
+				[ SNew(STextBlock).Text(LOCTEXT("SelAll","Select All")).Font(F_Label())
+				  .ColorAndOpacity(FSlateColor(C_Blue())) ]
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SButton).ContentPadding(FMargin(8.f, 4.f))
+				.OnClicked(this, &SShintToolsPanel::OnDeselectAllCodeClicked)
+				[ SNew(STextBlock).Text(LOCTEXT("DeselAll","Deselect All")).Font(F_Label())
+				  .ColorAndOpacity(FSlateColor(C_Gray())) ]
+			]
 		];
 }
 
@@ -601,15 +731,21 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 
 					+ SVerticalBox::Slot().AutoHeight()
 					[
+						// Show diff block if snippet OR fix_suggestion is available
 						SNew(SBorder)
-						.Visibility(Item->Snippet.IsEmpty()
+						.Visibility((Item->Snippet.IsEmpty() && Item->FixSuggestion.IsEmpty())
 							? EVisibility::Collapsed : EVisibility::Visible)
 						.BorderImage(ST4::Solid(C_CodeBG()))
 						.Padding(FMargin(8.f,5.f))
 						[
 							SNew(SVerticalBox)
 							+ SVerticalBox::Slot().AutoHeight()
-							[ BuildDiffLine(TEXT("\u25B8"), Item->Snippet, C_Red(), C_DiffRed()) ]
+							[
+								SNew(SBox)
+								.Visibility(Item->Snippet.IsEmpty()
+									? EVisibility::Collapsed : EVisibility::Visible)
+								[ BuildDiffLine(TEXT("\u25B8"), Item->Snippet, C_Red(), C_DiffRed()) ]
+							]
 							+ SVerticalBox::Slot().AutoHeight().Padding(0.f,3.f,0.f,0.f)
 							[
 								SNew(SBox)
@@ -856,7 +992,8 @@ FReply SShintToolsPanel::OnScanBlueprintsClicked()
 
 FReply SShintToolsPanel::OnSelectAllCodeClicked()
 {
-	for (FShintIssueItemPtr& I : AllCodeItems) I->bChecked = true;
+	for (FShintIssueItemPtr& I : AllCodeItems)
+		I->bChecked = true;
 	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
 	RefreshApplyCodeLabel();
 	return FReply::Handled();
@@ -880,7 +1017,9 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 
 	for (const FShintIssueItemPtr& Item : AllCodeItems)
 	{
-		if (!Item->bChecked) continue;
+		// Only accept issues that are checked AND actually auto-fixable
+		if (!Item->bChecked || !Item->bIsAutoFixable) continue;
+		if (Item->FixSuggestion.IsEmpty()) continue;
 
 		FShintCodeIssue I;
 		I.RuleId         = Item->RuleId;
@@ -898,9 +1037,25 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 		Accepted.Add(I);
 	}
 
-	if (Accepted.IsEmpty()) return FReply::Handled();
+	// Log why Accepted might be empty — counters are independent of bIsAutoFixable
+	int32 TotalChecked = 0, TotalNotFixable = 0, TotalNoFixSuggestion = 0;
+	for (const FShintIssueItemPtr& Item : AllCodeItems)
+	{
+		if (Item->bChecked) ++TotalChecked;
+		if (Item->bChecked && !Item->bIsAutoFixable)        ++TotalNotFixable;
+		if (Item->bChecked && Item->FixSuggestion.IsEmpty()) ++TotalNoFixSuggestion;
+	}
+	UE_LOG(LogShintTools, Log,
+		TEXT("ApplyFix: Checked=%d, NotAutoFixable=%d, NoFixSuggestion=%d, Accepted=%d"),
+		TotalChecked, TotalNotFixable, TotalNoFixSuggestion, Accepted.Num());
 
-	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Sending %d issue(s) to Core Engine."), Accepted.Num());
+	if (Accepted.IsEmpty())
+	{
+		UE_LOG(LogShintTools, Warning, TEXT("ApplyFix: Nothing to apply — no auto-fixable issues selected"));
+		return FReply::Handled();
+	}
+
+	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Applying %d fix(es) locally."), Accepted.Num());
 
 	SetCodeState(EModuleState::Running);
 	CoreClient->ApplyCodeFixes(Accepted,
@@ -1037,10 +1192,16 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result)
 			TEXT("ApplyFix: %d fix(es) applied, %d skipped."),
 			Result.TotalFixesApplied, Result.TotalFixesSkipped);
 
-		// Remove fixed issues from the master list
-		AllCodeItems.RemoveAll([](const FShintIssueItemPtr& I) { return I->bChecked; });
+		// Clear visible list FIRST so Slate never touches stale pointers
+		CodeIssueItems.Reset();
+		if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
 
-		// Re-apply current filter so the visible list is updated
+		// Now safe to remove from backing data
+		AllCodeItems.RemoveAll([](const FShintIssueItemPtr& I) {
+			return I->bChecked && I->bIsAutoFixable && !I->FixSuggestion.IsEmpty();
+		});
+
+		// Re-populate visible list with updated data
 		ApplyCodeFilter();
 		RefreshCodeStats();
 	}
@@ -1091,6 +1252,13 @@ void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
 	SetAssetState(EModuleState::Done);
 	PopulateAssetIssueList(Result);
 	RefreshAssetStats();
+
+	// Chain: also run BP quality validation so Code Validator panel shows
+	// blueprint issues (graphs, variables, performance, maintainability).
+	// Uses bMerge=true to append to any existing C++ scan results.
+	SetCodeState(EModuleState::Running);
+	CoreClient->ValidateBlueprints(FPaths::ProjectContentDir(),
+		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnBlueprintValidateComplete));
 }
 
 void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
@@ -1101,9 +1269,10 @@ void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
 	{
 		UE_LOG(LogShintTools, Log, TEXT("AssetFix: %d asset(s) renamed."), Result.AssetsRenamed);
 
-		// Remove renamed assets from the list
-		AssetIssueItems.RemoveAll([](const FShintAssetItemPtr& I) { return I->bChecked; });
+		// Clear visible list FIRST, then remove from backing data
+		AssetIssueItems.Reset();
 		if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
+		// (AssetIssueItems IS the source, rebuild already happened — no RemoveAll needed)
 		RefreshAssetStats();
 		RefreshApplyAssetLabel();
 	}
@@ -1196,13 +1365,46 @@ void SShintToolsPanel::ApplyCodeFilter()
 
 	for (const FShintIssueItemPtr& Item : AllCodeItems)
 	{
-		switch (CurrentFilter)
+		// ── Fixable filter ────────────────────────────────────────────────────
+		if (CurrentFilter == EIssueFilter::FixableOnly && !Item->bIsAutoFixable)
+			continue;
+
+		// ── Severity filter ───────────────────────────────────────────────────
+		if (CurrentSeverityFilter != EIssueSeverityFilter::All)
 		{
-		case EIssueFilter::ErrorsOnly:   if (Item->Severity != TEXT("error"))   continue; break;
-		case EIssueFilter::WarningsOnly: if (Item->Severity != TEXT("warning")) continue; break;
-		case EIssueFilter::FixableOnly:  if (!Item->bIsAutoFixable)             continue; break;
-		default: break;
+			const FString SevLower = Item->Severity.ToLower();
+			bool bSevMatch = false;
+			switch (CurrentSeverityFilter)
+			{
+			case EIssueSeverityFilter::Critical: bSevMatch = (SevLower == TEXT("critical")); break;
+			case EIssueSeverityFilter::Error:    bSevMatch = (SevLower == TEXT("error"));    break;
+			case EIssueSeverityFilter::Warning:  bSevMatch = (SevLower == TEXT("warning"));  break;
+			case EIssueSeverityFilter::Info:     bSevMatch = (SevLower == TEXT("info"));     break;
+			default: bSevMatch = true; break;
+			}
+			if (!bSevMatch) continue;
 		}
+
+		// ── Category filter ───────────────────────────────────────────────────
+		if (CurrentCategoryFilter != EIssueCategoryFilter::All)
+		{
+			const FString CatLower = Item->Category.ToLower();
+			bool bCatMatch = false;
+			switch (CurrentCategoryFilter)
+			{
+			case EIssueCategoryFilter::Performance:
+				bCatMatch = CatLower.Contains(TEXT("performance")); break;
+			case EIssueCategoryFilter::BestPractices:
+				bCatMatch = CatLower.Contains(TEXT("best")) || CatLower.Contains(TEXT("practice")); break;
+			case EIssueCategoryFilter::Security:
+				bCatMatch = CatLower.Contains(TEXT("security")); break;
+			case EIssueCategoryFilter::Maintainability:
+				bCatMatch = CatLower.Contains(TEXT("maintain")); break;
+			default: bCatMatch = true; break;
+			}
+			if (!bCatMatch) continue;
+		}
+
 		CodeIssueItems.Add(Item);
 	}
 

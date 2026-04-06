@@ -50,6 +50,9 @@ public class ShintTools : ModuleRules
 
 			// Input/Output utilities
 			"InputCore",
+
+			// Blueprint graph introspection (K2Node types for variable/function analysis)
+			"BlueprintGraph",
 		});
 
 		if (Target.bBuildEditor)

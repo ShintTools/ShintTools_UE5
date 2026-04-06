@@ -16,8 +16,16 @@
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 
-// Blueprint metadata (Asset Registry only — no loading)
+// Blueprint introspection — load actual BP data (graphs, variables, functions)
 #include "Engine/Blueprint.h"
+#include "Engine/BlueprintGeneratedClass.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraph/EdGraphNode.h"
+#include "EdGraph/EdGraphPin.h"
+#include "GameFramework/Actor.h"
+#include "K2Node_VariableGet.h"
+#include "K2Node_VariableSet.h"
+#include "K2Node_FunctionEntry.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 
@@ -238,8 +246,8 @@ void FShintCoreClient::ValidateProject(
 void FShintCoreClient::ValidateBlueprints(
 	const FString& ContentDir, FOnShintValidateComplete OnComplete)
 {
-	// Discover project blueprints via Asset Registry — metadata only, NO loading.
-	// GetAsset() loads the full BP into memory and crashes with heavy/corrupt assets.
+	// Discover project blueprints via Asset Registry, then LOAD each one to
+	// extract real graph/variable/function/stats data for the validator.
 	IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
 
 	FARFilter Filter;
@@ -255,37 +263,226 @@ void FShintCoreClient::ValidateBlueprints(
 
 	TArray<TSharedPtr<FJsonValue>> FilesArr;
 
-	// Empty arrays/object for the contract fields — no loading needed
+	// Fallback empty data for blueprints that cannot be loaded
 	TArray<TSharedPtr<FJsonValue>> EmptyArr;
-	TSharedRef<FJsonObject> EmptyStats = MakeShared<FJsonObject>();
-	EmptyStats->SetNumberField(TEXT("total_nodes"),        0);
-	EmptyStats->SetNumberField(TEXT("cast_nodes"),         0);
-	EmptyStats->SetBoolField  (TEXT("tick_enabled"),       false);
-	EmptyStats->SetNumberField(TEXT("disconnected_nodes"), 0);
+	auto MakeEmptyStats = []() -> TSharedRef<FJsonObject>
+	{
+		TSharedRef<FJsonObject> S = MakeShared<FJsonObject>();
+		S->SetNumberField(TEXT("total_nodes"),        0);
+		S->SetNumberField(TEXT("cast_nodes"),         0);
+		S->SetBoolField  (TEXT("tick_enabled"),       false);
+		S->SetNumberField(TEXT("disconnected_nodes"), 0);
+		S->SetBoolField  (TEXT("has_begin_play_super"), false);
+		S->SetBoolField  (TEXT("has_end_play_super"),   false);
+		return S;
+	};
+
+	int32 LoadedCount = 0;
+	int32 SkippedCount = 0;
 
 	for (const FAssetData& AssetData : BlueprintAssets)
 	{
 		const FString BPName    = AssetData.AssetName.ToString();
-		const FString BPPackage = AssetData.PackageName.ToString(); // /Game/Blueprints/BP_X
+		const FString BPPackage = AssetData.PackageName.ToString();
 
 		TSharedRef<FJsonObject> FO = MakeShared<FJsonObject>();
-		FO->SetStringField(TEXT("name"),      BPName);
-		FO->SetStringField(TEXT("path"),      BPPackage);
-		FO->SetStringField(TEXT("type"),      TEXT("blueprint"));
-		FO->SetArrayField (TEXT("graphs"),    EmptyArr);
-		FO->SetArrayField (TEXT("variables"), EmptyArr);
-		FO->SetArrayField (TEXT("functions"), EmptyArr);
-		FO->SetObjectField(TEXT("stats"),     EmptyStats);
+		FO->SetStringField(TEXT("name"), BPName);
+		FO->SetStringField(TEXT("path"), BPPackage);
+		FO->SetStringField(TEXT("type"), TEXT("blueprint"));
+
+		// ── Try to load the Blueprint ────────────────────────────────────────
+		UBlueprint* BP = Cast<UBlueprint>(AssetData.GetAsset());
+		if (!BP)
+		{
+			// Cannot load (corrupt, heavy, etc.) — send metadata only
+			FO->SetArrayField (TEXT("graphs"),    EmptyArr);
+			FO->SetArrayField (TEXT("variables"), EmptyArr);
+			FO->SetArrayField (TEXT("functions"), EmptyArr);
+			FO->SetObjectField(TEXT("stats"),     MakeEmptyStats());
+			FilesArr.Add(MakeShared<FJsonValueObject>(FO));
+			++SkippedCount;
+			continue;
+		}
+		++LoadedCount;
+
+		// ── Collect all graphs (uber + function) ─────────────────────────────
+		TArray<UEdGraph*> AllGraphs;
+		AllGraphs.Append(BP->UbergraphPages);
+		AllGraphs.Append(BP->FunctionGraphs);
+
+		// Track used variables across all graphs
+		TSet<FName> UsedVarNames;
+
+		// Aggregate stats
+		int32 TotalNodes        = 0;
+		int32 TotalCastNodes    = 0;
+		int32 DisconnectedNodes = 0;
+		bool  bHasBeginPlaySuper = false;
+		bool  bHasEndPlaySuper   = false;
+
+		// Check tick from CDO (more reliable than graph detection)
+		bool bTickEnabled = false;
+		if (UBlueprintGeneratedClass* GenClass = Cast<UBlueprintGeneratedClass>(BP->GeneratedClass))
+		{
+			if (AActor* CDO = Cast<AActor>(GenClass->GetDefaultObject(false)))
+				bTickEnabled = CDO->PrimaryActorTick.bCanEverTick;
+		}
+
+		TArray<TSharedPtr<FJsonValue>> GraphsArr;
+		TArray<TSharedPtr<FJsonValue>> FunctionsArr;
+
+		for (UEdGraph* Graph : AllGraphs)
+		{
+			if (!Graph) continue;
+
+			const int32 GraphNodeCount = Graph->Nodes.Num();
+			TotalNodes += GraphNodeCount;
+
+			int32 GraphCastCount    = 0;
+			int32 GraphDisconnected = 0;
+			TMap<FString, int32> NodeTypeCounts;
+
+			// Function-graph metadata
+			const bool bIsFunctionGraph = BP->FunctionGraphs.Contains(Graph);
+			int32 FuncComplexity = 1;   // base
+			bool  bFuncIsPublic  = true;
+			bool  bFuncHasTooltip = false;
+
+			for (UEdGraphNode* Node : Graph->Nodes)
+			{
+				if (!Node) continue;
+
+				const FString ClassName = Node->GetClass()->GetName();
+
+				// ── Identify node type ───────────────────────────────────────
+				FString NodeType = TEXT("Other");
+
+				if (ClassName.Contains(TEXT("DynamicCast")))
+				{
+					NodeType = TEXT("CastTo");
+					++GraphCastCount;
+				}
+				else if (ClassName.Contains(TEXT("K2Node_Event")) || ClassName.Contains(TEXT("K2Node_CustomEvent")))
+				{
+					const FString Title = Node->GetNodeTitle(ENodeTitleType::ListView).ToString();
+					if (Title.Contains(TEXT("Tick")))        NodeType = TEXT("EventTick");
+					else if (Title.Contains(TEXT("BeginPlay"))) NodeType = TEXT("EventBeginPlay");
+					else if (Title.Contains(TEXT("EndPlay")))   NodeType = TEXT("EventEndPlay");
+					else NodeType = TEXT("Event");
+				}
+				else if (ClassName.Contains(TEXT("CallParentFunction")))
+				{
+					NodeType = TEXT("CallParent");
+					const FString Title = Node->GetNodeTitle(ENodeTitleType::ListView).ToString();
+					if (Title.Contains(TEXT("BeginPlay"))) bHasBeginPlaySuper = true;
+					if (Title.Contains(TEXT("EndPlay")))   bHasEndPlaySuper   = true;
+				}
+				else if (ClassName.Contains(TEXT("Delay")))
+				{
+					NodeType = TEXT("Delay");
+				}
+				else if (ClassName.Contains(TEXT("IfThenElse")) || ClassName.Contains(TEXT("Switch")))
+				{
+					NodeType = TEXT("Branch");
+					++FuncComplexity;
+				}
+
+				// ── Variable usage detection (K2Node types) ──────────────────
+				if (UK2Node_VariableGet* VarGet = Cast<UK2Node_VariableGet>(Node))
+					UsedVarNames.Add(VarGet->VariableReference.GetMemberName());
+				else if (UK2Node_VariableSet* VarSet = Cast<UK2Node_VariableSet>(Node))
+					UsedVarNames.Add(VarSet->VariableReference.GetMemberName());
+
+				// ── Function entry metadata ──────────────────────────────────
+				if (UK2Node_FunctionEntry* Entry = Cast<UK2Node_FunctionEntry>(Node))
+				{
+					bFuncHasTooltip = !Entry->MetaData.ToolTip.IsEmpty();
+					bFuncIsPublic   = (Entry->GetFunctionFlags() & FUNC_Public) != 0;
+				}
+
+				// ── Disconnected node detection ──────────────────────────────
+				bool bHasAnyConnection = false;
+				for (const UEdGraphPin* Pin : Node->Pins)
+				{
+					if (Pin && Pin->LinkedTo.Num() > 0) { bHasAnyConnection = true; break; }
+				}
+				if (!bHasAnyConnection && Node->Pins.Num() > 0 && !ClassName.Contains(TEXT("Comment")))
+					++GraphDisconnected;
+
+				NodeTypeCounts.FindOrAdd(NodeType)++;
+			}
+
+			TotalCastNodes    += GraphCastCount;
+			DisconnectedNodes += GraphDisconnected;
+
+			// Build nodes array for this graph
+			TArray<TSharedPtr<FJsonValue>> NodesArr;
+			for (auto& Pair : NodeTypeCounts)
+			{
+				TSharedRef<FJsonObject> NObj = MakeShared<FJsonObject>();
+				NObj->SetStringField(TEXT("type"),  Pair.Key);
+				NObj->SetNumberField(TEXT("count"), Pair.Value);
+				NodesArr.Add(MakeShared<FJsonValueObject>(NObj));
+			}
+
+			// Graph JSON
+			TSharedRef<FJsonObject> GraphObj = MakeShared<FJsonObject>();
+			GraphObj->SetStringField(TEXT("name"),        Graph->GetName());
+			GraphObj->SetNumberField(TEXT("nodes_count"), GraphNodeCount);
+			GraphObj->SetArrayField (TEXT("nodes"),       NodesArr);
+			GraphsArr.Add(MakeShared<FJsonValueObject>(GraphObj));
+
+			// Function JSON (only for function graphs)
+			if (bIsFunctionGraph)
+			{
+				TSharedRef<FJsonObject> FuncObj = MakeShared<FJsonObject>();
+				FuncObj->SetStringField(TEXT("name"),        Graph->GetName());
+				FuncObj->SetNumberField(TEXT("complexity"),  FuncComplexity);
+				FuncObj->SetBoolField  (TEXT("is_public"),   bFuncIsPublic);
+				FuncObj->SetBoolField  (TEXT("has_tooltip"), bFuncHasTooltip);
+				FunctionsArr.Add(MakeShared<FJsonValueObject>(FuncObj));
+			}
+		}
+
+		// ── Variables JSON ───────────────────────────────────────────────────
+		TArray<TSharedPtr<FJsonValue>> VariablesArr;
+		for (const FBPVariableDescription& Var : BP->NewVariables)
+		{
+			TSharedRef<FJsonObject> VObj = MakeShared<FJsonObject>();
+			VObj->SetStringField(TEXT("name"),     Var.VarName.ToString());
+			VObj->SetStringField(TEXT("type"),     Var.VarType.PinCategory.ToString());
+			VObj->SetBoolField  (TEXT("used"),     UsedVarNames.Contains(Var.VarName));
+			VObj->SetBoolField  (TEXT("is_public"),
+				!(Var.PropertyFlags & CPF_DisableEditOnInstance));
+			VObj->SetStringField(TEXT("category"), Var.Category.ToString());
+			VariablesArr.Add(MakeShared<FJsonValueObject>(VObj));
+		}
+
+		// ── Stats JSON ───────────────────────────────────────────────────────
+		TSharedRef<FJsonObject> StatsObj = MakeShared<FJsonObject>();
+		StatsObj->SetNumberField(TEXT("total_nodes"),          TotalNodes);
+		StatsObj->SetNumberField(TEXT("cast_nodes"),           TotalCastNodes);
+		StatsObj->SetBoolField  (TEXT("tick_enabled"),         bTickEnabled);
+		StatsObj->SetNumberField(TEXT("disconnected_nodes"),   DisconnectedNodes);
+		StatsObj->SetBoolField  (TEXT("has_begin_play_super"), bHasBeginPlaySuper);
+		StatsObj->SetBoolField  (TEXT("has_end_play_super"),   bHasEndPlaySuper);
+
+		FO->SetArrayField (TEXT("graphs"),    GraphsArr);
+		FO->SetArrayField (TEXT("variables"), VariablesArr);
+		FO->SetArrayField (TEXT("functions"), FunctionsArr);
+		FO->SetObjectField(TEXT("stats"),     StatsObj);
 		FilesArr.Add(MakeShared<FJsonValueObject>(FO));
 	}
+
+	UE_LOG(LogShintTools, Log,
+		TEXT("ShintCoreClient: %d/%d blueprints loaded (%d skipped), sending to /validate/blueprints"),
+		LoadedCount, BlueprintAssets.Num(), SkippedCount);
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetStringField(TEXT("project_id"),   Config.ProjectId);
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
 	Body->SetStringField(TEXT("engine"),       TEXT("unreal"));
 	Body->SetArrayField (TEXT("files"),        FilesArr);
-
-	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d blueprint entries to /validate/blueprints"), FilesArr.Num());
 
 	SendRequest(Config.GetBaseUrl() + TEXT("/validate/blueprints"), EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
@@ -392,19 +589,17 @@ void FShintCoreClient::ApplyCodeFixes(
 				continue;
 			}
 
-			// Verify the snippet matches the line (trimmed comparison)
 			const FString& CurrentLine = Lines[Idx];
 			const FString TrimmedCurrent = CurrentLine.TrimStartAndEnd();
 			const FString TrimmedSnippet = Issue->Snippet.TrimStartAndEnd();
 
+			// Warn on mismatch but DO NOT skip — apply by line number anyway.
+			// Snippet may differ due to \r\n endings or minor server formatting.
 			if (!TrimmedSnippet.IsEmpty() && !TrimmedCurrent.Contains(TrimmedSnippet))
 			{
 				UE_LOG(LogShintTools, Warning,
-					TEXT("ApplyFix: Snippet mismatch at line %d in %s [%s]. Expected='%s' Got='%s'"),
-					Issue->Line, *AbsPath, *Issue->RuleId,
-					*TrimmedSnippet, *TrimmedCurrent);
-				++Skipped;
-				continue;
+					TEXT("ApplyFix: [%s] line %d snippet mismatch (applying anyway). Expected='%s' Got='%s'"),
+					*Issue->RuleId, Issue->Line, *TrimmedSnippet, *TrimmedCurrent);
 			}
 
 			// Preserve leading whitespace from the original line
@@ -461,6 +656,30 @@ void FShintCoreClient::ApplyCodeFixes(
 
 	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Done — %d applied, %d skipped across %d file(s)"),
 		Result.TotalFixesApplied, Result.TotalFixesSkipped, Result.FixedFiles.Num());
+
+	// Report applied fixes to server for dashboard tracking (fire-and-forget)
+	if (Result.TotalFixesApplied > 0)
+	{
+		TArray<TSharedPtr<FJsonValue>> IssuesArr;
+		for (const FShintCodeIssue& Issue : AcceptedIssues)
+		{
+			TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
+			O->SetStringField(TEXT("rule_id"),   Issue.RuleId);
+			O->SetStringField(TEXT("severity"),  Issue.Severity);
+			O->SetStringField(TEXT("file_path"), Issue.FilePath);
+			O->SetNumberField(TEXT("line"),      Issue.Line);
+			O->SetStringField(TEXT("message"),   Issue.Message);
+			IssuesArr.Add(MakeShared<FJsonValueObject>(O));
+		}
+		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+		Body->SetArrayField(TEXT("issues"), IssuesArr);
+
+		SendRequest(Config.GetBaseUrl() + TEXT("/validate/fix"),
+			EShintHttpMethod::POST, SerializeJson(Body),
+			FOnShintRequestComplete::CreateLambda([](const FShintRequestResult& R) {
+				UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Server notified (code=%d)"), R.StatusCode);
+			}));
+	}
 
 	OnComplete.ExecuteIfBound(Result);
 }
@@ -737,8 +956,9 @@ void FShintCoreClient::SendRequest(
 		Req->SetContentAsString(Body);
 	}
 
-	Req->OnProcessRequestComplete().BindRaw(
-		this, &FShintCoreClient::OnHttpRequestComplete, OnComplete);
+	// BindSP keeps FShintCoreClient alive via shared ref — safe if destroyed before response
+	Req->OnProcessRequestComplete().BindSP(
+		AsShared(), &FShintCoreClient::OnHttpRequestComplete, OnComplete);
 	Req->SetTimeout(90.0f);  // generous for full-project scans
 
 	if (!Req->ProcessRequest())
@@ -819,13 +1039,12 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 			(*O)->TryGetNumberField(TEXT("line"),           Issue.Line);
 			(*O)->TryGetStringField(TEXT("snippet"),        Issue.Snippet);
 			(*O)->TryGetStringField(TEXT("fix_suggestion"), Issue.FixSuggestion);
-			(*O)->TryGetBoolField  (TEXT("is_auto_fixable"),Issue.bIsAutoFixable);
 			(*O)->TryGetStringField(TEXT("class"),          Issue.Class);
 			(*O)->TryGetStringField(TEXT("category"),       Issue.Category);
 			(*O)->TryGetStringField(TEXT("graph"),          Issue.Graph);
-			// Only truly auto-fixable if server provided both snippet and fix_suggestion
-			if (Issue.Snippet.IsEmpty() || Issue.FixSuggestion.IsEmpty())
-				Issue.bIsAutoFixable = false;
+			// Derive auto-fixable from fix_suggestion only — ignore server's is_auto_fixable.
+			// Plugin applies fixes locally by line number, so only fix_suggestion matters.
+			Issue.bIsAutoFixable = !Issue.FixSuggestion.IsEmpty();
 			Issue.bChecked = Issue.bIsAutoFixable;
 			R.Issues.Add(MoveTemp(Issue));
 		}

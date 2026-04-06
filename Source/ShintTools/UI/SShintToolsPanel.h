@@ -5,11 +5,8 @@
 #include "ShintCoreClient.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Input/SButton.h"
-#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Text/STextBlock.h"
-#include "Widgets/Layout/SScrollBox.h"
-#include "Widgets/Layout/SBorder.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Views/SListView.h"
 #include "Widgets/Views/STableRow.h"
@@ -22,7 +19,21 @@ class FCoreProcessManager;
 
 enum class ECoreStatus  : uint8 { Unknown, Online, Offline, Checking };
 enum class EModuleState : uint8 { Idle, Running, Done, Error };
-enum class EIssueFilter : uint8 { All, ErrorsOnly, WarningsOnly, FixableOnly };
+
+// Legacy – kept only so ApplyCodeFilter can gate on Fixable
+enum class EIssueFilter : uint8 { All, FixableOnly };
+
+// Category filter – matches web dashboard dropdown
+enum class EIssueCategoryFilter : uint8
+{
+	All, Performance, BestPractices, Security, Maintainability
+};
+
+// Severity filter – matches web dashboard dropdown
+enum class EIssueSeverityFilter : uint8
+{
+	All, Critical, Error, Warning, Info
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // List item types (shared_ptr owned by TArray for SListView)
@@ -110,6 +121,8 @@ private:
 	TSharedRef<SWidget> BuildCodeValidatorSection();
 	TSharedRef<SWidget> BuildCodeResultsPanel();
 	TSharedRef<SWidget> BuildCodeFilterBar();
+	TSharedRef<SWidget> BuildCategoryMenuContent();
+	TSharedRef<SWidget> BuildSeverityMenuContent();
 	TSharedRef<SWidget> BuildAssetNamingSection();
 	TSharedRef<SWidget> BuildAssetResultsPanel();
 
@@ -188,7 +201,9 @@ private:
 	TArray<FShintIssueItemPtr> CodeIssueItems;
 	TArray<FShintAssetItemPtr> AssetIssueItems;
 
-	EIssueFilter CurrentFilter = EIssueFilter::All;
+	EIssueFilter         CurrentFilter         = EIssueFilter::All;
+	EIssueCategoryFilter CurrentCategoryFilter = EIssueCategoryFilter::All;
+	EIssueSeverityFilter CurrentSeverityFilter = EIssueSeverityFilter::All;
 
 	// ── Slate refs ────────────────────────────────────────────────────────────
 	TSharedPtr<SListView<FShintIssueItemPtr>> CodeIssueListView;
@@ -213,6 +228,9 @@ private:
 	TSharedPtr<STextBlock> ApplyAssetBtnLabel;
 	TSharedPtr<STextBlock> SendCodeBtnLabel;
 	TSharedPtr<STextBlock> SendAssetBtnLabel;
+
+	TSharedPtr<STextBlock> CategoryFilterLabel;
+	TSharedPtr<STextBlock> SeverityFilterLabel;
 
 	TSharedPtr<SWidget>    CodeEmptyState;
 	TSharedPtr<SWidget>    AssetEmptyState;
