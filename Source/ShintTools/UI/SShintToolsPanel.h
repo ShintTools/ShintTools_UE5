@@ -2,65 +2,78 @@
 #pragma once
 
 #include "CoreMinimal.h"
-
-// ── Include the client header directly — this resolves ALL struct types       ──
-// ── (FShintRaw, FValidateResult, FFixResult, FAssetScan, FAssetFix, FWebResult) ──
-// ── No forward declarations of structs needed — they are fully defined here.  ──
 #include "ShintCoreClient.h"
-
-// Slate
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Input/SButton.h"
-#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Text/STextBlock.h"
-#include "Widgets/Layout/SScrollBox.h"
-#include "Widgets/Layout/SBorder.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Views/SListView.h"
 #include "Widgets/Views/STableRow.h"
 
-// Asset tools (for IAssetTools::RenameAssets)
-#include "AssetToolsModule.h"
-#include "IAssetTools.h"
-
-// Forward-declare only classes (not structs — those are in ShintCoreClient.h)
 class FCoreProcessManager;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Enums
 // ─────────────────────────────────────────────────────────────────────────────
 
-enum class EStatus : uint8 { Unknown, Online, Offline, Checking };
-enum class EModule : uint8 { Idle, Running, Done, Err };
-enum class EFilter : uint8 { All, Errors, Warnings, Fixable };
+enum class ECoreStatus  : uint8 { Unknown, Online, Offline, Checking };
+enum class EModuleState : uint8 { Idle, Running, Done, Error };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Row item structs (UI-only, not part of the client API)
-// ─────────────────────────────────────────────────────────────────────────────
+// Legacy – kept only so ApplyCodeFilter can gate on Fixable
+enum class EIssueFilter : uint8 { All, FixableOnly };
 
-// Code issue row item
-struct FCodeItem
+// Category filter – matches web dashboard dropdown
+enum class EIssueCategoryFilter : uint8
 {
-	FString Rule, Sev, Msg, File, FileName, Snippet, FixHint;
-	int32   Line     = 0;
-	bool    bFixable = false;
-	bool    bChecked = false;   // plain bool; RebuildList reads fresh value each time
-	int32   Idx      = -1;
+	All, Performance, BestPractices, Security, Maintainability
 };
-using FCodePtr = TSharedPtr<FCodeItem>;
 
-// Asset naming row item
-struct FAssetItem
+// Severity filter – matches web dashboard dropdown
+enum class EIssueSeverityFilter : uint8
 {
-	FString Path, Current, Suggested, Reason, Type;
-	bool    bChecked = true;
-	int32   Idx      = -1;
+	All, Critical, Error, Warning, Info
 };
-using FAssetPtr = TSharedPtr<FAssetItem>;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Panel
+// List item types (shared_ptr owned by TArray for SListView)
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct FShintIssueItem
+{
+	FString RuleId;
+	FString Severity;
+	FString Message;
+	FString FilePath;
+	FString FileName;        // cached for display
+	int32   Line           = 0;
+	FString Snippet;
+	FString FixSuggestion;
+	bool    bIsAutoFixable = false;
+	bool    bChecked       = false;
+	int32   OriginalIndex  = -1;
+
+	// Extended fields
+	FString Class;
+	FString Category;
+	FString Graph;
+};
+using FShintIssueItemPtr = TSharedPtr<FShintIssueItem>;
+
+struct FShintAssetItem
+{
+	FString AssetPath;
+	FString CurrentName;
+	FString SuggestedName;
+	FString Reason;
+	FString AssetType;
+	bool    bChecked      = true;
+	int32   OriginalIndex = -1;
+};
+using FShintAssetItemPtr = TSharedPtr<FShintAssetItem>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Panel widget
 // ─────────────────────────────────────────────────────────────────────────────
 
 class SShintToolsPanel : public SCompoundWidget
@@ -72,114 +85,158 @@ public:
 	void Construct(const FArguments& InArgs);
 	virtual ~SShintToolsPanel() override;
 
-	// ── Palette ───────────────────────────────────────────────────────────────
-	static FLinearColor BG()      { return {0.f,    0.f,    0.f,    1.f}; }
-	static FLinearColor Surf()    { return {0.048f, 0.048f, 0.048f, 1.f}; }
-	static FLinearColor Brd()     { return {0.11f,  0.11f,  0.11f,  1.f}; }
-	static FLinearColor White()   { return {1.f,    1.f,    1.f,    1.f}; }
-	static FLinearColor Gray()    { return {0.56f,  0.56f,  0.56f,  1.f}; }
-	static FLinearColor Dim()     { return {0.30f,  0.30f,  0.30f,  1.f}; }
-	static FLinearColor Blue()    { return {0.145f, 0.43f,  0.94f,  1.f}; }
-	static FLinearColor Green()   { return {0.145f, 0.82f,  0.38f,  1.f}; }
-	static FLinearColor Red()     { return {0.94f,  0.20f,  0.20f,  1.f}; }
-	static FLinearColor Yellow()  { return {1.f,    0.78f,  0.f,    1.f}; }
-	static FLinearColor EvenRow() { return {0.038f, 0.038f, 0.038f, 1.f}; }
-	static FLinearColor OddRow()  { return {0.018f, 0.018f, 0.018f, 1.f}; }
+	// ── Brand palette ────────────────────────────────────────────────────────
+	static FLinearColor C_BG()       { return FLinearColor(0.000f, 0.000f, 0.000f, 1.f); }
+	static FLinearColor C_Surface()  { return FLinearColor(0.048f, 0.048f, 0.048f, 1.f); }
+	static FLinearColor C_Border()   { return FLinearColor(0.110f, 0.110f, 0.110f, 1.f); }
+	static FLinearColor C_White()    { return FLinearColor(1.000f, 1.000f, 1.000f, 1.f); }
+	static FLinearColor C_Gray()     { return FLinearColor(0.560f, 0.560f, 0.560f, 1.f); }
+	static FLinearColor C_DimGray()  { return FLinearColor(0.300f, 0.300f, 0.300f, 1.f); }
+	static FLinearColor C_Blue()     { return FLinearColor(0.145f, 0.430f, 0.940f, 1.f); }
+	static FLinearColor C_Green()    { return FLinearColor(0.145f, 0.820f, 0.380f, 1.f); }
+	static FLinearColor C_Red()      { return FLinearColor(0.940f, 0.200f, 0.200f, 1.f); }
+	static FLinearColor C_Yellow()   { return FLinearColor(1.000f, 0.780f, 0.000f, 1.f); }
+	static FLinearColor C_RowEven()  { return FLinearColor(0.038f, 0.038f, 0.038f, 1.f); }
+	static FLinearColor C_RowOdd()   { return FLinearColor(0.018f, 0.018f, 0.018f, 1.f); }
+	static FLinearColor C_CodeBG()   { return FLinearColor(0.055f, 0.055f, 0.055f, 1.f); }
+	static FLinearColor C_DiffRed()  { return FLinearColor(0.900f, 0.480f, 0.480f, 1.f); }
+	static FLinearColor C_DiffGreen(){ return FLinearColor(0.480f, 0.900f, 0.480f, 1.f); }
 
-	// ── Fonts ─────────────────────────────────────────────────────────────────
-	static FSlateFontInfo FT()  { return FCoreStyle::GetDefaultFontStyle("Bold",    18); }
-	static FSlateFontInfo FH()  { return FCoreStyle::GetDefaultFontStyle("Bold",    13); }
-	static FSlateFontInfo FS()  { return FCoreStyle::GetDefaultFontStyle("Regular", 11); }
-	static FSlateFontInfo FL()  { return FCoreStyle::GetDefaultFontStyle("Regular", 10); }
-	static FSlateFontInfo FM()  { return FCoreStyle::GetDefaultFontStyle("Mono",    10); }
-	static FSlateFontInfo FB()  { return FCoreStyle::GetDefaultFontStyle("Bold",    11); }
-	static FSlateFontInfo FSN() { return FCoreStyle::GetDefaultFontStyle("Bold",    24); }
-	static FSlateFontInfo FSC() { return FCoreStyle::GetDefaultFontStyle("Regular", 10); }
+	// ── Fonts ────────────────────────────────────────────────────────────────
+	static FSlateFontInfo F_Title()   { return FCoreStyle::GetDefaultFontStyle("Bold",    18); }
+	static FSlateFontInfo F_H2()      { return FCoreStyle::GetDefaultFontStyle("Bold",    13); }
+	static FSlateFontInfo F_Body()    { return FCoreStyle::GetDefaultFontStyle("Regular", 12); }
+	static FSlateFontInfo F_Small()   { return FCoreStyle::GetDefaultFontStyle("Regular", 11); }
+	static FSlateFontInfo F_Label()   { return FCoreStyle::GetDefaultFontStyle("Regular", 10); }
+	static FSlateFontInfo F_Mono()    { return FCoreStyle::GetDefaultFontStyle("Mono",    10); }
+	static FSlateFontInfo F_RuleId()  { return FCoreStyle::GetDefaultFontStyle("Bold",    11); }
+	static FSlateFontInfo F_StatNum() { return FCoreStyle::GetDefaultFontStyle("Bold",    24); }
+	static FSlateFontInfo F_StatCap() { return FCoreStyle::GetDefaultFontStyle("Regular", 10); }
 
 private:
 	// ── Widget builders ───────────────────────────────────────────────────────
 	TSharedRef<SWidget> BuildHeader();
-	TSharedRef<SWidget> BuildCfg();
-	TSharedRef<SWidget> BuildStatus();
-	TSharedRef<SWidget> BuildCode();
-	TSharedRef<SWidget> BuildCodeList();
-	TSharedRef<SWidget> BuildAssets();
-	TSharedRef<SWidget> BuildAssetList();
+	TSharedRef<SWidget> BuildConfigSection();
+	TSharedRef<SWidget> BuildStatusBar();
+	TSharedRef<SWidget> BuildCodeValidatorSection();
+	TSharedRef<SWidget> BuildCodeResultsPanel();
+	TSharedRef<SWidget> BuildCodeFilterBar();
+	TSharedRef<SWidget> BuildCategoryMenuContent();
+	TSharedRef<SWidget> BuildSeverityMenuContent();
+	TSharedRef<SWidget> BuildAssetNamingSection();
+	TSharedRef<SWidget> BuildAssetResultsPanel();
 
-	// ── Row generators ────────────────────────────────────────────────────────
-	TSharedRef<ITableRow> CodeRow (FCodePtr  Item, const TSharedRef<STableViewBase>& Owner);
-	TSharedRef<ITableRow> AssetRow(FAssetPtr Item, const TSharedRef<STableViewBase>& Owner);
+	// ── Row generators for SListView ──────────────────────────────────────────
+	TSharedRef<ITableRow> GenerateCodeIssueRow(
+		FShintIssueItemPtr Item, const TSharedRef<STableViewBase>& Owner);
+	TSharedRef<ITableRow> GenerateAssetIssueRow(
+		FShintAssetItemPtr Item, const TSharedRef<STableViewBase>& Owner);
 
 	// ── Button handlers ───────────────────────────────────────────────────────
-	FReply OnHealth();
-	FReply OnScanSrc();
-	FReply OnScanBP();
-	FReply OnSelAll();
-	FReply OnDeselAll();
-	FReply OnApply();
-	FReply OnPushCpp();
-	FReply OnPushBP();
-	FReply OnScanAssets();
-	FReply OnSelAllAssets();
-	FReply OnApplyAssets();
-	FReply OnPushAssets();
+	FReply OnCheckConnectionClicked();
+	FReply OnScanProjectClicked();
+	FReply OnScanBlueprintsClicked();
+	FReply OnSelectAllCodeClicked();
+	FReply OnDeselectAllCodeClicked();
+	FReply OnApplySelectedCodeFixesClicked();
+	FReply OnSendCodeToDashboardClicked();
+	FReply OnScanAssetsClicked();
+	FReply OnSelectAllAssetsClicked();
+	FReply OnApplySelectedAssetFixesClicked();
+	FReply OnSendAssetToDashboardClicked();
 
 	// ── HTTP callbacks ────────────────────────────────────────────────────────
-	void OnHealthDone   (const FShintRaw&     Result);
-	void OnCodeDone     (const FValidateResult& Result);
-	void OnBpDone       (const FValidateResult& Result);
-	void OnFixDone      (const FFixResult&    Result);
-	void OnCppPushDone  (const FWebResult&    Result);
-	void OnBpPushDone   (const FWebResult&    Result);
-	void OnAssetsDone   (const FAssetScan&    Result);
-	void OnAssetFixDone (const FAssetFix&     Result);
-	void OnAssetPushDone(const FWebResult&    Result);
+	void OnHealthCheckComplete(const FShintRequestResult& Result);
+	void OnProjectValidateComplete(const FShintValidateResult& Result);
+	void OnBlueprintValidateComplete(const FShintValidateResult& Result);
+	void OnCodeFixComplete(const FShintFixResult& Result);
+	void OnCodeDashboardComplete(const FShintWebDashboardResult& Result);
+	void OnAssetScanComplete(const FShintAssetScanResult& Result);
+	void OnAssetFixComplete(const FShintAssetFixResult& Result);
+	void OnAssetDashboardComplete(const FShintWebDashboardResult& Result);
 
-	// ── UI helpers ────────────────────────────────────────────────────────────
-	void SetSt   (EStatus S);
-	void SetCode (EModule S);
-	void SetAsset(EModule S);
-	void ApplyFilter();
-	void RefCodeStats();
-	void RefAssetStats();
-	void RefApplyBtn();
-	void RefAssetApplyBtn();
-	void FlushCfg();
+	// ── UI state helpers ──────────────────────────────────────────────────────
+	void SetStatus(ECoreStatus S);
+	void SetCodeState(EModuleState S);
+	void SetAssetState(EModuleState S);
+	void PopulateCodeIssueList(const FShintValidateResult& Result);
+	void PopulateAssetIssueList(const FShintAssetScanResult& Result);
+	void ApplyCodeFilter();
+	void RefreshCodeStats();
+	void RefreshAssetStats();
+	void RefreshApplyCodeLabel();
+	void RefreshApplyAssetLabel();
+	void SaveConfigOverrides();
 
-	FSlateColor      StatusColor() const;
-	FText            StatusText()  const;
-	TOptional<float> CodePct()     const;
-	TOptional<float> AssetPct()    const;
+	FSlateColor GetStatusColor()        const;
+	FText       GetStatusText()         const;
+	TOptional<float> GetCodeProgress()  const;
+	TOptional<float> GetAssetProgress() const;
 
-	static TSharedRef<SWidget> Div();
-	static FString             N(int32 V);
+	void HandleValidateResult(const FShintValidateResult& Result, bool bMerge);
+
+	static FString FmtN(int32 N);
+	static TSharedRef<SWidget> Divider();
+	static TSharedRef<SWidget> BuildSectionTitle(const FText& Title, const FText& Subtitle);
+	static TSharedRef<SWidget> BuildDiffLine(const FString& Icon, const FString& Text,
+		const FLinearColor& IconColor, const FLinearColor& TextColor);
+	static TSharedRef<SWidget> BuildModuleProgressBar(
+		TSharedPtr<SProgressBar>& OutBar,
+		TAttribute<TOptional<float>> PercentAttr);
 
 	// ── State ─────────────────────────────────────────────────────────────────
-	TSharedPtr<FShintClient>        Client;
-	TSharedPtr<FCoreProcessManager> Proc;
+	TSharedPtr<FShintCoreClient>    CoreClient;
+	TSharedPtr<FCoreProcessManager> ProcessManager;
 
-	EStatus St      = EStatus::Unknown;
-	EModule CodeSt  = EModule::Idle;
-	EModule AssetSt = EModule::Idle;
-	EFilter Flt     = EFilter::All;
+	ECoreStatus  StatusState = ECoreStatus::Unknown;
+	EModuleState CodeState   = EModuleState::Idle;
+	EModuleState AssetState  = EModuleState::Idle;
 
-	FValidateResult LastCode;    // accumulated result for dashboard push
-	FAssetScan      LastAsset;
+	FShintValidateResult  LastCodeResult;
+	FShintAssetScanResult LastAssetResult;
 
-	TArray<FCodePtr>  AllCode;   // all issues (C++ + BP)
-	TArray<FCodePtr>  ViewCode;  // filtered subset
-	TArray<FAssetPtr> AllAssets;
+	// All issues from last scan
+	TArray<FShintIssueItemPtr> AllCodeItems;
+	// Currently visible (after filter)
+	TArray<FShintIssueItemPtr> CodeIssueItems;
+	TArray<FShintAssetItemPtr> AssetIssueItems;
 
-	// ── Slate widget refs ─────────────────────────────────────────────────────
-	TSharedPtr<SListView<FCodePtr>>  CodeList;
-	TSharedPtr<SListView<FAssetPtr>> AssetList;
+	EIssueFilter         CurrentFilter         = EIssueFilter::All;
+	EIssueCategoryFilter CurrentCategoryFilter = EIssueCategoryFilter::All;
+	EIssueSeverityFilter CurrentSeverityFilter = EIssueSeverityFilter::All;
 
-	TSharedPtr<SEditableTextBox> BxProjId, BxKey, BxName;
-	TSharedPtr<STextBlock>       LFiles, LErrCode, LWarnCode;
-	TSharedPtr<STextBlock>       LAssets, LInvalid, LTime;
-	TSharedPtr<SProgressBar>     PbCode, PbAsset;
-	TSharedPtr<SButton>          BtnApply, BtnCpp, BtnBp;
-	TSharedPtr<SButton>          BtnApplyAsset, BtnPushAsset;
-	TSharedPtr<STextBlock>       LApply, LApplyAsset;
-	TSharedPtr<SWidget>          EmptyCode, EmptyAsset;
+	// ── Slate refs ────────────────────────────────────────────────────────────
+	TSharedPtr<SListView<FShintIssueItemPtr>> CodeIssueListView;
+	TSharedPtr<SListView<FShintAssetItemPtr>> AssetIssueListView;
+
+	TSharedPtr<STextBlock> CodeFiles_Label;
+	TSharedPtr<STextBlock> CodeErrors_Label;
+	TSharedPtr<STextBlock> CodeWarnings_Label;
+	TSharedPtr<STextBlock> AssetTotal_Label;
+	TSharedPtr<STextBlock> AssetInvalid_Label;
+	TSharedPtr<STextBlock> AssetTime_Label;
+
+	TSharedPtr<SProgressBar> CodeProgressBar;
+	TSharedPtr<SProgressBar> AssetProgressBar;
+
+	TSharedPtr<SButton>    ApplyCodeBtn;
+	TSharedPtr<SButton>    SendCodeBtn;
+	TSharedPtr<SButton>    ApplyAssetBtn;
+	TSharedPtr<SButton>    SendAssetBtn;
+
+	TSharedPtr<STextBlock> ApplyCodeBtnLabel;
+	TSharedPtr<STextBlock> ApplyAssetBtnLabel;
+	TSharedPtr<STextBlock> SendCodeBtnLabel;
+	TSharedPtr<STextBlock> SendAssetBtnLabel;
+
+	TSharedPtr<STextBlock> CategoryFilterLabel;
+	TSharedPtr<STextBlock> SeverityFilterLabel;
+
+	TSharedPtr<SWidget>    CodeEmptyState;
+	TSharedPtr<SWidget>    AssetEmptyState;
+
+	// Config field widgets
+	TSharedPtr<SEditableTextBox> ProjectIdField;
+	TSharedPtr<SEditableTextBox> ApiKeyField;
+	TSharedPtr<SEditableTextBox> DashboardUrlField;
 };

@@ -5,135 +5,249 @@
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
 #include "HttpModule.h"
-#include "Dom/JsonObject.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HTTP result
+// HTTP primitives
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct FShintRaw
+enum class EShintHttpMethod : uint8 { GET, POST, PUT, DELETE_ };
+
+struct FShintRequestResult
 {
-	bool    bOk  = false;
-	int32   Code = 0;
-	FString Body;
-	FString Err;
+	bool    bSuccess     = false;
+	int32   StatusCode   = 0;
+	FString ResponseBody;
+	FString ErrorMessage;
 };
-DECLARE_DELEGATE_OneParam(FOnRaw, const FShintRaw&);
+DECLARE_DELEGATE_OneParam(FOnShintRequestComplete, const FShintRequestResult&);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fix request structs (AI-engineer spec)
+// Code Validator — enriched issue
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct FAcceptedFix   { FString RuleId; int32 Line = 0; FString FilePath; };
-struct FFixFileRequest { FString FilePath; FString Source; TArray<FAcceptedFix> Fixes; };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Code Validator
-// ─────────────────────────────────────────────────────────────────────────────
-
-struct FShintIssue
+struct FShintCodeIssue
 {
-	FString Rule, Sev, Msg, File, Snippet, FixHint;
-	int32   Line     = 0;
-	bool    bFixable = false;
+	FString RuleId;
+	FString Severity;         // "error" | "warning"
+	FString Message;
+	FString FilePath;         // absolute path on disk
+	int32   Line             = 0;
+	FString Snippet;          // the problematic source line
+	FString FixSuggestion;    // what the corrected line should look like
+	bool    bIsAutoFixable   = false;
+	int32   LinesCount       = 0;  // total lines in file (for dashboard)
+
+	// Extended fields from server response
+	FString Class;            // e.g. "ABrokenTestActor" or blueprint class name
+	FString Category;         // e.g. "memory", "style", "performance", "blueprint"
+	FString Graph;            // blueprint graph name (empty for C++ issues)
+
+	// Runtime UI state — not sent over wire
+	bool    bChecked         = false;
 };
 
-struct FValidateResult
+struct FShintValidateResult
 {
-	bool    bOk    = false;
-	FString Err;
-	int32   Issues = 0, Errors = 0, Warns = 0, Files = 0;
-	TArray<FShintIssue> List;
-	TArray<FString>     ScannedPaths;
+	bool    bSuccess      = false;
+	int32   StatusCode    = 0;
+	FString ErrorMessage;
+	int32   TotalIssues   = 0;
+	int32   TotalErrors   = 0;
+	int32   TotalWarnings = 0;
+	int32   FilesScanned  = 0;
+	TArray<FShintCodeIssue> Issues;
+
+	// Kept for "Send to Dashboard" — populated during scan
+	TArray<FString> ScannedFilePaths;  // absolute paths of all scanned files
 };
-DECLARE_DELEGATE_OneParam(FOnValidate, const FValidateResult&);
+DECLARE_DELEGATE_OneParam(FOnShintValidateComplete, const FShintValidateResult&);
 
-struct FFixedFile { FString Path; FString Content; int32 Applied = 0, Skipped = 0; };
-DECLARE_DELEGATE_OneParam(FOnFix, const FFixResult&);
+struct FShintFixedFile
+{
+	FString FilePath;           // absolute path
+	FString CorrectedContent;
+	int32   FixesApplied = 0;
+	int32   FixesSkipped = 0;
+};
+
+struct FShintFixResult
+{
+	bool    bSuccess           = false;
+	int32   TotalFixesApplied  = 0;
+	int32   TotalFixesSkipped  = 0;
+	FString ErrorMessage;
+	TArray<FShintFixedFile> FixedFiles;
+};
+DECLARE_DELEGATE_OneParam(FOnShintFixComplete, const FShintFixResult&);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Asset Naming
+// Asset Naming Bot
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct FAssetIssue { FString Path, Current, Suggested, Reason, Type; };
-struct FAssetScan  { bool bOk = false; FString Err; int32 Total = 0, Invalid = 0; float Secs = 0.f; TArray<FAssetIssue> List; };
-DECLARE_DELEGATE_OneParam(FOnAssetScan, const FAssetScan&);
+struct FShintAssetIssue
+{
+	FString AssetPath;       // UE package path e.g. /Game/Characters/hero_body
+	FString CurrentName;
+	FString SuggestedName;
+	FString Reason;
+	FString AssetType;       // "Texture2D", "StaticMesh", etc.
 
-struct FAssetFix { bool bOk = false; int32 Renamed = 0; FString Err; };
-DECLARE_DELEGATE_OneParam(FOnAssetFix, const FAssetFix&);
+	bool    bChecked = true;
+};
+
+struct FShintAssetScanResult
+{
+	bool    bSuccess        = false;
+	int32   StatusCode      = 0;
+	FString ErrorMessage;
+	int32   TotalAssets     = 0;
+	int32   InvalidAssets   = 0;
+	float   ScanTimeSeconds = 0.0f;
+	TArray<FShintAssetIssue> Issues;
+};
+DECLARE_DELEGATE_OneParam(FOnShintAssetScanComplete, const FShintAssetScanResult&);
+
+struct FShintAssetFixResult
+{
+	bool    bSuccess      = false;
+	int32   AssetsRenamed = 0;
+	FString ErrorMessage;
+};
+DECLARE_DELEGATE_OneParam(FOnShintAssetFixComplete, const FShintAssetFixResult&);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Web / Dashboard
+// External web dashboard results
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct FWebResult { bool bOk = false; FString Err, Body; };
-DECLARE_DELEGATE_OneParam(FOnWeb, const FWebResult&);
+struct FShintWebDashboardResult
+{
+	bool    bSuccess     = false;
+	FString ErrorMessage;
+	FString ResponseBody;
+};
+DECLARE_DELEGATE_OneParam(FOnShintWebDashboardComplete, const FShintWebDashboardResult&);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Local dashboard report (legacy — keeps local MongoDB sync)
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct FShintDashboardReport
+{
+	FString ProjectName;
+	FString Engine = TEXT("unreal");
+	FString ReportType;
+	int32   Code_FilesScanned   = 0;
+	int32   Code_TotalIssues    = 0;
+	int32   Code_TotalErrors    = 0;
+	int32   Code_TotalWarnings  = 0;
+	int32   Asset_TotalScanned  = 0;
+	int32   Asset_InvalidAssets = 0;
+	float   Asset_ScanTime      = 0.0f;
+};
+struct FShintDashboardResult { bool bSuccess = false; FString ErrorMessage; };
+DECLARE_DELEGATE_OneParam(FOnShintDashboardComplete, const FShintDashboardResult&);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct FShintCfg
+struct FShintCoreConfig
 {
-	int32   Port      = 18200;
-	FString Name      = TEXT("MyGame");
-	FString ProjectId, Key;
-	FString DashUrl   = TEXT("https://app.shinttools.io");
+	// Local core engine
+	int32   CorePort        = 18200;
+	bool    bAutoStartCore  = false;
 
-	FString Base()    const { return FString::Printf(TEXT("http://localhost:%d"), Port); }
-	bool    HasDash() const { return !Key.IsEmpty() && !ProjectId.IsEmpty(); }
+	// Project identity
+	FString ProjectName     = TEXT("MyGame");
+	FString ProjectId       = TEXT("");
+
+	// External web dashboard (app.shinttools.io or emergent)
+	FString ApiKey          = TEXT("");
+	FString DashboardUrl    = TEXT("https://app.shinttools.io");
+
+	FString GetBaseUrl() const
+	{
+		return FString::Printf(TEXT("http://localhost:%d"), CorePort);
+	}
+
+	bool HasExternalDashboard() const
+	{
+		return !ApiKey.IsEmpty() && !DashboardUrl.IsEmpty() && !ProjectId.IsEmpty();
+	}
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Client
 // ─────────────────────────────────────────────────────────────────────────────
 
-class SHINTTOOLS_API FShintClient
+class SHINTTOOLS_API FShintCoreClient : public TSharedFromThis<FShintCoreClient>
 {
 public:
-	FShintClient();
-	~FShintClient() = default;
+	FShintCoreClient();
+	~FShintCoreClient();
 
-	bool          LoadConfig();
-	FShintCfg&        Cfg()       { return C; }
-	const FShintCfg&  Cfg() const { return C; }
+	bool LoadConfig();
+	bool SaveConfig() const;
+	const FShintCoreConfig& GetConfig() const { return Config; }
+	FShintCoreConfig& GetConfigMutable() { return Config; }
 
-	// Connectivity
-	void Health(FOnRaw Done);
+	// ── Connectivity ─────────────────────────────────────────────────────────
+	void CheckHealth(FOnShintRequestComplete OnComplete);
+	void Ping(FOnShintRequestComplete OnComplete);
 
-	// Code Validator
-	void ScanProject   (const FString& SrcDir,     FOnValidate Done);
-	void ScanBlueprints(const FString& ContentDir, FOnValidate Done);
-	void ApplyFixes    (const TArray<FFixFileRequest>& Reqs, FOnFix Done);
+	// ── Code Validator — local engine ─────────────────────────────────────────
+	void ValidateCode(const FString& AbsFilePath, const FString& Content,
+	                  const FString& Engine, FOnShintValidateComplete OnComplete);
+	void ValidateProject(const FString& SourceDir, FOnShintValidateComplete OnComplete);
+	void ValidateBlueprints(const FString& ContentDir, FOnShintValidateComplete OnComplete);
+	void ApplyCodeFixes(const TArray<FShintCodeIssue>& AcceptedIssues,
+	                    FOnShintFixComplete OnComplete);
 
-	// Dashboard
-	void PushCode      (const FValidateResult& R, FOnWeb Done);
-	void PushBlueprints(const TArray<TSharedPtr<FJsonObject>>& BPs, FOnWeb Done);
-	void PushAssets    (const FAssetScan& R, FOnWeb Done);
+	// ── Code Validator — external web dashboard ───────────────────────────────
+	/**
+	 * Sends the full project scan to the web dashboard.
+	 * Payload: POST {DashboardUrl}/api/code-validator/analyze
+	 * Body: { project_id, project_name, api_key, files:[{name,path,type,content,lines_count}] }
+	 */
+	void SendCodeValidatorToDashboard(const FShintValidateResult& LastResult,
+	                                  FOnShintWebDashboardComplete OnComplete);
 
-	// Asset Naming
-	void ScanAssets (const FString& ContentDir, FOnAssetScan Done);
-	void ReportFixes(const TArray<FAssetIssue>& Fixed, FOnAssetFix Done);
+	// ── Asset Naming Bot — local engine ──────────────────────────────────────
+	void ScanAssetNaming(const FString& ContentDir, FOnShintAssetScanComplete OnComplete);
+	void ReportAssetFixesToServer(const TArray<FShintAssetIssue>& Fixed,
+	                              FOnShintAssetFixComplete OnComplete);
 
-	// Cached BP JSON for dashboard push
-	const TArray<TSharedPtr<FJsonObject>>& BpCache() const { return BPs; }
+	// ── Asset Naming Bot — external web dashboard ─────────────────────────────
+	/**
+	 * Sends naming violations to the web dashboard.
+	 * Payload: POST {DashboardUrl}/api/naming-bot/analyze
+	 * Body: { project_id, project_name, api_key, items:[{name,path,type,category}] }
+	 */
+	void SendAssetNamingToDashboard(const FShintAssetScanResult& LastResult,
+	                                FOnShintWebDashboardComplete OnComplete);
+
+	// ── Local MongoDB dashboard report (legacy) ───────────────────────────────
+	void SendDashboardReport(const FShintDashboardReport& Report,
+	                         FOnShintDashboardComplete OnComplete);
+
+	// ── Generic ───────────────────────────────────────────────────────────────
+	void SendRequest(const FString& FullUrl, EShintHttpMethod Method,
+	                 const FString& Body, FOnShintRequestComplete OnComplete,
+	                 const TMap<FString, FString>& ExtraHeaders = {});
 
 private:
-	void Post(const FString& Url, const FString& Body, FOnRaw Done);
-	void Get (const FString& Url, FOnRaw Done);
-	void Http(const FString& Url, const FString& Verb, const FString& Body, FOnRaw Done);
-	void OnDone(FHttpRequestPtr, FHttpResponsePtr, bool, FOnRaw);
+	void OnHttpRequestComplete(FHttpRequestPtr Request, FHttpResponsePtr Response,
+	                           bool bConnectedSuccessfully, FOnShintRequestComplete OnComplete);
 
-	static FValidateResult ParseValidate(const FShintRaw& R);
-	static FAssetScan      ParseAssets  (const FShintRaw& R);
-	static FFixResult      ParseFix     (const FShintRaw& R);
-	static FString         ToJson(TSharedRef<FJsonObject> Obj);
-	static void            CollectCpp(const FString& Dir, TArray<FString>& Out);
-	static FString         AssetCat(const FString& Type);
+	static FString MethodToString(EShintHttpMethod Method);
+	static FString SerializeJson(const TSharedRef<FJsonObject>& Obj);
+	static FShintValidateResult  ParseValidateResponse (const FShintRequestResult& Raw);
+	static FShintAssetScanResult ParseAssetScanResponse(const FShintRequestResult& Raw);
+	static FShintFixResult       ParseFixResponse      (const FShintRequestResult& Raw);
+	static void CollectSourceFiles(const FString& Dir, TArray<FString>& Out);
 
-	TSharedPtr<FJsonObject> ReadBP(const FString& ObjPath) const;
-	static void             AnalyseBP(const TSharedPtr<FJsonObject>& Bp, TArray<FShintIssue>& Out);
+	// Infer asset category from UE type string (for dashboard payload)
+	static FString AssetTypeToCategory(const FString& AssetType);
 
-	FShintCfg C;
-	TArray<TSharedPtr<FJsonObject>> BPs;
+	FShintCoreConfig Config;
 };

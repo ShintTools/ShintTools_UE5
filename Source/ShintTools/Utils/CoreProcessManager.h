@@ -63,15 +63,6 @@ public:
 	/** Returns the PID of the managed process, or 0 if none */
 	uint32 GetCorePID() const { return ManagedPID; }
 
-	// /**
-	//  * Resolves the path to the Core Engine main.py relative to the plugin or project.
-	//  * Searches:
-	//  *   1. <PluginDir>/CoreEngine/main.py
-	//  *   2. <ProjectDir>/CoreEngine/main.py
-	//  *   3. Fallback: empty string (caller should warn the user)
-	//  */
-	// static FString ResolveCoreScriptPath();
-
 private:
 
 	/** Handle to the launched process (invalid if not running) */
