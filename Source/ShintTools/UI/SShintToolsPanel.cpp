@@ -1156,7 +1156,49 @@ void SShintToolsPanel::OnProjectValidateComplete(const FShintValidateResult& Res
 
 void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& Result)
 {
-	HandleValidateResult(Result, true);
+	// Separate naming issues (BPB001) → route to Asset Naming panel
+	FShintValidateResult QualityResult;
+	QualityResult.bSuccess       = Result.bSuccess;
+	QualityResult.FilesScanned   = Result.FilesScanned;
+	QualityResult.Issues.Reserve(Result.Issues.Num());
+
+	int32 NamingRouted = 0;
+
+	for (const FShintCodeIssue& Issue : Result.Issues)
+	{
+		if (Issue.RuleId == TEXT("BPB001"))
+		{
+			// Convert to asset naming item and add to AssetIssueItems
+			FShintAssetItemPtr Item = MakeShared<FShintAssetItem>();
+			Item->AssetPath     = Issue.FilePath;
+			Item->CurrentName   = FPaths::GetBaseFilename(Issue.FilePath);
+			Item->SuggestedName = TEXT("BP_") + Item->CurrentName;
+			Item->Reason        = Issue.Message;
+			Item->AssetType     = TEXT("Blueprint");
+			Item->bChecked      = true;
+			Item->OriginalIndex = AssetIssueItems.Num();
+			AssetIssueItems.Add(MoveTemp(Item));
+			++NamingRouted;
+		}
+		else
+		{
+			QualityResult.Issues.Add(Issue);
+			if (Issue.Severity == TEXT("error"))   ++QualityResult.TotalErrors;
+			if (Issue.Severity == TEXT("warning")) ++QualityResult.TotalWarnings;
+		}
+	}
+	QualityResult.TotalIssues = QualityResult.Issues.Num();
+
+	// Refresh asset list view if naming items were added
+	if (NamingRouted > 0)
+	{
+		if (AssetIssueListView.IsValid()) AssetIssueListView->RequestListRefresh();
+		RefreshAssetStats();
+		RefreshApplyAssetLabel();
+	}
+
+	// Quality issues → code validator panel
+	HandleValidateResult(QualityResult, true);
 }
 
 void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, bool bMerge)

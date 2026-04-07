@@ -500,16 +500,16 @@ void FShintCoreClient::ApplyCodeFixes(
 	// Apply fixes LOCALLY — replace snippet lines with fix_suggestion in source files.
 	// No server call needed: the scan already gave us snippet + fix_suggestion.
 
-	// Group issues by absolute file path — skip blueprint / package paths
+	// Group issues: C++ by file path, BP issues handled separately
 	TMap<FString, TArray<const FShintCodeIssue*>> ByFile;
-	int32 SkippedBP = 0;
+	TArray<const FShintCodeIssue*> BPIssues;
 	int32 SkippedNoFix = 0;
 	for (const FShintCodeIssue& Issue : AcceptedIssues)
 	{
 		if (Issue.FilePath.IsEmpty()) continue;
 		if (Issue.FilePath.StartsWith(TEXT("/Game/")) || Issue.FilePath.StartsWith(TEXT("/Engine/")))
 		{
-			++SkippedBP;
+			BPIssues.Add(&Issue);
 			continue;
 		}
 		if (Issue.FixSuggestion.IsEmpty())
@@ -528,20 +528,54 @@ void FShintCoreClient::ApplyCodeFixes(
 			TEXT("ApplyFix: %d issue(s) have no fix_suggestion (server did not provide one)"), SkippedNoFix);
 	}
 
-	if (SkippedBP > 0)
+	// ── Apply Blueprint fixes programmatically ────────────────────────────────
+	int32 BPApplied = 0;
+	int32 BPSkipped = 0;
+	for (const FShintCodeIssue* Issue : BPIssues)
 	{
-		UE_LOG(LogShintTools, Log,
-			TEXT("ApplyFix: Skipped %d blueprint issue(s) (not fixable via disk write)"), SkippedBP);
+		if (Issue->RuleId == TEXT("BPP001"))
+		{
+			// Disable tick on the Blueprint CDO
+			UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *Issue->FilePath);
+			if (BP && BP->GeneratedClass)
+			{
+				AActor* CDO = Cast<AActor>(BP->GeneratedClass->GetDefaultObject(true));
+				if (CDO)
+				{
+					CDO->PrimaryActorTick.bCanEverTick        = false;
+					CDO->PrimaryActorTick.bStartWithTickEnabled = false;
+					BP->MarkPackageDirty();
+					UE_LOG(LogShintTools, Log,
+						TEXT("ApplyFix: [BPP001] Disabled tick on '%s'"), *Issue->FilePath);
+					++BPApplied;
+					continue;
+				}
+			}
+			UE_LOG(LogShintTools, Warning,
+				TEXT("ApplyFix: [BPP001] Could not load BP '%s'"), *Issue->FilePath);
+			++BPSkipped;
+		}
+		else
+		{
+			UE_LOG(LogShintTools, Log,
+				TEXT("ApplyFix: BP rule [%s] on '%s' — no programmatic fix available"),
+				*Issue->RuleId, *Issue->FilePath);
+			++BPSkipped;
+		}
 	}
 
-	if (ByFile.IsEmpty())
+	if (BPApplied > 0 || BPSkipped > 0)
+	{
+		UE_LOG(LogShintTools, Log,
+			TEXT("ApplyFix: BP fixes — %d applied, %d skipped"), BPApplied, BPSkipped);
+	}
+
+	if (ByFile.IsEmpty() && BPApplied == 0)
 	{
 		FShintFixResult Empty;
-		Empty.bSuccess          = true;
-		Empty.TotalFixesSkipped = AcceptedIssues.Num();
-		if (SkippedBP > 0)
-			Empty.ErrorMessage = FString::Printf(
-				TEXT("%d blueprint issue(s) skipped — blueprint fixes are not supported yet."), SkippedBP);
+		Empty.bSuccess            = true;
+		Empty.TotalFixesApplied   = BPApplied;
+		Empty.TotalFixesSkipped   = BPSkipped + SkippedNoFix;
 		OnComplete.ExecuteIfBound(Empty);
 		return;
 	}
@@ -654,7 +688,11 @@ void FShintCoreClient::ApplyCodeFixes(
 		Result.TotalFixesSkipped += Skipped;
 	}
 
-	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Done — %d applied, %d skipped across %d file(s)"),
+	// Include BP fix counts in the final result
+	Result.TotalFixesApplied += BPApplied;
+	Result.TotalFixesSkipped += BPSkipped;
+
+	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Done — %d applied, %d skipped across %d file(s) + BP fixes"),
 		Result.TotalFixesApplied, Result.TotalFixesSkipped, Result.FixedFiles.Num());
 
 	// Report applied fixes to server for dashboard tracking (fire-and-forget)
