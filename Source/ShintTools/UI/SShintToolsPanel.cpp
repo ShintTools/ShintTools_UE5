@@ -1520,8 +1520,11 @@ void SShintToolsPanel::RefreshCodeStats()
 
 void SShintToolsPanel::RefreshAssetStats()
 {
-	if (AssetTotal_Label.IsValid())   AssetTotal_Label->SetText(FText::FromString(FmtN(LastAssetResult.TotalAssets)));
-	if (AssetInvalid_Label.IsValid()) AssetInvalid_Label->SetText(FText::FromString(FmtN(LastAssetResult.InvalidAssets)));
+	// Drive counters from the live list — BPB001 items added by the naming
+	// BP pass are included without needing to update LastAssetResult fields.
+	const int32 Total = AssetIssueItems.Num();
+	if (AssetTotal_Label.IsValid())   AssetTotal_Label->SetText(FText::FromString(FmtN(Total)));
+	if (AssetInvalid_Label.IsValid()) AssetInvalid_Label->SetText(FText::FromString(FmtN(Total)));
 	if (AssetTime_Label.IsValid())    AssetTime_Label->SetText(FText::FromString(
 		FString::Printf(TEXT("%.2f"), LastAssetResult.ScanTimeSeconds)));
 }
