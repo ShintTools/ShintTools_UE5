@@ -1294,13 +1294,6 @@ void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
 	SetAssetState(EModuleState::Done);
 	PopulateAssetIssueList(Result);
 	RefreshAssetStats();
-
-	// Chain: also run BP quality validation so Code Validator panel shows
-	// blueprint issues (graphs, variables, performance, maintainability).
-	// Uses bMerge=true to append to any existing C++ scan results.
-	SetCodeState(EModuleState::Running);
-	CoreClient->ValidateBlueprints(FPaths::ProjectContentDir(),
-		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnBlueprintValidateComplete));
 }
 
 void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
