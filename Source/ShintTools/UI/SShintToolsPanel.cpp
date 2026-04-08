@@ -1291,9 +1291,44 @@ void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
 {
 	if (!Result.bSuccess) { SetAssetState(EModuleState::Error); return; }
 	LastAssetResult = Result;
-	SetAssetState(EModuleState::Done);
 	PopulateAssetIssueList(Result);
 	RefreshAssetStats();
+
+	// Chain a BP validation pass to pick up BPB001 (naming violations).
+	// Results go ONLY to the asset naming panel — code validator is not touched.
+	CoreClient->ValidateBlueprints(FPaths::ProjectContentDir(),
+		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnBlueprintNamingScanComplete));
+}
+
+void SShintToolsPanel::OnBlueprintNamingScanComplete(const FShintValidateResult& Result)
+{
+	// Extract only BPB001 (wrong/missing BP_ prefix) and add to asset panel.
+	// Every other BP issue is silently discarded — code validator stays untouched.
+	int32 NamingRouted = 0;
+	for (const FShintCodeIssue& Issue : Result.Issues)
+	{
+		if (Issue.RuleId != TEXT("BPB001")) continue;
+
+		FShintAssetItemPtr Item = MakeShared<FShintAssetItem>();
+		Item->AssetPath     = Issue.FilePath;
+		Item->CurrentName   = FPaths::GetBaseFilename(Issue.FilePath);
+		Item->SuggestedName = TEXT("BP_") + Item->CurrentName;
+		Item->Reason        = Issue.Message;
+		Item->AssetType     = TEXT("Blueprint");
+		Item->bChecked      = true;
+		Item->OriginalIndex = AssetIssueItems.Num();
+		AssetIssueItems.Add(MoveTemp(Item));
+		++NamingRouted;
+	}
+
+	SetAssetState(EModuleState::Done);
+
+	if (NamingRouted > 0)
+	{
+		if (AssetIssueListView.IsValid()) AssetIssueListView->RequestListRefresh();
+		RefreshAssetStats();
+		RefreshApplyAssetLabel();
+	}
 }
 
 void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)

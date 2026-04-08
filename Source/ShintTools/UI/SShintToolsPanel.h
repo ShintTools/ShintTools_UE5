@@ -149,6 +149,7 @@ private:
 	void OnHealthCheckComplete(const FShintRequestResult& Result);
 	void OnProjectValidateComplete(const FShintValidateResult& Result);
 	void OnBlueprintValidateComplete(const FShintValidateResult& Result);
+	void OnBlueprintNamingScanComplete(const FShintValidateResult& Result); // asset-scan chain: naming only
 	void OnCodeFixComplete(const FShintFixResult& Result);
 	void OnCodeDashboardComplete(const FShintWebDashboardResult& Result);
 	void OnAssetScanComplete(const FShintAssetScanResult& Result);
