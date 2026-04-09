@@ -154,7 +154,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildContextPanel(
 	// Build a titled code block that highlights IssueLineNo
 	TSharedRef<SVerticalBox> Lines = SNew(SVerticalBox);
 
-	// Header label (ANTES / DESPUÉS)
+	// Header label (BEFORE / AFTER)
 	Lines->AddSlot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)
 	[
 		SNew(STextBlock).Text(FText::FromString(Label)).Font(F_Label())
@@ -771,12 +771,12 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 	if (bHasContext)
 	{
 		TSharedRef<SWidget> AntesPanelWidget =
-			BuildContextPanel(TEXT("ANTES"), Item->ContextBefore,
+			BuildContextPanel(TEXT("BEFORE"), Item->ContextBefore,
 				Item->ContextLineStart, Item->Line, C_DiffRed());
 
 		TSharedRef<SWidget> DespuesPanelWidget = Item->ContextAfter.IsEmpty()
 			? SNullWidget::NullWidget
-			: BuildContextPanel(TEXT("DESPUÉS"), Item->ContextAfter,
+			: BuildContextPanel(TEXT("AFTER"), Item->ContextAfter,
 				Item->ContextLineStart, Item->Line, C_DiffGreen());
 
 		ContextDiff =
@@ -914,7 +914,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 								SNew(SButton).ContentPadding(FMargin(12.f, 5.f))
 								.OnClicked(this, &SShintToolsPanel::OnApplySingleFix, Item)
 								[
-									SNew(STextBlock).Text(LOCTEXT("ApplySingle","✓  Aplicar"))
+									SNew(STextBlock).Text(LOCTEXT("ApplySingle","✓  Apply"))
 									.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green()))
 								]
 							]
@@ -923,7 +923,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 								SNew(SButton).ContentPadding(FMargin(12.f, 5.f))
 								.OnClicked(this, &SShintToolsPanel::OnIgnoreSingleFix, Item)
 								[
-									SNew(STextBlock).Text(LOCTEXT("IgnoreSingle","✗  Ignorar"))
+									SNew(STextBlock).Text(LOCTEXT("IgnoreSingle","✗  Ignore"))
 									.Font(F_Small()).ColorAndOpacity(FSlateColor(C_DimGray()))
 								]
 							]
