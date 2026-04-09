@@ -35,6 +35,12 @@ enum class EIssueSeverityFilter : uint8
 	All, Critical, Error, Warning, Info
 };
 
+// Asset type filter for the naming bot panel
+enum class EAssetTypeFilter : uint8
+{
+	All, Materials, Textures, Meshes, Blueprints, VFX, Audio, Animations, Data
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // List item types (shared_ptr owned by TArray for SListView)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -57,6 +63,12 @@ struct FShintIssueItem
 	FString Class;
 	FString Category;
 	FString Graph;
+
+	// Before/after diff context (from server)
+	FString ContextBefore;
+	FString ContextAfter;
+	int32   ContextLineStart = 0;
+	bool    bPreviewExpanded = false;
 };
 using FShintIssueItemPtr = TSharedPtr<FShintIssueItem>;
 
@@ -125,6 +137,7 @@ private:
 	TSharedRef<SWidget> BuildSeverityMenuContent();
 	TSharedRef<SWidget> BuildAssetNamingSection();
 	TSharedRef<SWidget> BuildAssetResultsPanel();
+	TSharedRef<SWidget> BuildAssetTypeMenuContent();
 
 	// ── Row generators for SListView ──────────────────────────────────────────
 	TSharedRef<ITableRow> GenerateCodeIssueRow(
@@ -141,6 +154,8 @@ private:
 	FReply OnApplySelectedCodeFixesClicked();
 	FReply OnSendCodeToDashboardClicked();
 	FReply OnScanAssetsClicked();
+	FReply OnApplySingleFix(FShintIssueItemPtr Item);
+	FReply OnIgnoreSingleFix(FShintIssueItemPtr Item);
 	FReply OnSelectAllAssetsClicked();
 	FReply OnApplySelectedAssetFixesClicked();
 	FReply OnSendAssetToDashboardClicked();
@@ -149,7 +164,8 @@ private:
 	void OnHealthCheckComplete(const FShintRequestResult& Result);
 	void OnProjectValidateComplete(const FShintValidateResult& Result);
 	void OnBlueprintValidateComplete(const FShintValidateResult& Result);
-	void OnCodeFixComplete(const FShintFixResult& Result);
+	void OnBlueprintNamingScanComplete(const FShintValidateResult& Result); // asset-scan chain: naming only
+	void OnCodeFixComplete(const FShintFixResult& Result, uint32 FixGeneration);
 	void OnCodeDashboardComplete(const FShintWebDashboardResult& Result);
 	void OnAssetScanComplete(const FShintAssetScanResult& Result);
 	void OnAssetFixComplete(const FShintAssetFixResult& Result);
@@ -162,6 +178,7 @@ private:
 	void PopulateCodeIssueList(const FShintValidateResult& Result);
 	void PopulateAssetIssueList(const FShintAssetScanResult& Result);
 	void ApplyCodeFilter();
+	void ApplyAssetFilter();
 	void RefreshCodeStats();
 	void RefreshAssetStats();
 	void RefreshApplyCodeLabel();
@@ -180,6 +197,10 @@ private:
 	static TSharedRef<SWidget> BuildSectionTitle(const FText& Title, const FText& Subtitle);
 	static TSharedRef<SWidget> BuildDiffLine(const FString& Icon, const FString& Text,
 		const FLinearColor& IconColor, const FLinearColor& TextColor);
+	static TSharedRef<SWidget> BuildContextPanel(
+		const FString& Label, const FString& ContextText,
+		int32 ContextLineStart, int32 IssueLineNo,
+		const FLinearColor& HighlightColor);
 	static TSharedRef<SWidget> BuildModuleProgressBar(
 		TSharedPtr<SProgressBar>& OutBar,
 		TAttribute<TOptional<float>> PercentAttr);
@@ -197,13 +218,27 @@ private:
 
 	// All issues from last scan
 	TArray<FShintIssueItemPtr> AllCodeItems;
+	TArray<FShintAssetItemPtr> AllAssetItems;
 	// Currently visible (after filter)
 	TArray<FShintIssueItemPtr> CodeIssueItems;
 	TArray<FShintAssetItemPtr> AssetIssueItems;
 
-	EIssueFilter         CurrentFilter         = EIssueFilter::All;
-	EIssueCategoryFilter CurrentCategoryFilter = EIssueCategoryFilter::All;
-	EIssueSeverityFilter CurrentSeverityFilter = EIssueSeverityFilter::All;
+	EIssueFilter         CurrentFilter            = EIssueFilter::All;
+	EIssueCategoryFilter CurrentCategoryFilter    = EIssueCategoryFilter::All;
+	EIssueSeverityFilter CurrentSeverityFilter    = EIssueSeverityFilter::All;
+	EAssetTypeFilter     CurrentAssetTypeFilter   = EAssetTypeFilter::All;
+
+	// Fingerprints "FilePath:Line:RuleId" of issues fixed this session.
+	// Prevents re-showing the same issue on an incremental/BP re-scan.
+	// Cleared when the user starts a fresh full scan (Scan Project).
+	TSet<FString>           AppliedFixFingerprints;
+	TArray<FShintCodeIssue> PendingCodeFixes;
+
+	// Incremented every time a new scan starts.
+	// The async UBT callback captures the generation at fix-time; if it changed
+	// by the time the callback fires, the scan already superseded the build check
+	// and BUILD001 errors must not be injected into the new results.
+	uint32 ScanGeneration = 0;
 
 	// ── Slate refs ────────────────────────────────────────────────────────────
 	TSharedPtr<SListView<FShintIssueItemPtr>> CodeIssueListView;
@@ -231,6 +266,7 @@ private:
 
 	TSharedPtr<STextBlock> CategoryFilterLabel;
 	TSharedPtr<STextBlock> SeverityFilterLabel;
+	TSharedPtr<STextBlock> AssetTypeFilterLabel;
 
 	TSharedPtr<SWidget>    CodeEmptyState;
 	TSharedPtr<SWidget>    AssetEmptyState;

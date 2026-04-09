@@ -10,6 +10,9 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformProcess.h"
+#include "Async/Async.h"
+#include "Misc/App.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -500,16 +503,16 @@ void FShintCoreClient::ApplyCodeFixes(
 	// Apply fixes LOCALLY — replace snippet lines with fix_suggestion in source files.
 	// No server call needed: the scan already gave us snippet + fix_suggestion.
 
-	// Group issues by absolute file path — skip blueprint / package paths
+	// Group issues: C++ by file path, BP issues handled separately
 	TMap<FString, TArray<const FShintCodeIssue*>> ByFile;
-	int32 SkippedBP = 0;
+	TArray<const FShintCodeIssue*> BPIssues;
 	int32 SkippedNoFix = 0;
 	for (const FShintCodeIssue& Issue : AcceptedIssues)
 	{
 		if (Issue.FilePath.IsEmpty()) continue;
 		if (Issue.FilePath.StartsWith(TEXT("/Game/")) || Issue.FilePath.StartsWith(TEXT("/Engine/")))
 		{
-			++SkippedBP;
+			BPIssues.Add(&Issue);
 			continue;
 		}
 		if (Issue.FixSuggestion.IsEmpty())
@@ -528,20 +531,54 @@ void FShintCoreClient::ApplyCodeFixes(
 			TEXT("ApplyFix: %d issue(s) have no fix_suggestion (server did not provide one)"), SkippedNoFix);
 	}
 
-	if (SkippedBP > 0)
+	// ── Apply Blueprint fixes programmatically ────────────────────────────────
+	int32 BPApplied = 0;
+	int32 BPSkipped = 0;
+	for (const FShintCodeIssue* Issue : BPIssues)
 	{
-		UE_LOG(LogShintTools, Log,
-			TEXT("ApplyFix: Skipped %d blueprint issue(s) (not fixable via disk write)"), SkippedBP);
+		if (Issue->RuleId == TEXT("BPP001"))
+		{
+			// Disable tick on the Blueprint CDO
+			UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *Issue->FilePath);
+			if (BP && BP->GeneratedClass)
+			{
+				AActor* CDO = Cast<AActor>(BP->GeneratedClass->GetDefaultObject(true));
+				if (CDO)
+				{
+					CDO->PrimaryActorTick.bCanEverTick        = false;
+					CDO->PrimaryActorTick.bStartWithTickEnabled = false;
+					BP->MarkPackageDirty();
+					UE_LOG(LogShintTools, Log,
+						TEXT("ApplyFix: [BPP001] Disabled tick on '%s'"), *Issue->FilePath);
+					++BPApplied;
+					continue;
+				}
+			}
+			UE_LOG(LogShintTools, Warning,
+				TEXT("ApplyFix: [BPP001] Could not load BP '%s'"), *Issue->FilePath);
+			++BPSkipped;
+		}
+		else
+		{
+			UE_LOG(LogShintTools, Log,
+				TEXT("ApplyFix: BP rule [%s] on '%s' — no programmatic fix available"),
+				*Issue->RuleId, *Issue->FilePath);
+			++BPSkipped;
+		}
 	}
 
-	if (ByFile.IsEmpty())
+	if (BPApplied > 0 || BPSkipped > 0)
+	{
+		UE_LOG(LogShintTools, Log,
+			TEXT("ApplyFix: BP fixes — %d applied, %d skipped"), BPApplied, BPSkipped);
+	}
+
+	if (ByFile.IsEmpty() && BPApplied == 0)
 	{
 		FShintFixResult Empty;
-		Empty.bSuccess          = true;
-		Empty.TotalFixesSkipped = AcceptedIssues.Num();
-		if (SkippedBP > 0)
-			Empty.ErrorMessage = FString::Printf(
-				TEXT("%d blueprint issue(s) skipped — blueprint fixes are not supported yet."), SkippedBP);
+		Empty.bSuccess            = true;
+		Empty.TotalFixesApplied   = BPApplied;
+		Empty.TotalFixesSkipped   = BPSkipped + SkippedNoFix;
 		OnComplete.ExecuteIfBound(Empty);
 		return;
 	}
@@ -654,8 +691,180 @@ void FShintCoreClient::ApplyCodeFixes(
 		Result.TotalFixesSkipped += Skipped;
 	}
 
-	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Done — %d applied, %d skipped across %d file(s)"),
+	// Include BP fix counts in the final result
+	Result.TotalFixesApplied += BPApplied;
+	Result.TotalFixesSkipped += BPSkipped;
+
+	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Done — %d applied, %d skipped across %d file(s) + BP fixes"),
 		Result.TotalFixesApplied, Result.TotalFixesSkipped, Result.FixedFiles.Num());
+
+	// ── Incremental compile check ────────────────────────────────────────────
+	// Only run when C++ files were actually modified on disk.
+	// We use the same UBT invocation as the PostToolUse hook but here we capture
+	// stdout/stderr to surface compiler errors back into the panel UI.
+	// The check runs on a background thread so we never block the game thread.
+	if (Result.FixedFiles.Num() > 0)
+	{
+		const FString BuildBat = FPaths::ConvertRelativePathToFull(
+			FPaths::EngineDir() / TEXT("Build/BatchFiles/Build.bat"));
+		const FString UProjectPath = FPaths::ConvertRelativePathToFull(
+			FPaths::GetProjectFilePath());
+		const FString TargetName = FString(FApp::GetProjectName()) + TEXT("Editor");
+		const FString BuildArgs  = FString::Printf(
+			TEXT("%s Win64 Development -project=\"%s\" -NoHotReloadFromIDE"),
+			*TargetName, *UProjectPath);
+
+		UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Launching incremental build check: %s %s"),
+			*BuildBat, *BuildArgs);
+
+		// Report applied fixes to server for dashboard tracking (fire-and-forget)
+		if (Result.TotalFixesApplied > 0)
+		{
+			TArray<TSharedPtr<FJsonValue>> IssuesArr;
+			for (const FShintCodeIssue& Issue : AcceptedIssues)
+			{
+				TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
+				O->SetStringField(TEXT("rule_id"),   Issue.RuleId);
+				O->SetStringField(TEXT("severity"),  Issue.Severity);
+				O->SetStringField(TEXT("file_path"), Issue.FilePath);
+				O->SetNumberField(TEXT("line"),      Issue.Line);
+				O->SetStringField(TEXT("message"),   Issue.Message);
+				IssuesArr.Add(MakeShared<FJsonValueObject>(O));
+			}
+			TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+			Body->SetArrayField(TEXT("issues"), IssuesArr);
+			SendRequest(Config.GetBaseUrl() + TEXT("/validate/fix"),
+				EShintHttpMethod::POST, SerializeJson(Body),
+				FOnShintRequestComplete::CreateLambda([](const FShintRequestResult& R) {
+					UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Server notified (code=%d)"), R.StatusCode);
+				}));
+		}
+
+		Async(EAsyncExecution::Thread, [BuildBat, BuildArgs, Result, OnComplete]() mutable
+		{
+			FString StdOut, StdErr;
+			int32   ExitCode = 0;
+			FPlatformProcess::ExecProcess(
+				*BuildBat, *BuildArgs, &ExitCode, &StdOut, &StdErr,
+				/*WorkingDir=*/nullptr, /*bShouldEndWithParentProcess=*/false);
+
+			const FString FullOutput = StdOut + StdErr;
+
+			if (ExitCode != 0)
+			{
+				Result.bHasCompileErrors = true;
+
+				// Parse MSVC error format:
+				// D:\path\File.cpp(42): error C2065: 'x': undeclared identifier
+				// Also handle Clang: D:/path/File.cpp:42:5: error: ...
+				static const FString ErrorKeyword   = TEXT("): error ");
+				static const FString WarningKeyword = TEXT("): warning ");
+
+				TArray<FString> OutputLines;
+				FullOutput.ParseIntoArrayLines(OutputLines);
+
+				for (const FString& OutLine : OutputLines)
+				{
+					// MSVC: path(line): error/warning CODE: message
+					int32 ParenClose = INDEX_NONE;
+					int32 ParenOpen  = INDEX_NONE;
+					if (!OutLine.FindLastChar(TEXT(')'), ParenClose)) continue;
+					// Walk back from ParenClose to find the matching '('
+					for (int32 c = ParenClose - 1; c >= 0; --c)
+					{
+						if (OutLine[c] == TEXT('('))
+						{
+							ParenOpen = c;
+							break;
+						}
+					}
+					if (ParenOpen == INDEX_NONE) continue;
+
+					// Extract file path and line number
+					const FString MaybeFile = OutLine.Left(ParenOpen);
+					const FString MaybeLine = OutLine.Mid(ParenOpen + 1, ParenClose - ParenOpen - 1);
+					if (!MaybeLine.IsNumeric()) continue;
+
+					// Check for a C++ source file extension
+					const FString Ext = FPaths::GetExtension(MaybeFile).ToLower();
+					if (Ext != TEXT("cpp") && Ext != TEXT("h") && Ext != TEXT("cc") && Ext != TEXT("hpp"))
+						continue;
+
+					// Determine severity
+					FString Severity;
+					int32   SevStart = INDEX_NONE;
+					SevStart = OutLine.Find(TEXT("): error "), ESearchCase::IgnoreCase, ESearchDir::FromStart, ParenClose);
+					if (SevStart != INDEX_NONE)
+					{
+						Severity = TEXT("error");
+					}
+					else
+					{
+						SevStart = OutLine.Find(TEXT("): warning "), ESearchCase::IgnoreCase, ESearchDir::FromStart, ParenClose);
+						if (SevStart != INDEX_NONE)
+						{
+							Severity = TEXT("warning");
+						}
+					}
+
+					// Extract code and message (everything after "error CODE: " or "warning CODE: ")
+					const int32 AfterParen = ParenClose + 1; // points to ':'
+					FString Rest = OutLine.Mid(AfterParen).TrimStart();
+					// Rest: "error C2065: 'x': undeclared identifier"
+					FString Code, Message;
+					int32 ColonIdx = INDEX_NONE;
+					if (Rest.FindChar(TEXT(':'), ColonIdx))
+					{
+						// Skip "error " or "warning "
+						const int32 SpaceIdx = Rest.Find(TEXT(" "), ESearchCase::IgnoreCase,
+							ESearchDir::FromStart, 0);
+						if (SpaceIdx != INDEX_NONE && SpaceIdx < ColonIdx)
+						{
+							Code    = Rest.Mid(SpaceIdx + 1, ColonIdx - SpaceIdx - 1).TrimStartAndEnd();
+							Message = Rest.Mid(ColonIdx + 1).TrimStart();
+						}
+						else
+						{
+							Message = Rest.Mid(ColonIdx + 1).TrimStart();
+						}
+					}
+					else
+					{
+						Message = Rest;
+					}
+
+					if (Message.IsEmpty()) continue;
+
+					FShintCompileError CE;
+					CE.FilePath  = MaybeFile;
+					CE.FileName  = FPaths::GetCleanFilename(MaybeFile);
+					CE.Line      = FCString::Atoi(*MaybeLine);
+					CE.Code      = Code;
+					CE.Message   = Message.Left(200); // cap length
+					CE.Severity  = Severity;
+					Result.CompileErrors.Add(MoveTemp(CE));
+				}
+
+				UE_LOG(LogShintTools, Warning,
+					TEXT("ApplyFix: Build failed — %d compile error(s) detected"),
+					Result.CompileErrors.Num());
+			}
+			else
+			{
+				UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Build succeeded — no compile errors"));
+			}
+
+			// Fire callback on the game thread (Slate widgets require it)
+			AsyncTask(ENamedThreads::GameThread, [Result, OnComplete]() mutable
+			{
+				OnComplete.ExecuteIfBound(Result);
+			});
+		});
+
+		return; // OnComplete will be called from the async path
+	}
+
+	// ── No C++ files modified — fire immediately ─────────────────────────────
 
 	// Report applied fixes to server for dashboard tracking (fire-and-forget)
 	if (Result.TotalFixesApplied > 0)
@@ -1037,11 +1246,16 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 			if (!(*O)->TryGetStringField(TEXT("file_path"), Issue.FilePath))
 				(*O)->TryGetStringField(TEXT("asset_path"), Issue.FilePath);
 			(*O)->TryGetNumberField(TEXT("line"),           Issue.Line);
-			(*O)->TryGetStringField(TEXT("snippet"),        Issue.Snippet);
-			(*O)->TryGetStringField(TEXT("fix_suggestion"), Issue.FixSuggestion);
-			(*O)->TryGetStringField(TEXT("class"),          Issue.Class);
-			(*O)->TryGetStringField(TEXT("category"),       Issue.Category);
-			(*O)->TryGetStringField(TEXT("graph"),          Issue.Graph);
+			(*O)->TryGetStringField(TEXT("snippet"),             Issue.Snippet);
+			(*O)->TryGetStringField(TEXT("fix_suggestion"),      Issue.FixSuggestion);
+			(*O)->TryGetStringField(TEXT("class"),               Issue.Class);
+			(*O)->TryGetStringField(TEXT("category"),            Issue.Category);
+			(*O)->TryGetStringField(TEXT("graph"),               Issue.Graph);
+			(*O)->TryGetStringField(TEXT("context_before"),      Issue.ContextBefore);
+			(*O)->TryGetStringField(TEXT("context_after"),       Issue.ContextAfter);
+			int32 CtxStart = 0;
+			(*O)->TryGetNumberField(TEXT("context_line_start"),  CtxStart);
+			Issue.ContextLineStart = CtxStart;
 			// Derive auto-fixable from fix_suggestion only — ignore server's is_auto_fixable.
 			// Plugin applies fixes locally by line number, so only fix_suggestion matters.
 			Issue.bIsAutoFixable = !Issue.FixSuggestion.IsEmpty();

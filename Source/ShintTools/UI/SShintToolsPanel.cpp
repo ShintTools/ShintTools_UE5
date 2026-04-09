@@ -146,6 +146,54 @@ TSharedRef<SWidget> SShintToolsPanel::BuildDiffLine(
 		];
 }
 
+TSharedRef<SWidget> SShintToolsPanel::BuildContextPanel(
+	const FString& Label, const FString& ContextText,
+	int32 ContextLineStart, int32 IssueLineNo,
+	const FLinearColor& HighlightColor)
+{
+	// Build a titled code block that highlights IssueLineNo
+	TSharedRef<SVerticalBox> Lines = SNew(SVerticalBox);
+
+	// Header label (ANTES / DESPUÉS)
+	Lines->AddSlot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)
+	[
+		SNew(STextBlock).Text(FText::FromString(Label)).Font(F_Label())
+		.ColorAndOpacity(FSlateColor(C_DimGray()))
+	];
+
+	TArray<FString> SrcLines;
+	ContextText.ParseIntoArray(SrcLines, TEXT("\n"), false);
+
+	for (int32 Idx = 0; Idx < SrcLines.Num(); ++Idx)
+	{
+		const int32 LineNo = ContextLineStart + Idx;
+		const bool  bIsIssueLine = (LineNo == IssueLineNo);
+		const FLinearColor TextCol = bIsIssueLine ? HighlightColor : C_Gray();
+		const FString Prefix = FString::Printf(TEXT("%4d  "), LineNo);
+
+		Lines->AddSlot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(STextBlock).Text(FText::FromString(Prefix))
+				.Font(F_Mono()).ColorAndOpacity(FSlateColor(C_DimGray()))
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f)
+			[
+				SNew(STextBlock).Text(FText::FromString(SrcLines[Idx]))
+				.Font(F_Mono()).ColorAndOpacity(FSlateColor(TextCol))
+				.AutoWrapText(false)
+			]
+		];
+	}
+
+	return SNew(SBorder)
+		.BorderImage(ST4::Solid(C_CodeBG()))
+		.Padding(FMargin(8.f, 6.f))
+		[ Lines ];
+}
+
 TSharedRef<SWidget> SShintToolsPanel::BuildModuleProgressBar(
 	TSharedPtr<SProgressBar>& OutBar,
 	TAttribute<TOptional<float>> PercentAttr)
@@ -479,6 +527,49 @@ TSharedRef<SWidget> SShintToolsPanel::BuildSeverityMenuContent()
 		[ Menu ];
 }
 
+TSharedRef<SWidget> SShintToolsPanel::BuildAssetTypeMenuContent()
+{
+	struct FTypeEntry { FText Label; EAssetTypeFilter Value; };
+	const TArray<FTypeEntry> Entries = {
+		{ LOCTEXT("ATAll",   "All Types"),   EAssetTypeFilter::All        },
+		{ LOCTEXT("ATMat",   "Materials"),   EAssetTypeFilter::Materials  },
+		{ LOCTEXT("ATTex",   "Textures"),    EAssetTypeFilter::Textures   },
+		{ LOCTEXT("ATMesh",  "Meshes"),      EAssetTypeFilter::Meshes     },
+		{ LOCTEXT("ATBP",    "Blueprints"),  EAssetTypeFilter::Blueprints },
+		{ LOCTEXT("ATVFX",   "VFX"),         EAssetTypeFilter::VFX        },
+		{ LOCTEXT("ATAudio", "Audio"),       EAssetTypeFilter::Audio      },
+		{ LOCTEXT("ATAnim",  "Animations"),  EAssetTypeFilter::Animations },
+		{ LOCTEXT("ATData",  "Data"),        EAssetTypeFilter::Data       },
+	};
+
+	TSharedRef<SVerticalBox> Menu = SNew(SVerticalBox);
+	for (const FTypeEntry& E : Entries)
+	{
+		Menu->AddSlot().AutoHeight()
+		[
+			SNew(SButton)
+			.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+			.ContentPadding(FMargin(12.f, 6.f))
+			.OnClicked_Lambda([this, Value = E.Value, Label = E.Label]() -> FReply
+			{
+				CurrentAssetTypeFilter = Value;
+				if (AssetTypeFilterLabel.IsValid())
+					AssetTypeFilterLabel->SetText(Label);
+				ApplyAssetFilter();
+				return FReply::Handled();
+			})
+			[
+				SNew(STextBlock).Text(E.Label).Font(F_Label())
+				.ColorAndOpacity(FSlateColor(C_White()))
+			]
+		];
+	}
+	return SNew(SBorder)
+		.BorderImage(ST4::Solid(C_Surface()))
+		.Padding(2.f)
+		[ Menu ];
+}
+
 TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 {
 	// Category dropdown
@@ -672,6 +763,87 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 		LocationStr = FString::Printf(TEXT("%s : %d"), *Item->FileName, Item->Line);
 	}
 
+	const bool bHasContext = !Item->ContextBefore.IsEmpty();
+
+	// ── Preview section (built once, visibility driven by bPreviewExpanded) ──
+	TSharedRef<SWidget> PreviewSection = SNullWidget::NullWidget;
+	if (bHasContext)
+	{
+		TSharedRef<SWidget> AntesPanelWidget =
+			BuildContextPanel(TEXT("ANTES"), Item->ContextBefore,
+				Item->ContextLineStart, Item->Line, C_DiffRed());
+
+		TSharedRef<SWidget> DespuesPanelWidget = Item->ContextAfter.IsEmpty()
+			? SNullWidget::NullWidget
+			: BuildContextPanel(TEXT("DESPUÉS"), Item->ContextAfter,
+				Item->ContextLineStart, Item->Line, C_DiffGreen());
+
+		// Action buttons — Apply / Ignore (fixable issues only)
+		TSharedRef<SWidget> ActionButtons = SNullWidget::NullWidget;
+		if (Item->bIsAutoFixable)
+		{
+			ActionButtons = SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,6.f,8.f,0.f)
+				[
+					SNew(SButton).ContentPadding(FMargin(12.f, 5.f))
+					.OnClicked(this, &SShintToolsPanel::OnApplySingleFix, Item)
+					[
+						SNew(STextBlock).Text(LOCTEXT("ApplySingle","✓  Aplicar"))
+						.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green()))
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,6.f,0.f,0.f)
+				[
+					SNew(SButton).ContentPadding(FMargin(12.f, 5.f))
+					.OnClicked(this, &SShintToolsPanel::OnIgnoreSingleFix, Item)
+					[
+						SNew(STextBlock).Text(LOCTEXT("IgnoreSingle","✗  Ignorar"))
+						.Font(F_Small()).ColorAndOpacity(FSlateColor(C_DimGray()))
+					]
+				];
+		}
+
+		PreviewSection =
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+			[
+				// Side-by-side: ANTES | DESPUÉS (collapses to single column if no after)
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0.f, 0.f, 4.f, 0.f)
+				[ AntesPanelWidget ]
+				+ SHorizontalBox::Slot().FillWidth(1.f)
+				.Padding(4.f, 0.f, 0.f, 0.f)
+				.HAlign(HAlign_Fill)
+				[
+					SNew(SBox)
+					.Visibility(Item->ContextAfter.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+					[ DespuesPanelWidget ]
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[ ActionButtons ];
+	}
+
+	// Fallback compact diff for issues without context (blueprints, etc.)
+	TSharedRef<SWidget> CompactDiff = SNew(SBorder)
+		.Visibility((Item->ContextBefore.IsEmpty() && !Item->Snippet.IsEmpty())
+			? EVisibility::Visible : EVisibility::Collapsed)
+		.BorderImage(ST4::Solid(C_CodeBG()))
+		.Padding(FMargin(8.f, 5.f))
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SBox).Visibility(Item->Snippet.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+				[ BuildDiffLine(TEXT("\u25B8"), Item->Snippet, C_Red(), C_DiffRed()) ]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f, 0.f, 0.f)
+			[
+				SNew(SBox).Visibility(Item->FixSuggestion.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+				[ BuildDiffLine(TEXT("\u2192"), Item->FixSuggestion, C_Green(), C_DiffGreen()) ]
+			]
+		];
+
 	return SNew(STableRow<FShintIssueItemPtr>, Owner)
 		.Style(FAppStyle::Get(), "TableView.Row").Padding(0.f)
 		[
@@ -695,7 +867,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 				[
 					SNew(SVerticalBox)
 
-					// Row 1: severity ● + rule_id + location + AUTO badge
+					// Row 1: severity ● + rule_id + location + preview toggle + AUTO badge
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,4.f)
 					[
 						SNew(SHorizontalBox)
@@ -711,9 +883,31 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 						]
 						+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 						[
-							SNew(STextBlock)
-							.Text(FText::FromString(LocationStr))
+							SNew(STextBlock).Text(FText::FromString(LocationStr))
 							.Font(F_Mono()).ColorAndOpacity(FSlateColor(C_Gray()))
+						]
+						// Preview toggle — only for issues with context
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6.f,0.f,6.f,0.f)
+						[
+							SNew(SBox).Visibility(bHasContext ? EVisibility::Visible : EVisibility::Collapsed)
+							[
+								SNew(SButton).ContentPadding(FMargin(6.f, 2.f))
+								.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+								.OnClicked_Lambda([this, Item]() -> FReply {
+									Item->bPreviewExpanded = !Item->bPreviewExpanded;
+									if (CodeIssueListView.IsValid())
+										CodeIssueListView->RequestListRefresh();
+									return FReply::Handled();
+								})
+								[
+									SNew(STextBlock)
+									.Text_Lambda([Item]() {
+										return FText::FromString(Item->bPreviewExpanded
+											? TEXT("\u25BC Preview") : TEXT("\u25B6 Preview"));
+									})
+									.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Blue()))
+								]
+							]
 						]
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 						[
@@ -722,38 +916,24 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 						]
 					]
 
-					// Row 2: message (wraps at container width)
+					// Row 2: message
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,5.f)
 					[
 						SNew(STextBlock).Text(FText::FromString(Item->Message)).Font(F_Small())
 						.ColorAndOpacity(FSlateColor(C_White())).AutoWrapText(true)
 					]
 
+					// Row 3: compact diff fallback (blueprints / no context)
+					+ SVerticalBox::Slot().AutoHeight() [ CompactDiff ]
+
+					// Row 4: expanded context preview
 					+ SVerticalBox::Slot().AutoHeight()
 					[
-						// Show diff block if snippet OR fix_suggestion is available
-						SNew(SBorder)
-						.Visibility((Item->Snippet.IsEmpty() && Item->FixSuggestion.IsEmpty())
-							? EVisibility::Collapsed : EVisibility::Visible)
-						.BorderImage(ST4::Solid(C_CodeBG()))
-						.Padding(FMargin(8.f,5.f))
-						[
-							SNew(SVerticalBox)
-							+ SVerticalBox::Slot().AutoHeight()
-							[
-								SNew(SBox)
-								.Visibility(Item->Snippet.IsEmpty()
-									? EVisibility::Collapsed : EVisibility::Visible)
-								[ BuildDiffLine(TEXT("\u25B8"), Item->Snippet, C_Red(), C_DiffRed()) ]
-							]
-							+ SVerticalBox::Slot().AutoHeight().Padding(0.f,3.f,0.f,0.f)
-							[
-								SNew(SBox)
-								.Visibility(Item->FixSuggestion.IsEmpty()
-									? EVisibility::Collapsed : EVisibility::Visible)
-								[ BuildDiffLine(TEXT("\u2192"), Item->FixSuggestion, C_Green(), C_DiffGreen()) ]
-							]
-						]
+						SNew(SBox)
+						.Visibility_Lambda([Item]() {
+							return Item->bPreviewExpanded ? EVisibility::Visible : EVisibility::Collapsed;
+						})
+						[ PreviewSection ]
 					]
 				]
 			]
@@ -822,6 +1002,28 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 		.Font(F_Small()).ColorAndOpacity(FSlateColor(C_DimGray()))
 	];
 
+	TSharedRef<SWidget> AssetTypeCombo =
+		SNew(SComboButton)
+		.ContentPadding(FMargin(8.f, 4.f))
+		.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+		.OnGetMenuContent(this, &SShintToolsPanel::BuildAssetTypeMenuContent)
+		.ButtonContent()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SAssignNew(AssetTypeFilterLabel, STextBlock)
+				.Text(LOCTEXT("ATAll","All Types"))
+				.Font(F_Label())
+				.ColorAndOpacity(FSlateColor(C_Gray()))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
+			[
+				SNew(STextBlock).Text(FText::FromString(TEXT("\u25BE")))
+				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
+			]
+		];
+
 	TSharedRef<SWidget> ListArea =
 		SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f)
@@ -832,6 +1034,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 				SNew(STextBlock).Text(LOCTEXT("ANBRes","RESULTS")).Font(F_Label())
 				.ColorAndOpacity(FSlateColor(C_DimGray()))
 			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f) [ AssetTypeCombo ]
 			+ SHorizontalBox::Slot().AutoWidth()
 			[
 				SNew(SButton).ContentPadding(FMargin(10.f,4.f))
@@ -969,11 +1172,13 @@ FReply SShintToolsPanel::OnCheckConnectionClicked()
 
 FReply SShintToolsPanel::OnScanProjectClicked()
 {
+	++ScanGeneration;
 	SetCodeState(EModuleState::Running);
 	// Reset everything — fresh scan.  Clear visible list and notify Slate
 	// BEFORE emptying backing data, so no stale pointers are accessed.
 	CodeIssueItems.Empty();
 	AllCodeItems.Empty();
+	AppliedFixFingerprints.Empty(); // fresh scan: re-evaluate all issues
 	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
 	LastCodeResult = FShintValidateResult();
 	CoreClient->ValidateProject(FPaths::GameSourceDir(),
@@ -983,6 +1188,7 @@ FReply SShintToolsPanel::OnScanProjectClicked()
 
 FReply SShintToolsPanel::OnScanBlueprintsClicked()
 {
+	++ScanGeneration;
 	SetCodeState(EModuleState::Running);
 	// Merge into existing results (append to source scan)
 	CoreClient->ValidateBlueprints(FPaths::ProjectContentDir(),
@@ -1057,9 +1263,11 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 
 	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Applying %d fix(es) locally."), Accepted.Num());
 
+	PendingCodeFixes = Accepted;
+	const uint32 FixGeneration = ScanGeneration; // snapshot — used to guard async callback
 	SetCodeState(EModuleState::Running);
 	CoreClient->ApplyCodeFixes(Accepted,
-		FOnShintFixComplete::CreateSP(this, &SShintToolsPanel::OnCodeFixComplete));
+		FOnShintFixComplete::CreateSP(this, &SShintToolsPanel::OnCodeFixComplete, FixGeneration));
 	return FReply::Handled();
 }
 
@@ -1070,9 +1278,55 @@ FReply SShintToolsPanel::OnSendCodeToDashboardClicked()
 	return FReply::Handled();
 }
 
+FReply SShintToolsPanel::OnApplySingleFix(FShintIssueItemPtr Item)
+{
+	if (!Item.IsValid() || !Item->bIsAutoFixable || Item->FixSuggestion.IsEmpty())
+		return FReply::Handled();
+
+	TArray<FShintCodeIssue> Issues;
+	FShintCodeIssue I;
+	I.RuleId         = Item->RuleId;
+	I.Severity       = Item->Severity;
+	I.Message        = Item->Message;
+	I.FilePath       = Item->FilePath;
+	I.Line           = Item->Line;
+	I.Snippet        = Item->Snippet;
+	I.FixSuggestion  = Item->FixSuggestion;
+	I.bIsAutoFixable = true;
+	I.Class          = Item->Class;
+	I.Category       = Item->Category;
+	I.Graph          = Item->Graph;
+	I.bChecked       = true;
+	Issues.Add(I);
+
+	PendingCodeFixes = Issues;
+	const uint32 FixGeneration = ScanGeneration;
+	SetCodeState(EModuleState::Running);
+	CoreClient->ApplyCodeFixes(Issues,
+		FOnShintFixComplete::CreateSP(this, &SShintToolsPanel::OnCodeFixComplete, FixGeneration));
+	return FReply::Handled();
+}
+
+FReply SShintToolsPanel::OnIgnoreSingleFix(FShintIssueItemPtr Item)
+{
+	if (!Item.IsValid()) return FReply::Handled();
+
+	// Fingerprint so this issue is skipped on the next incremental scan
+	const FString Fingerprint = FString::Printf(
+		TEXT("%s:%d:%s"), *Item->FilePath, Item->Line, *Item->RuleId);
+	AppliedFixFingerprints.Add(Fingerprint);
+
+	// Remove from backing store and rebuild visible list
+	AllCodeItems.RemoveAll([&Item](const FShintIssueItemPtr& P){ return P == Item; });
+	ApplyCodeFilter();
+	RefreshApplyCodeLabel();
+	return FReply::Handled();
+}
+
 FReply SShintToolsPanel::OnScanAssetsClicked()
 {
 	SetAssetState(EModuleState::Running);
+	AllAssetItems.Empty();
 	AssetIssueItems.Empty();
 	if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
 	CoreClient->ScanAssetNaming(FPaths::ProjectContentDir(),
@@ -1156,7 +1410,48 @@ void SShintToolsPanel::OnProjectValidateComplete(const FShintValidateResult& Res
 
 void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& Result)
 {
-	HandleValidateResult(Result, true);
+	// Separate naming issues (BPB001) → route to Asset Naming panel
+	FShintValidateResult QualityResult;
+	QualityResult.bSuccess       = Result.bSuccess;
+	QualityResult.FilesScanned   = Result.FilesScanned;
+	QualityResult.Issues.Reserve(Result.Issues.Num());
+
+	int32 NamingRouted = 0;
+
+	for (const FShintCodeIssue& Issue : Result.Issues)
+	{
+		if (Issue.RuleId == TEXT("BPB001"))
+		{
+			// Convert to asset naming item and add to backing store
+			FShintAssetItemPtr Item = MakeShared<FShintAssetItem>();
+			Item->AssetPath     = Issue.FilePath;
+			Item->CurrentName   = FPaths::GetBaseFilename(Issue.FilePath);
+			Item->SuggestedName = TEXT("BP_") + Item->CurrentName;
+			Item->Reason        = Issue.Message;
+			Item->AssetType     = TEXT("Blueprint");
+			Item->bChecked      = true;
+			Item->OriginalIndex = AllAssetItems.Num();
+			AllAssetItems.Add(MoveTemp(Item));
+			++NamingRouted;
+		}
+		else
+		{
+			QualityResult.Issues.Add(Issue);
+			if (Issue.Severity == TEXT("error"))   ++QualityResult.TotalErrors;
+			if (Issue.Severity == TEXT("warning")) ++QualityResult.TotalWarnings;
+		}
+	}
+	QualityResult.TotalIssues = QualityResult.Issues.Num();
+
+	// Refresh asset list view if naming items were added
+	if (NamingRouted > 0)
+	{
+		ApplyAssetFilter();
+		RefreshAssetStats();
+	}
+
+	// Quality issues → code validator panel
+	HandleValidateResult(QualityResult, true);
 }
 
 void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, bool bMerge)
@@ -1175,6 +1470,9 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 	else
 	{
 		LastCodeResult = Result;
+		// Bump generation so any in-flight async build check is discarded — its
+		// BUILD001 errors belong to the previous set of files, not this fresh scan.
+		++ScanGeneration;
 	}
 
 	SetCodeState(EModuleState::Done);
@@ -1182,7 +1480,7 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 	RefreshCodeStats();
 }
 
-void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result)
+void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 FixGeneration)
 {
 	SetCodeState(EModuleState::Done);
 
@@ -1192,6 +1490,15 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result)
 			TEXT("ApplyFix: %d fix(es) applied, %d skipped."),
 			Result.TotalFixesApplied, Result.TotalFixesSkipped);
 
+		// Record fingerprints so these issues are suppressed on any future
+		// incremental re-scan within this session.
+		for (const FShintCodeIssue& I : PendingCodeFixes)
+		{
+			AppliedFixFingerprints.Add(
+				FString::Printf(TEXT("%s:%d:%s"), *I.FilePath, I.Line, *I.RuleId));
+		}
+		PendingCodeFixes.Empty();
+
 		// Clear visible list FIRST so Slate never touches stale pointers
 		CodeIssueItems.Reset();
 		if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
@@ -1200,6 +1507,46 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result)
 		AllCodeItems.RemoveAll([](const FShintIssueItemPtr& I) {
 			return I->bChecked && I->bIsAutoFixable && !I->FixSuggestion.IsEmpty();
 		});
+
+		// ── Inject compile errors from the incremental build check ──────────────
+		// Only inject if no new scan has been triggered since the fix was applied.
+		// A changed ScanGeneration means the user already launched a fresh scan
+		// that wiped AllCodeItems — stale BUILD001 items must not be re-added.
+		if (Result.bHasCompileErrors && Result.CompileErrors.Num() > 0
+			&& FixGeneration == ScanGeneration)
+		{
+			UE_LOG(LogShintTools, Warning,
+				TEXT("OnCodeFixComplete: %d compile error(s) injected into panel"),
+				Result.CompileErrors.Num());
+
+			for (const FShintCompileError& CE : Result.CompileErrors)
+			{
+				FShintIssueItemPtr Item = MakeShared<FShintIssueItem>();
+				Item->RuleId         = TEXT("BUILD001");
+				// Compile errors are always critical — they block compilation.
+				// "critical" maps to the Critical filter chip in the panel.
+				Item->Severity       = TEXT("critical");
+				Item->Message        = CE.Code.IsEmpty()
+					? CE.Message
+					: FString::Printf(TEXT("[%s] %s"), *CE.Code, *CE.Message);
+				Item->FilePath       = CE.FilePath;
+				Item->FileName       = CE.FileName;
+				Item->Line           = CE.Line;
+				Item->Snippet        = TEXT("");
+				Item->FixSuggestion  = TEXT("");
+				Item->bIsAutoFixable = false;
+				Item->bChecked       = false;
+				Item->Category       = TEXT("Build");
+				Item->OriginalIndex  = AllCodeItems.Num();
+				AllCodeItems.Add(MoveTemp(Item));
+			}
+		}
+		else if (Result.bHasCompileErrors && FixGeneration != ScanGeneration)
+		{
+			UE_LOG(LogShintTools, Log,
+				TEXT("OnCodeFixComplete: build errors discarded — scan generation changed (fix=%u current=%u)"),
+				FixGeneration, ScanGeneration);
+		}
 
 		// Re-populate visible list with updated data
 		ApplyCodeFilter();
@@ -1249,16 +1596,43 @@ void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
 {
 	if (!Result.bSuccess) { SetAssetState(EModuleState::Error); return; }
 	LastAssetResult = Result;
-	SetAssetState(EModuleState::Done);
 	PopulateAssetIssueList(Result);
 	RefreshAssetStats();
 
-	// Chain: also run BP quality validation so Code Validator panel shows
-	// blueprint issues (graphs, variables, performance, maintainability).
-	// Uses bMerge=true to append to any existing C++ scan results.
-	SetCodeState(EModuleState::Running);
+	// Chain a BP validation pass to pick up BPB001 (naming violations).
+	// Results go ONLY to the asset naming panel — code validator is not touched.
 	CoreClient->ValidateBlueprints(FPaths::ProjectContentDir(),
-		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnBlueprintValidateComplete));
+		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnBlueprintNamingScanComplete));
+}
+
+void SShintToolsPanel::OnBlueprintNamingScanComplete(const FShintValidateResult& Result)
+{
+	// Extract only BPB001 (wrong/missing BP_ prefix) and add to asset panel.
+	// Every other BP issue is silently discarded — code validator stays untouched.
+	int32 NamingRouted = 0;
+	for (const FShintCodeIssue& Issue : Result.Issues)
+	{
+		if (Issue.RuleId != TEXT("BPB001")) continue;
+
+		FShintAssetItemPtr Item = MakeShared<FShintAssetItem>();
+		Item->AssetPath     = Issue.FilePath;
+		Item->CurrentName   = FPaths::GetBaseFilename(Issue.FilePath);
+		Item->SuggestedName = TEXT("BP_") + Item->CurrentName;
+		Item->Reason        = Issue.Message;
+		Item->AssetType     = TEXT("Blueprint");
+		Item->bChecked      = true;
+		Item->OriginalIndex = AllAssetItems.Num();
+		AllAssetItems.Add(MoveTemp(Item));
+		++NamingRouted;
+	}
+
+	SetAssetState(EModuleState::Done);
+
+	if (NamingRouted > 0)
+	{
+		ApplyAssetFilter();
+		RefreshAssetStats();
+	}
 }
 
 void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
@@ -1269,10 +1643,10 @@ void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
 	{
 		UE_LOG(LogShintTools, Log, TEXT("AssetFix: %d asset(s) renamed."), Result.AssetsRenamed);
 
-		// Clear visible list FIRST, then remove from backing data
+		// Clear both backing store and visible list
+		AllAssetItems.Reset();
 		AssetIssueItems.Reset();
 		if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
-		// (AssetIssueItems IS the source, rebuild already happened — no RemoveAll needed)
 		RefreshAssetStats();
 		RefreshApplyAssetLabel();
 	}
@@ -1329,6 +1703,13 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result)
 	for (int32 i = 0; i < Result.Issues.Num(); ++i)
 	{
 		const FShintCodeIssue& Src = Result.Issues[i];
+
+		// Skip issues that were already fixed this session
+		const FString Fingerprint = FString::Printf(
+			TEXT("%s:%d:%s"), *Src.FilePath, Src.Line, *Src.RuleId);
+		if (AppliedFixFingerprints.Contains(Fingerprint))
+			continue;
+
 		FShintIssueItemPtr Item = MakeShared<FShintIssueItem>();
 		Item->RuleId         = Src.RuleId;
 		Item->Severity       = Src.Severity;
@@ -1341,9 +1722,12 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result)
 		Item->bIsAutoFixable = Src.bIsAutoFixable;
 		Item->bChecked       = Src.bIsAutoFixable;
 		Item->OriginalIndex  = i;
-		Item->Class          = Src.Class;
-		Item->Category       = Src.Category;
-		Item->Graph          = Src.Graph;
+		Item->Class            = Src.Class;
+		Item->Category         = Src.Category;
+		Item->Graph            = Src.Graph;
+		Item->ContextBefore    = Src.ContextBefore;
+		Item->ContextAfter     = Src.ContextAfter;
+		Item->ContextLineStart = Src.ContextLineStart;
 		AllCodeItems.Add(MoveTemp(Item));
 	}
 
@@ -1365,12 +1749,15 @@ void SShintToolsPanel::ApplyCodeFilter()
 
 	for (const FShintIssueItemPtr& Item : AllCodeItems)
 	{
+		// Compile errors always show regardless of active filters — they are critical
+		const bool bIsBuildError = (Item->RuleId == TEXT("BUILD001"));
+
 		// ── Fixable filter ────────────────────────────────────────────────────
-		if (CurrentFilter == EIssueFilter::FixableOnly && !Item->bIsAutoFixable)
+		if (!bIsBuildError && CurrentFilter == EIssueFilter::FixableOnly && !Item->bIsAutoFixable)
 			continue;
 
 		// ── Severity filter ───────────────────────────────────────────────────
-		if (CurrentSeverityFilter != EIssueSeverityFilter::All)
+		if (!bIsBuildError && CurrentSeverityFilter != EIssueSeverityFilter::All)
 		{
 			const FString SevLower = Item->Severity.ToLower();
 			bool bSevMatch = false;
@@ -1386,7 +1773,7 @@ void SShintToolsPanel::ApplyCodeFilter()
 		}
 
 		// ── Category filter ───────────────────────────────────────────────────
-		if (CurrentCategoryFilter != EIssueCategoryFilter::All)
+		if (!bIsBuildError && CurrentCategoryFilter != EIssueCategoryFilter::All)
 		{
 			const FString CatLower = Item->Category.ToLower();
 			bool bCatMatch = false;
@@ -1411,10 +1798,48 @@ void SShintToolsPanel::ApplyCodeFilter()
 	if (CodeIssueListView.IsValid()) CodeIssueListView->RequestListRefresh();
 }
 
-void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Result)
+void SShintToolsPanel::ApplyAssetFilter()
 {
 	AssetIssueItems.Reset();
-	AssetIssueItems.Reserve(Result.Issues.Num());
+	AssetIssueItems.Reserve(AllAssetItems.Num());
+
+	for (const FShintAssetItemPtr& Item : AllAssetItems)
+	{
+		if (CurrentAssetTypeFilter != EAssetTypeFilter::All)
+		{
+			const FString TypeLower = Item->AssetType.ToLower();
+			bool bTypeMatch = false;
+			switch (CurrentAssetTypeFilter)
+			{
+			case EAssetTypeFilter::Materials:  bTypeMatch = TypeLower.Contains(TEXT("material"));  break;
+			case EAssetTypeFilter::Textures:   bTypeMatch = TypeLower.Contains(TEXT("texture"));   break;
+			case EAssetTypeFilter::Meshes:     bTypeMatch = TypeLower.Contains(TEXT("mesh"));      break;
+			case EAssetTypeFilter::Blueprints: bTypeMatch = TypeLower.Contains(TEXT("blueprint")); break;
+			case EAssetTypeFilter::VFX:        bTypeMatch = TypeLower.Contains(TEXT("niagara")) || TypeLower.Contains(TEXT("particle")); break;
+			case EAssetTypeFilter::Audio:      bTypeMatch = TypeLower.Contains(TEXT("sound")) || TypeLower.Contains(TEXT("audio")); break;
+			case EAssetTypeFilter::Animations: bTypeMatch = TypeLower.Contains(TEXT("anim"));      break;
+			case EAssetTypeFilter::Data:       bTypeMatch = TypeLower.Contains(TEXT("data")) || TypeLower.Contains(TEXT("table")) || TypeLower.Contains(TEXT("curve")); break;
+			default: bTypeMatch = true; break;
+			}
+			if (!bTypeMatch) continue;
+		}
+		AssetIssueItems.Add(Item);
+	}
+
+	if (AssetIssueListView.IsValid()) AssetIssueListView->RequestListRefresh();
+
+	const bool bHasItems = !AssetIssueItems.IsEmpty();
+	if (AssetEmptyState.IsValid())
+		AssetEmptyState->SetVisibility(bHasItems ? EVisibility::Collapsed : EVisibility::Visible);
+	if (ApplyAssetBtn.IsValid()) ApplyAssetBtn->SetEnabled(bHasItems);
+	if (SendAssetBtn.IsValid())  SendAssetBtn->SetEnabled(!AllAssetItems.IsEmpty());
+	RefreshApplyAssetLabel();
+}
+
+void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Result)
+{
+	AllAssetItems.Reset();
+	AllAssetItems.Reserve(Result.Issues.Num());
 
 	for (int32 i = 0; i < Result.Issues.Num(); ++i)
 	{
@@ -1427,18 +1852,11 @@ void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Resul
 		Item->AssetType    = Src.AssetType;
 		Item->bChecked     = true;
 		Item->OriginalIndex= i;
-		AssetIssueItems.Add(MoveTemp(Item));
+		AllAssetItems.Add(MoveTemp(Item));
 	}
 
-	if (AssetIssueListView.IsValid()) AssetIssueListView->RequestListRefresh();
-
-	if (AssetEmptyState.IsValid())
-		AssetEmptyState->SetVisibility(
-			AssetIssueItems.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed);
-
-	if (ApplyAssetBtn.IsValid()) ApplyAssetBtn->SetEnabled(!AssetIssueItems.IsEmpty());
-	if (SendAssetBtn.IsValid())  SendAssetBtn->SetEnabled(true);
-	RefreshApplyAssetLabel();
+	ApplyAssetFilter();
+	if (SendAssetBtn.IsValid()) SendAssetBtn->SetEnabled(true);
 }
 
 void SShintToolsPanel::RefreshCodeStats()
@@ -1450,8 +1868,10 @@ void SShintToolsPanel::RefreshCodeStats()
 
 void SShintToolsPanel::RefreshAssetStats()
 {
-	if (AssetTotal_Label.IsValid())   AssetTotal_Label->SetText(FText::FromString(FmtN(LastAssetResult.TotalAssets)));
-	if (AssetInvalid_Label.IsValid()) AssetInvalid_Label->SetText(FText::FromString(FmtN(LastAssetResult.InvalidAssets)));
+	// Drive counters from the backing store so stats reflect total, not the filtered view.
+	const int32 Total = AllAssetItems.Num();
+	if (AssetTotal_Label.IsValid())   AssetTotal_Label->SetText(FText::FromString(FmtN(Total)));
+	if (AssetInvalid_Label.IsValid()) AssetInvalid_Label->SetText(FText::FromString(FmtN(Total)));
 	if (AssetTime_Label.IsValid())    AssetTime_Label->SetText(FText::FromString(
 		FString::Printf(TEXT("%.2f"), LastAssetResult.ScanTimeSeconds)));
 }

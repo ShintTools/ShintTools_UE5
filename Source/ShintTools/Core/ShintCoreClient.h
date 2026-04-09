@@ -42,6 +42,11 @@ struct FShintCodeIssue
 	FString Category;         // e.g. "memory", "style", "performance", "blueprint"
 	FString Graph;            // blueprint graph name (empty for C++ issues)
 
+	// Context window for before/after diff preview (populated by server)
+	FString ContextBefore;        // ~5 source lines centred on this issue, newline-separated
+	FString ContextAfter;         // same window with fix_suggestion applied
+	int32   ContextLineStart = 0; // 1-based line number of the first context line
+
 	// Runtime UI state — not sent over wire
 	bool    bChecked         = false;
 };
@@ -70,13 +75,27 @@ struct FShintFixedFile
 	int32   FixesSkipped = 0;
 };
 
+// Compiler error/warning from the post-fix incremental build check.
+struct FShintCompileError
+{
+	FString FilePath;    // absolute path
+	FString FileName;    // cached display name
+	int32   Line     = 0;
+	int32   Column   = 0;
+	FString Code;        // e.g. "C2065"
+	FString Message;
+	FString Severity;    // "error" or "warning"
+};
+
 struct FShintFixResult
 {
 	bool    bSuccess           = false;
 	int32   TotalFixesApplied  = 0;
 	int32   TotalFixesSkipped  = 0;
 	FString ErrorMessage;
-	TArray<FShintFixedFile> FixedFiles;
+	TArray<FShintFixedFile>     FixedFiles;
+	TArray<FShintCompileError>  CompileErrors;  // populated after incremental build check
+	bool    bHasCompileErrors  = false;
 };
 DECLARE_DELEGATE_OneParam(FOnShintFixComplete, const FShintFixResult&);
 
