@@ -763,10 +763,11 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 		LocationStr = FString::Printf(TEXT("%s : %d"), *Item->FileName, Item->Line);
 	}
 
-	const bool bHasContext = !Item->ContextBefore.IsEmpty();
+	const bool bHasContext  = !Item->ContextBefore.IsEmpty();
+	const bool bIsFixable   = Item->bIsAutoFixable && !Item->FixSuggestion.IsEmpty();
 
-	// ── Preview section (built once, visibility driven by bPreviewExpanded) ──
-	TSharedRef<SWidget> PreviewSection = SNullWidget::NullWidget;
+	// ── Context diff panels (shown when Preview is toggled) ──────────────────
+	TSharedRef<SWidget> ContextDiff = SNullWidget::NullWidget;
 	if (bHasContext)
 	{
 		TSharedRef<SWidget> AntesPanelWidget =
@@ -778,53 +779,19 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 			: BuildContextPanel(TEXT("DESPUÉS"), Item->ContextAfter,
 				Item->ContextLineStart, Item->Line, C_DiffGreen());
 
-		// Action buttons — Apply / Ignore (fixable issues only)
-		TSharedRef<SWidget> ActionButtons = SNullWidget::NullWidget;
-		if (Item->bIsAutoFixable)
-		{
-			ActionButtons = SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,6.f,8.f,0.f)
-				[
-					SNew(SButton).ContentPadding(FMargin(12.f, 5.f))
-					.OnClicked(this, &SShintToolsPanel::OnApplySingleFix, Item)
-					[
-						SNew(STextBlock).Text(LOCTEXT("ApplySingle","✓  Aplicar"))
-						.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green()))
-					]
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,6.f,0.f,0.f)
-				[
-					SNew(SButton).ContentPadding(FMargin(12.f, 5.f))
-					.OnClicked(this, &SShintToolsPanel::OnIgnoreSingleFix, Item)
-					[
-						SNew(STextBlock).Text(LOCTEXT("IgnoreSingle","✗  Ignorar"))
-						.Font(F_Small()).ColorAndOpacity(FSlateColor(C_DimGray()))
-					]
-				];
-		}
-
-		PreviewSection =
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+		ContextDiff =
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0.f, 0.f, 4.f, 0.f)
+			[ AntesPanelWidget ]
+			+ SHorizontalBox::Slot().FillWidth(1.f).Padding(4.f, 0.f, 0.f, 0.f).HAlign(HAlign_Fill)
 			[
-				// Side-by-side: ANTES | DESPUÉS (collapses to single column if no after)
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0.f, 0.f, 4.f, 0.f)
-				[ AntesPanelWidget ]
-				+ SHorizontalBox::Slot().FillWidth(1.f)
-				.Padding(4.f, 0.f, 0.f, 0.f)
-				.HAlign(HAlign_Fill)
-				[
-					SNew(SBox)
-					.Visibility(Item->ContextAfter.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
-					[ DespuesPanelWidget ]
-				]
-			]
-			+ SVerticalBox::Slot().AutoHeight()
-			[ ActionButtons ];
+				SNew(SBox)
+				.Visibility(Item->ContextAfter.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+				[ DespuesPanelWidget ]
+			];
 	}
 
-	// Fallback compact diff for issues without context (blueprints, etc.)
+	// ── Compact diff fallback (blueprints / issues without context window) ───
 	TSharedRef<SWidget> CompactDiff = SNew(SBorder)
 		.Visibility((Item->ContextBefore.IsEmpty() && !Item->Snippet.IsEmpty())
 			? EVisibility::Visible : EVisibility::Collapsed)
@@ -923,17 +890,44 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 						.ColorAndOpacity(FSlateColor(C_White())).AutoWrapText(true)
 					]
 
-					// Row 3: compact diff fallback (blueprints / no context)
+					// Row 3: compact diff (no context) OR expanded context diff
 					+ SVerticalBox::Slot().AutoHeight() [ CompactDiff ]
 
-					// Row 4: expanded context preview
-					+ SVerticalBox::Slot().AutoHeight()
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, bHasContext ? 6.f : 0.f, 0.f, 0.f)
 					[
 						SNew(SBox)
 						.Visibility_Lambda([Item]() {
-							return Item->bPreviewExpanded ? EVisibility::Visible : EVisibility::Collapsed;
+							return (Item->bPreviewExpanded && !Item->ContextBefore.IsEmpty())
+								? EVisibility::Visible : EVisibility::Collapsed;
 						})
-						[ PreviewSection ]
+						[ ContextDiff ]
+					]
+
+					// Row 4: Apply / Ignore — always visible for auto-fixable issues
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+					[
+						SNew(SBox).Visibility(bIsFixable ? EVisibility::Visible : EVisibility::Collapsed)
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,8.f,0.f)
+							[
+								SNew(SButton).ContentPadding(FMargin(12.f, 5.f))
+								.OnClicked(this, &SShintToolsPanel::OnApplySingleFix, Item)
+								[
+									SNew(STextBlock).Text(LOCTEXT("ApplySingle","✓  Aplicar"))
+									.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green()))
+								]
+							]
+							+ SHorizontalBox::Slot().AutoWidth()
+							[
+								SNew(SButton).ContentPadding(FMargin(12.f, 5.f))
+								.OnClicked(this, &SShintToolsPanel::OnIgnoreSingleFix, Item)
+								[
+									SNew(STextBlock).Text(LOCTEXT("IgnoreSingle","✗  Ignorar"))
+									.Font(F_Small()).ColorAndOpacity(FSlateColor(C_DimGray()))
+								]
+							]
+						]
 					]
 				]
 			]
