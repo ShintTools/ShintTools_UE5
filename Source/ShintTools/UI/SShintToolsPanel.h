@@ -64,6 +64,9 @@ struct FShintIssueItem
 	FString Category;
 	FString Graph;
 
+	// Full source file content (from server) — for tree-sitter AST fix validation
+	FString FileContent;
+
 	// Before/after diff context (from server)
 	FString ContextBefore;
 	FString ContextAfter;

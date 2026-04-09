@@ -1233,6 +1233,7 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 		I.Class          = Item->Class;
 		I.Category       = Item->Category;
 		I.Graph          = Item->Graph;
+		I.FileContent    = Item->FileContent;
 		I.bChecked       = true;
 		Accepted.Add(I);
 	}
@@ -1290,6 +1291,7 @@ FReply SShintToolsPanel::OnApplySingleFix(FShintIssueItemPtr Item)
 	I.Class          = Item->Class;
 	I.Category       = Item->Category;
 	I.Graph          = Item->Graph;
+	I.FileContent    = Item->FileContent;
 	I.bChecked       = true;
 	Issues.Add(I);
 
@@ -1719,6 +1721,7 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result)
 		Item->Class            = Src.Class;
 		Item->Category         = Src.Category;
 		Item->Graph            = Src.Graph;
+		Item->FileContent      = Src.FileContent;
 		Item->ContextBefore    = Src.ContextBefore;
 		Item->ContextAfter     = Src.ContextAfter;
 		Item->ContextLineStart = Src.ContextLineStart;

@@ -1251,6 +1251,7 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 			(*O)->TryGetStringField(TEXT("class"),               Issue.Class);
 			(*O)->TryGetStringField(TEXT("category"),            Issue.Category);
 			(*O)->TryGetStringField(TEXT("graph"),               Issue.Graph);
+			(*O)->TryGetStringField(TEXT("content"),             Issue.FileContent);
 			(*O)->TryGetStringField(TEXT("context_before"),      Issue.ContextBefore);
 			(*O)->TryGetStringField(TEXT("context_after"),       Issue.ContextAfter);
 			int32 CtxStart = 0;

@@ -42,6 +42,10 @@ struct FShintCodeIssue
 	FString Category;         // e.g. "memory", "style", "performance", "blueprint"
 	FString Graph;            // blueprint graph name (empty for C++ issues)
 
+	// Full source file content — used by the tree-sitter fix validator to verify
+	// that an applied change does not break the AST without re-reading from disk.
+	FString FileContent;
+
 	// Context window for before/after diff preview (populated by server)
 	FString ContextBefore;        // ~5 source lines centred on this issue, newline-separated
 	FString ContextAfter;         // same window with fix_suggestion applied
