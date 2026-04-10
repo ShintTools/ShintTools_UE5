@@ -770,9 +770,14 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 		&& (!Item->FixSuggestion.IsEmpty() || !Item->FileContent.IsEmpty());
 
 	// ── Context diff panels (shown when Preview is toggled) ──────────────────
-	// AFTER panel priority: FixPreviewCode (tree-sitter) > ContextAfter (local fallback)
-	const FString& AfterText = !Item->FixPreviewCode.IsEmpty()
-		? Item->FixPreviewCode : Item->ContextAfter;
+	// Tree-sitter issues (have FileContent): AFTER must only show FixPreviewCode from /validate/fix.
+	// Never fall back to ContextAfter for these — ContextAfter substitutes fix_suggestion text
+	// (a human-readable description) which is not valid code.
+	// Local issues (no FileContent): ContextAfter substitutes the actual replacement code, safe to show.
+	const bool    bIsTreeSitter  = !Item->FileContent.IsEmpty();
+	const FString& AfterText     = !Item->FixPreviewCode.IsEmpty()
+		? Item->FixPreviewCode
+		: (bIsTreeSitter ? FString() : Item->ContextAfter);
 	const bool bAfterAvailable = !AfterText.IsEmpty();
 	const bool bAfterLoading   = Item->bFixPreviewLoading;
 
@@ -1363,14 +1368,14 @@ void SShintToolsPanel::FetchFixPreview(FShintIssueItemPtr Item)
 	Item->ContextBefore.ParseIntoArray(BeforeLines, TEXT("\n"), false);
 	const int32 NumContextLines = FMath::Max(1, BeforeLines.Num());
 
-	TWeakPtr<SShintToolsPanel> WeakThis = SharedThis(this);
+	TWeakPtr<SShintToolsPanel> WeakPtr = SharedThis(this);
 	TWeakPtr<FShintIssueItem>  WeakItem = Item;
 
 	CoreClient->FetchSingleFixPreview(Issue,
 		FOnShintFixComplete::CreateLambda(
-			[WeakThis, WeakItem, ContextStart, NumContextLines](const FShintFixResult& Result) mutable
+			[WeakPtr, WeakItem, ContextStart, NumContextLines](const FShintFixResult& Result) mutable
 		{
-			TSharedPtr<SShintToolsPanel> PinnedPanel = WeakThis.Pin();
+			TSharedPtr<SShintToolsPanel> PinnedPanel = WeakPtr.Pin();
 			TSharedPtr<FShintIssueItem>  PinnedItem  = WeakItem.Pin();
 			if (!PinnedPanel.IsValid() || !PinnedItem.IsValid()) return;
 
