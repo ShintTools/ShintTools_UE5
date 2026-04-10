@@ -1427,9 +1427,22 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 			int32 CtxStart = 0;
 			(*O)->TryGetNumberField(TEXT("context_line_start"),  CtxStart);
 			Issue.ContextLineStart = CtxStart;
-			// Derive auto-fixable from fix_suggestion only — ignore server's is_auto_fixable.
-			// Plugin applies fixes locally by line number, so only fix_suggestion matters.
-			Issue.bIsAutoFixable = !Issue.FixSuggestion.IsEmpty();
+
+			// If the server did not echo back the file content (validate endpoint does not
+			// inject it), read it from disk so FetchFixPreview can call /validate/fix.
+			if (Issue.FileContent.IsEmpty()
+				&& !Issue.FilePath.IsEmpty()
+				&& !Issue.FilePath.StartsWith(TEXT("/Game/"))
+				&& !Issue.FilePath.StartsWith(TEXT("/Engine/")))
+			{
+				FFileHelper::LoadFileToString(Issue.FileContent, *Issue.FilePath);
+			}
+
+			// Respect server's is_auto_fixable flag (tree-sitter rules set it from RULE_TO_PATTERN).
+			// Also treat any issue with a fix_suggestion as auto-fixable.
+			bool bServerFixable = false;
+			(*O)->TryGetBoolField(TEXT("is_auto_fixable"), bServerFixable);
+			Issue.bIsAutoFixable = bServerFixable || !Issue.FixSuggestion.IsEmpty();
 			Issue.bChecked = Issue.bIsAutoFixable;
 			R.Issues.Add(MoveTemp(Issue));
 		}
