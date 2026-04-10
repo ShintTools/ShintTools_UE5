@@ -55,3 +55,18 @@
 - `FetchFixPreview` calls `FetchSingleFixPreview` (preview-only, no disk write), receives `fixed_code`, extracts the same ±2-line context window at `ContextLineStart`, and stores it in `FixPreviewCode` on the issue item.
 - While the request is in-flight, the AFTER panel shows "Fetching preview…". On completion the list refreshes and shows the real diff.
 - `bIsFixable` and `bHasContext` now also consider `FileContent` presence, so tree-sitter issues correctly show the Preview toggle and Apply/Ignore buttons even when `fix_suggestion` or `context_before` are absent.
+
+---
+
+## [Unreleased] — 2026-04-10 (b)
+
+### Bug Fixes
+
+#### Server — fixer correctness
+- **`context_after` now contains real C++ code**: server runs the actual tree-sitter/pattern fixer at scan time and extracts the fixed line window. Previously it substituted `fix_suggestion` description text as code (e.g. "Add null-check for Cast result" appeared as a line of code). Multi-line fixes (+4 line headroom) are shown fully.
+- **CB023 `add_override`**: replaced optional-group backreference `\1` with two explicit regex branches (const / non-const) — eliminated malformed `const override` concatenation.
+- **CB008 `add_suffix`**: float suffix now applied only to the code portion of a line (before `//`); pure comment lines are skipped entirely; scientific notation (`1.0e5`) excluded via `(?![fe\d])`.
+
+#### Plugin — AFTER preview panel
+- Removed `bIsTreeSitter` restriction on `ContextAfter`: since the server now always sends real fixed code in `context_after`, it is safe to display for all issue types without waiting for a secondary HTTP call.
+- `FetchFixPreview` (HTTP fallback) still fires on Preview toggle but only when `ContextAfter` is also empty, avoiding redundant requests.

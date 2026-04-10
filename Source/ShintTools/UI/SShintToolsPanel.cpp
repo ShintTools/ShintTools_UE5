@@ -770,14 +770,13 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 		&& (!Item->FixSuggestion.IsEmpty() || !Item->FileContent.IsEmpty());
 
 	// ── Context diff panels (shown when Preview is toggled) ──────────────────
-	// Tree-sitter issues (have FileContent): AFTER must only show FixPreviewCode from /validate/fix.
-	// Never fall back to ContextAfter for these — ContextAfter substitutes fix_suggestion text
-	// (a human-readable description) which is not valid code.
-	// Local issues (no FileContent): ContextAfter substitutes the actual replacement code, safe to show.
-	const bool    bIsTreeSitter  = !Item->FileContent.IsEmpty();
-	const FString& AfterText     = !Item->FixPreviewCode.IsEmpty()
+	// Priority: FixPreviewCode (fetched on-demand from /validate/fix) >
+	//           ContextAfter  (pre-computed by server fixer during scan — real code).
+	// ContextAfter is now always actual fixed code from the tree-sitter/pattern fixer,
+	// never a human-readable description, so it is safe to display for all issue types.
+	const FString& AfterText = !Item->FixPreviewCode.IsEmpty()
 		? Item->FixPreviewCode
-		: (bIsTreeSitter ? FString() : Item->ContextAfter);
+		: Item->ContextAfter;
 	const bool bAfterAvailable = !AfterText.IsEmpty();
 	const bool bAfterLoading   = Item->bFixPreviewLoading;
 
@@ -884,9 +883,11 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 								.ButtonColorAndOpacity(FSlateColor(C_Surface()))
 								.OnClicked_Lambda([this, Item]() -> FReply {
 									Item->bPreviewExpanded = !Item->bPreviewExpanded;
-									// For tree-sitter issues, fetch real fixed_code on first expand
+									// Fetch on-demand only when ContextAfter is also empty
+									// (server could not run the fixer at scan time).
 									if (Item->bPreviewExpanded
 										&& !Item->FileContent.IsEmpty()
+										&& Item->ContextAfter.IsEmpty()
 										&& Item->FixPreviewCode.IsEmpty()
 										&& !Item->bFixPreviewLoading)
 									{
