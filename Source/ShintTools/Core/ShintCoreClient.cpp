@@ -500,13 +500,12 @@ void FShintCoreClient::ValidateBlueprints(
 void FShintCoreClient::ApplyCodeFixes(
 	const TArray<FShintCodeIssue>& AcceptedIssues, FOnShintFixComplete OnComplete)
 {
-	// Apply fixes LOCALLY — replace snippet lines with fix_suggestion in source files.
-	// No server call needed: the scan already gave us snippet + fix_suggestion.
-
-	// Group issues: C++ by file path, BP issues handled separately
-	TMap<FString, TArray<const FShintCodeIssue*>> ByFile;
+	// ── Triage issues into: tree-sitter (has content), local (no content), BP ─
+	TArray<FShintCodeIssue> TreeSitterIssues;
+	TArray<FShintCodeIssue> LocalIssues;
 	TArray<const FShintCodeIssue*> BPIssues;
 	int32 SkippedNoFix = 0;
+
 	for (const FShintCodeIssue& Issue : AcceptedIssues)
 	{
 		if (Issue.FilePath.IsEmpty()) continue;
@@ -515,20 +514,21 @@ void FShintCoreClient::ApplyCodeFixes(
 			BPIssues.Add(&Issue);
 			continue;
 		}
-		if (Issue.FixSuggestion.IsEmpty())
+		if (!Issue.FileContent.IsEmpty())
+		{
+			TreeSitterIssues.Add(Issue);
+		}
+		else if (!Issue.FixSuggestion.IsEmpty())
+		{
+			LocalIssues.Add(Issue);
+		}
+		else
 		{
 			UE_LOG(LogShintTools, Warning,
-				TEXT("ApplyFix: No fix_suggestion for [%s] line %d in %s — skipping"),
+				TEXT("ApplyFix: No content or fix_suggestion for [%s] line %d in %s — skipping"),
 				*Issue.RuleId, Issue.Line, *Issue.FilePath);
 			++SkippedNoFix;
-			continue;
 		}
-		ByFile.FindOrAdd(Issue.FilePath).Add(&Issue);
-	}
-	if (SkippedNoFix > 0)
-	{
-		UE_LOG(LogShintTools, Log,
-			TEXT("ApplyFix: %d issue(s) have no fix_suggestion (server did not provide one)"), SkippedNoFix);
 	}
 
 	// ── Apply Blueprint fixes programmatically ────────────────────────────────
@@ -538,7 +538,6 @@ void FShintCoreClient::ApplyCodeFixes(
 	{
 		if (Issue->RuleId == TEXT("BPP001"))
 		{
-			// Disable tick on the Blueprint CDO
 			UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *Issue->FilePath);
 			if (BP && BP->GeneratedClass)
 			{
@@ -560,149 +559,101 @@ void FShintCoreClient::ApplyCodeFixes(
 		}
 		else
 		{
-			UE_LOG(LogShintTools, Log,
-				TEXT("ApplyFix: BP rule [%s] on '%s' — no programmatic fix available"),
-				*Issue->RuleId, *Issue->FilePath);
 			++BPSkipped;
 		}
 	}
 
-	if (BPApplied > 0 || BPSkipped > 0)
-	{
-		UE_LOG(LogShintTools, Log,
-			TEXT("ApplyFix: BP fixes — %d applied, %d skipped"), BPApplied, BPSkipped);
-	}
-
-	if (ByFile.IsEmpty() && BPApplied == 0)
-	{
-		FShintFixResult Empty;
-		Empty.bSuccess            = true;
-		Empty.TotalFixesApplied   = BPApplied;
-		Empty.TotalFixesSkipped   = BPSkipped + SkippedNoFix;
-		OnComplete.ExecuteIfBound(Empty);
-		return;
-	}
-
+	// ── Apply local fixes (fallback: no FileContent) ─────────────────────────
 	FShintFixResult Result;
 	Result.bSuccess = true;
 
-	for (auto& Pair : ByFile)
+	if (!LocalIssues.IsEmpty())
 	{
-		const FString& AbsPath = Pair.Key;
-		const TArray<const FShintCodeIssue*>& Issues = Pair.Value;
+		TMap<FString, TArray<const FShintCodeIssue*>> ByFile;
+		for (const FShintCodeIssue& Issue : LocalIssues)
+			ByFile.FindOrAdd(Issue.FilePath).Add(&Issue);
 
-		FString Content;
-		if (!FFileHelper::LoadFileToString(Content, *AbsPath))
+		for (auto& Pair : ByFile)
 		{
-			UE_LOG(LogShintTools, Error, TEXT("ApplyFix: Cannot read file: %s"), *AbsPath);
-			Result.TotalFixesSkipped += Issues.Num();
-			continue;
-		}
+			const FString& AbsPath = Pair.Key;
+			const TArray<const FShintCodeIssue*>& Issues = Pair.Value;
 
-		// Split into lines, apply fixes by line number (1-based), then reassemble.
-		// Process from highest line number to lowest so indices stay valid.
-		TArray<FString> Lines;
-		Content.ParseIntoArray(Lines, TEXT("\n"), false);
-
-		// Sort issues by line descending to avoid index shifting
-		TArray<const FShintCodeIssue*> Sorted = Issues;
-		Sorted.Sort([](const FShintCodeIssue& A, const FShintCodeIssue& B) {
-			return A.Line > B.Line;
-		});
-
-		int32 Applied = 0;
-		int32 Skipped = 0;
-
-		for (const FShintCodeIssue* Issue : Sorted)
-		{
-			const int32 Idx = Issue->Line - 1; // 0-based
-
-			if (Idx < 0 || Idx >= Lines.Num())
+			FString Content;
+			if (!FFileHelper::LoadFileToString(Content, *AbsPath))
 			{
-				UE_LOG(LogShintTools, Warning,
-					TEXT("ApplyFix: Line %d out of range (%d lines) in %s [%s]"),
-					Issue->Line, Lines.Num(), *AbsPath, *Issue->RuleId);
-				++Skipped;
+				Result.TotalFixesSkipped += Issues.Num();
 				continue;
 			}
 
-			const FString& CurrentLine = Lines[Idx];
-			const FString TrimmedCurrent = CurrentLine.TrimStartAndEnd();
-			const FString TrimmedSnippet = Issue->Snippet.TrimStartAndEnd();
+			TArray<FString> Lines;
+			Content.ParseIntoArray(Lines, TEXT("\n"), false);
 
-			// Warn on mismatch but DO NOT skip — apply by line number anyway.
-			// Snippet may differ due to \r\n endings or minor server formatting.
-			if (!TrimmedSnippet.IsEmpty() && !TrimmedCurrent.Contains(TrimmedSnippet))
+			TArray<const FShintCodeIssue*> Sorted = Issues;
+			Sorted.Sort([](const FShintCodeIssue& A, const FShintCodeIssue& B) { return A.Line > B.Line; });
+
+			int32 Applied = 0, Skipped = 0;
+			for (const FShintCodeIssue* Issue : Sorted)
 			{
-				UE_LOG(LogShintTools, Warning,
-					TEXT("ApplyFix: [%s] line %d snippet mismatch (applying anyway). Expected='%s' Got='%s'"),
-					*Issue->RuleId, Issue->Line, *TrimmedSnippet, *TrimmedCurrent);
+				const int32 Idx = Issue->Line - 1;
+				if (Idx < 0 || Idx >= Lines.Num()) { ++Skipped; continue; }
+
+				FString Leading;
+				for (TCHAR Ch : Lines[Idx]) { if (Ch == ' ' || Ch == '\t') Leading.AppendChar(Ch); else break; }
+
+				Lines[Idx] = Leading + Issue->FixSuggestion.TrimStartAndEnd();
+				++Applied;
 			}
 
-			// Preserve leading whitespace from the original line
-			FString Leading;
-			for (int32 c = 0; c < CurrentLine.Len(); ++c)
+			if (Applied > 0)
 			{
-				const TCHAR Ch = CurrentLine[c];
-				if (Ch == TEXT(' ') || Ch == TEXT('\t'))
-					Leading.AppendChar(Ch);
-				else
-					break;
+				const FString NewContent = FString::Join(Lines, TEXT("\n"));
+				if (FFileHelper::SaveStringToFile(NewContent, *AbsPath,
+					FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+				{
+					FShintFixedFile FF;
+					FF.FilePath = AbsPath; FF.CorrectedContent = NewContent;
+					FF.FixesApplied = Applied; FF.FixesSkipped = Skipped;
+					Result.FixedFiles.Add(MoveTemp(FF));
+				}
 			}
-
-			// Replace the line with fix_suggestion (preserving indentation)
-			const FString FixTrimmed = Issue->FixSuggestion.TrimStartAndEnd();
-			Lines[Idx] = Leading + FixTrimmed;
-
-			UE_LOG(LogShintTools, Log,
-				TEXT("ApplyFix: [%s] line %d: '%s' -> '%s'"),
-				*Issue->RuleId, Issue->Line, *TrimmedCurrent, *FixTrimmed);
-			++Applied;
+			Result.TotalFixesApplied += Applied;
+			Result.TotalFixesSkipped += Skipped;
 		}
-
-		if (Applied > 0)
-		{
-			// Reassemble and write back
-			const FString NewContent = FString::Join(Lines, TEXT("\n"));
-			if (FFileHelper::SaveStringToFile(NewContent, *AbsPath,
-				FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
-			{
-				UE_LOG(LogShintTools, Log,
-					TEXT("ApplyFix: Wrote %d fix(es) to %s"), Applied, *AbsPath);
-
-				FShintFixedFile FF;
-				FF.FilePath         = AbsPath;
-				FF.CorrectedContent = NewContent;
-				FF.FixesApplied     = Applied;
-				FF.FixesSkipped     = Skipped;
-				Result.FixedFiles.Add(MoveTemp(FF));
-			}
-			else
-			{
-				UE_LOG(LogShintTools, Error, TEXT("ApplyFix: Failed to write: %s"), *AbsPath);
-				Result.bSuccess = false;
-				Result.ErrorMessage += FString::Printf(TEXT("Write failed: %s\n"), *AbsPath);
-				Skipped += Applied;
-				Applied = 0;
-			}
-		}
-
-		Result.TotalFixesApplied += Applied;
-		Result.TotalFixesSkipped += Skipped;
 	}
 
-	// Include BP fix counts in the final result
 	Result.TotalFixesApplied += BPApplied;
-	Result.TotalFixesSkipped += BPSkipped;
+	Result.TotalFixesSkipped += BPSkipped + SkippedNoFix;
 
-	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Done — %d applied, %d skipped across %d file(s) + BP fixes"),
-		Result.TotalFixesApplied, Result.TotalFixesSkipped, Result.FixedFiles.Num());
+	// ── If we have tree-sitter issues, send to /validate/fix async ───────────
+	if (!TreeSitterIssues.IsEmpty())
+	{
+		TArray<TSharedPtr<FJsonValue>> IssuesArr;
+		for (const FShintCodeIssue& Issue : TreeSitterIssues)
+		{
+			TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
+			O->SetStringField(TEXT("rule_id"),   Issue.RuleId);
+			O->SetStringField(TEXT("file_path"), Issue.FilePath);
+			O->SetNumberField(TEXT("line"),      Issue.Line);
+			O->SetStringField(TEXT("content"),   Issue.FileContent);
+			IssuesArr.Add(MakeShared<FJsonValueObject>(O));
+		}
+		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+		Body->SetArrayField(TEXT("issues"), IssuesArr);
 
-	// ── Incremental compile check ────────────────────────────────────────────
-	// Only run when C++ files were actually modified on disk.
-	// We use the same UBT invocation as the PostToolUse hook but here we capture
-	// stdout/stderr to surface compiler errors back into the panel UI.
-	// The check runs on a background thread so we never block the game thread.
+		UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Sending %d issue(s) to tree-sitter /validate/fix"),
+			TreeSitterIssues.Num());
+
+		SendRequest(Config.GetBaseUrl() + TEXT("/validate/fix"),
+			EShintHttpMethod::POST, SerializeJson(Body),
+			FOnShintRequestComplete::CreateSP(this, &FShintCoreClient::HandleTreeSitterFixResponse,
+				Result, TreeSitterIssues, OnComplete));
+		return; // callback chain continues in HandleTreeSitterFixResponse
+	}
+
+	// ── No tree-sitter issues — continue with local result ───────────────────
+	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Done (local) — %d applied, %d skipped"),
+		Result.TotalFixesApplied, Result.TotalFixesSkipped);
+
 	if (Result.FixedFiles.Num() > 0)
 	{
 		const FString BuildBat = FPaths::ConvertRelativePathToFull(
@@ -716,29 +667,6 @@ void FShintCoreClient::ApplyCodeFixes(
 
 		UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Launching incremental build check: %s %s"),
 			*BuildBat, *BuildArgs);
-
-		// Report applied fixes to server for dashboard tracking (fire-and-forget)
-		if (Result.TotalFixesApplied > 0)
-		{
-			TArray<TSharedPtr<FJsonValue>> IssuesArr;
-			for (const FShintCodeIssue& Issue : AcceptedIssues)
-			{
-				TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
-				O->SetStringField(TEXT("rule_id"),   Issue.RuleId);
-				O->SetStringField(TEXT("severity"),  Issue.Severity);
-				O->SetStringField(TEXT("file_path"), Issue.FilePath);
-				O->SetNumberField(TEXT("line"),      Issue.Line);
-				O->SetStringField(TEXT("message"),   Issue.Message);
-				IssuesArr.Add(MakeShared<FJsonValueObject>(O));
-			}
-			TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-			Body->SetArrayField(TEXT("issues"), IssuesArr);
-			SendRequest(Config.GetBaseUrl() + TEXT("/validate/fix"),
-				EShintHttpMethod::POST, SerializeJson(Body),
-				FOnShintRequestComplete::CreateLambda([](const FShintRequestResult& R) {
-					UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Server notified (code=%d)"), R.StatusCode);
-				}));
-		}
 
 		Async(EAsyncExecution::Thread, [BuildBat, BuildArgs, Result, OnComplete]() mutable
 		{
@@ -865,32 +793,237 @@ void FShintCoreClient::ApplyCodeFixes(
 	}
 
 	// ── No C++ files modified — fire immediately ─────────────────────────────
+	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Done (no C++ files) — %d applied, %d skipped"),
+		Result.TotalFixesApplied, Result.TotalFixesSkipped);
+	OnComplete.ExecuteIfBound(Result);
+}
 
-	// Report applied fixes to server for dashboard tracking (fire-and-forget)
-	if (Result.TotalFixesApplied > 0)
+// ─────────────────────────────────────────────────────────────────────────────
+// Tree-sitter fix response — parse + write to disk + incremental build
+// ─────────────────────────────────────────────────────────────────────────────
+
+FShintFixResult FShintCoreClient::ParseTreeSitterFixResponse(const FShintRequestResult& Raw)
+{
+	FShintFixResult Result;
+	Result.bSuccess = Raw.bSuccess;
+
+	if (!Raw.bSuccess)
 	{
-		TArray<TSharedPtr<FJsonValue>> IssuesArr;
-		for (const FShintCodeIssue& Issue : AcceptedIssues)
-		{
-			TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
-			O->SetStringField(TEXT("rule_id"),   Issue.RuleId);
-			O->SetStringField(TEXT("severity"),  Issue.Severity);
-			O->SetStringField(TEXT("file_path"), Issue.FilePath);
-			O->SetNumberField(TEXT("line"),      Issue.Line);
-			O->SetStringField(TEXT("message"),   Issue.Message);
-			IssuesArr.Add(MakeShared<FJsonValueObject>(O));
-		}
-		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-		Body->SetArrayField(TEXT("issues"), IssuesArr);
-
-		SendRequest(Config.GetBaseUrl() + TEXT("/validate/fix"),
-			EShintHttpMethod::POST, SerializeJson(Body),
-			FOnShintRequestComplete::CreateLambda([](const FShintRequestResult& R) {
-				UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Server notified (code=%d)"), R.StatusCode);
-			}));
+		Result.ErrorMessage = Raw.ErrorMessage;
+		return Result;
 	}
 
-	OnComplete.ExecuteIfBound(Result);
+	TSharedPtr<FJsonObject> Root;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Raw.ResponseBody);
+	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+	{
+		Result.bSuccess     = false;
+		Result.ErrorMessage = TEXT("ParseTreeSitterFixResponse: invalid JSON");
+		return Result;
+	}
+
+	// summary
+	const TSharedPtr<FJsonObject>* SummaryObj = nullptr;
+	if (Root->TryGetObjectField(TEXT("summary"), SummaryObj) && SummaryObj)
+	{
+		(*SummaryObj)->TryGetNumberField(TEXT("successful"), Result.TotalFixesApplied);
+		(*SummaryObj)->TryGetNumberField(TEXT("failed"),     Result.TotalFixesSkipped);
+	}
+
+	// fixes array
+	const TArray<TSharedPtr<FJsonValue>>* FixesArr = nullptr;
+	if (!Root->TryGetArrayField(TEXT("fixes"), FixesArr) || !FixesArr) return Result;
+
+	for (const TSharedPtr<FJsonValue>& FixVal : *FixesArr)
+	{
+		const TSharedPtr<FJsonObject>* FixObjPtr = nullptr;
+		if (!FixVal->TryGetObject(FixObjPtr) || !FixObjPtr) continue;
+		const TSharedPtr<FJsonObject>& Fix = *FixObjPtr;
+
+		bool bOk = false;
+		Fix->TryGetBoolField(TEXT("success"), bOk);
+		if (!bOk) continue;
+
+		FShintFixedFile FF;
+		FF.FixesApplied = 1;
+		FF.FixesSkipped = 0;
+		Fix->TryGetStringField(TEXT("file_path"),  FF.FilePath);
+		Fix->TryGetStringField(TEXT("fixed_code"), FF.CorrectedContent);
+		Fix->TryGetStringField(TEXT("additions"),  FF.Additions);
+
+		const TArray<TSharedPtr<FJsonValue>>* ChangesArr = nullptr;
+		if (Fix->TryGetArrayField(TEXT("changes"), ChangesArr) && ChangesArr)
+		{
+			for (const TSharedPtr<FJsonValue>& C : *ChangesArr)
+				FF.Changes.Add(C->AsString());
+		}
+
+		if (!FF.FilePath.IsEmpty() && !FF.CorrectedContent.IsEmpty())
+			Result.FixedFiles.Add(MoveTemp(FF));
+	}
+
+	return Result;
+}
+
+void FShintCoreClient::HandleTreeSitterFixResponse(
+	const FShintRequestResult& Raw,
+	FShintFixResult             LocalResult,
+	TArray<FShintCodeIssue>     TreeSitterIssues,
+	FOnShintFixComplete         OnComplete)
+{
+	FShintFixResult TSResult = ParseTreeSitterFixResponse(Raw);
+
+	if (!TSResult.bSuccess)
+	{
+		UE_LOG(LogShintTools, Warning,
+			TEXT("HandleTreeSitterFixResponse: server error — %s"), *TSResult.ErrorMessage);
+		// Fall through with whatever local fixes we already applied
+	}
+	else
+	{
+		// Write each fixed file to disk
+		for (const FShintFixedFile& FF : TSResult.FixedFiles)
+		{
+			if (FF.CorrectedContent.IsEmpty()) continue;
+			if (!FFileHelper::SaveStringToFile(FF.CorrectedContent, *FF.FilePath,
+				FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+			{
+				UE_LOG(LogShintTools, Warning,
+					TEXT("HandleTreeSitterFixResponse: failed to write '%s'"), *FF.FilePath);
+			}
+			else
+			{
+				UE_LOG(LogShintTools, Log,
+					TEXT("HandleTreeSitterFixResponse: wrote fixed file '%s'"), *FF.FilePath);
+			}
+		}
+	}
+
+	// Merge tree-sitter result into local result
+	LocalResult.FixedFiles.Append(TSResult.FixedFiles);
+	LocalResult.TotalFixesApplied += TSResult.TotalFixesApplied;
+	LocalResult.TotalFixesSkipped += TSResult.TotalFixesSkipped;
+	if (!TSResult.bSuccess && LocalResult.bSuccess)
+	{
+		// Partial success: TS path failed but local fixes may have landed
+		LocalResult.ErrorMessage = TSResult.ErrorMessage;
+	}
+
+	UE_LOG(LogShintTools, Log,
+		TEXT("HandleTreeSitterFixResponse: merged — %d applied, %d skipped, %d fixed files"),
+		LocalResult.TotalFixesApplied, LocalResult.TotalFixesSkipped, LocalResult.FixedFiles.Num());
+
+	// Run incremental build check if any C++ files were modified
+	if (LocalResult.FixedFiles.Num() > 0)
+	{
+		const FString BuildBat = FPaths::ConvertRelativePathToFull(
+			FPaths::EngineDir() / TEXT("Build/BatchFiles/Build.bat"));
+		const FString UProjectPath = FPaths::ConvertRelativePathToFull(
+			FPaths::GetProjectFilePath());
+		const FString TargetName = FString(FApp::GetProjectName()) + TEXT("Editor");
+		const FString BuildArgs  = FString::Printf(
+			TEXT("%s Win64 Development -project=\"%s\" -NoHotReloadFromIDE"),
+			*TargetName, *UProjectPath);
+
+		UE_LOG(LogShintTools, Log, TEXT("HandleTreeSitterFixResponse: launching incremental build: %s %s"),
+			*BuildBat, *BuildArgs);
+
+		Async(EAsyncExecution::Thread, [BuildBat, BuildArgs, LocalResult, OnComplete]() mutable
+		{
+			FString StdOut, StdErr;
+			int32   ExitCode = 0;
+			FPlatformProcess::ExecProcess(
+				*BuildBat, *BuildArgs, &ExitCode, &StdOut, &StdErr,
+				/*WorkingDir=*/nullptr, /*bShouldEndWithParentProcess=*/false);
+
+			const FString FullOutput = StdOut + StdErr;
+
+			if (ExitCode != 0)
+			{
+				LocalResult.bHasCompileErrors = true;
+
+				TArray<FString> OutputLines;
+				FullOutput.ParseIntoArrayLines(OutputLines);
+
+				for (const FString& OutLine : OutputLines)
+				{
+					int32 ParenClose = INDEX_NONE;
+					int32 ParenOpen  = INDEX_NONE;
+					if (!OutLine.FindLastChar(TEXT(')'), ParenClose)) continue;
+					for (int32 c = ParenClose - 1; c >= 0; --c)
+					{
+						if (OutLine[c] == TEXT('(')) { ParenOpen = c; break; }
+					}
+					if (ParenOpen == INDEX_NONE) continue;
+
+					const FString MaybeFile = OutLine.Left(ParenOpen);
+					const FString MaybeLine = OutLine.Mid(ParenOpen + 1, ParenClose - ParenOpen - 1);
+					if (!MaybeLine.IsNumeric()) continue;
+
+					const FString Ext = FPaths::GetExtension(MaybeFile).ToLower();
+					if (Ext != TEXT("cpp") && Ext != TEXT("h") && Ext != TEXT("cc") && Ext != TEXT("hpp"))
+						continue;
+
+					FString Severity;
+					int32 SevStart = OutLine.Find(TEXT("): error "),   ESearchCase::IgnoreCase, ESearchDir::FromStart, ParenClose);
+					if (SevStart != INDEX_NONE) Severity = TEXT("error");
+					else
+					{
+						SevStart = OutLine.Find(TEXT("): warning "), ESearchCase::IgnoreCase, ESearchDir::FromStart, ParenClose);
+						if (SevStart != INDEX_NONE) Severity = TEXT("warning");
+					}
+
+					const int32 AfterParen = ParenClose + 1;
+					FString Rest = OutLine.Mid(AfterParen).TrimStart();
+					FString Code, Message;
+					int32 ColonIdx = INDEX_NONE;
+					if (Rest.FindChar(TEXT(':'), ColonIdx))
+					{
+						const int32 SpaceIdx = Rest.Find(TEXT(" "), ESearchCase::IgnoreCase, ESearchDir::FromStart, 0);
+						if (SpaceIdx != INDEX_NONE && SpaceIdx < ColonIdx)
+						{
+							Code    = Rest.Mid(SpaceIdx + 1, ColonIdx - SpaceIdx - 1).TrimStartAndEnd();
+							Message = Rest.Mid(ColonIdx + 1).TrimStart();
+						}
+						else
+						{
+							Message = Rest.Mid(ColonIdx + 1).TrimStart();
+						}
+					}
+					else { Message = Rest; }
+
+					if (Message.IsEmpty()) continue;
+
+					FShintCompileError CE;
+					CE.FilePath = MaybeFile;
+					CE.FileName = FPaths::GetCleanFilename(MaybeFile);
+					CE.Line     = FCString::Atoi(*MaybeLine);
+					CE.Code     = Code;
+					CE.Message  = Message.Left(200);
+					CE.Severity = Severity;
+					LocalResult.CompileErrors.Add(MoveTemp(CE));
+				}
+
+				UE_LOG(LogShintTools, Warning,
+					TEXT("HandleTreeSitterFixResponse: build failed — %d error(s)"),
+					LocalResult.CompileErrors.Num());
+			}
+			else
+			{
+				UE_LOG(LogShintTools, Log, TEXT("HandleTreeSitterFixResponse: build succeeded"));
+			}
+
+			AsyncTask(ENamedThreads::GameThread, [LocalResult, OnComplete]() mutable
+			{
+				OnComplete.ExecuteIfBound(LocalResult);
+			});
+		});
+
+		return;
+	}
+
+	// No C++ files modified — fire immediately
+	OnComplete.ExecuteIfBound(LocalResult);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

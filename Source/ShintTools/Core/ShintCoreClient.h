@@ -75,6 +75,8 @@ struct FShintFixedFile
 {
 	FString FilePath;           // absolute path
 	FString CorrectedContent;
+	FString Additions;          // tree-sitter: suggested .h additions
+	TArray<FString> Changes;    // tree-sitter: human-readable change list
 	int32   FixesApplied = 0;
 	int32   FixesSkipped = 0;
 };
@@ -267,7 +269,13 @@ private:
 	static FShintValidateResult  ParseValidateResponse (const FShintRequestResult& Raw);
 	static FShintAssetScanResult ParseAssetScanResponse(const FShintRequestResult& Raw);
 	static FShintFixResult       ParseFixResponse      (const FShintRequestResult& Raw);
+	static FShintFixResult       ParseTreeSitterFixResponse(const FShintRequestResult& Raw);
 	static void CollectSourceFiles(const FString& Dir, TArray<FString>& Out);
+
+	void HandleTreeSitterFixResponse(const FShintRequestResult& Raw,
+	                                 FShintFixResult             LocalResult,
+	                                 TArray<FShintCodeIssue>     TreeSitterIssues,
+	                                 FOnShintFixComplete         OnComplete);
 
 	// Infer asset category from UE type string (for dashboard payload)
 	static FString AssetTypeToCategory(const FString& AssetType);

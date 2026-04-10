@@ -33,3 +33,19 @@
 
 ### Infrastructure
 - `FileContent` propagated through the full fix flow (`FShintCodeIssue` → `FShintIssueItem` → `ApplyCodeFixes`). Ready for server-side tree-sitter AST validation once that is implemented.
+
+---
+
+## [Unreleased] — 2026-04-10
+
+### New Features
+
+#### Tree-sitter AST-aware auto-fix (plugin integration)
+- `ApplyCodeFixes` now triages issues into three categories:
+  - **Tree-sitter path** — issues with full `FileContent` are sent to the server endpoint `POST /validate/fix` as `{issues: [{rule_id, file_path, line, content}]}`. The server uses tree-sitter C++ AST analysis to produce a safe `fixed_code` for each issue.
+  - **Local fallback path** — issues without `FileContent` but with `fix_suggestion` are applied via line-replacement (previous behaviour, unchanged).
+  - **Blueprint path** — issues with `/Game/` or `/Engine/` paths are handled programmatically (BPP001 tick disable via CDO).
+- `HandleTreeSitterFixResponse` — new async callback that receives the `/validate/fix` response, writes each `fixed_code` back to disk, merges results with any local fixes, then launches the incremental UBT build check.
+- `ParseTreeSitterFixResponse` — parses `{fixes: [{rule_id, file_path, success, fixed_code, additions, changes}], summary: {total, successful, failed}}` into `FShintFixResult`.
+- `FShintFixedFile` extended with `Additions` (suggested header additions) and `Changes` (human-readable change list) from the server.
+- Removed old fire-and-forget duplicate request to `/validate/fix` that was sending only issue metadata.
