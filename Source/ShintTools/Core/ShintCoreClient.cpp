@@ -799,6 +799,43 @@ void FShintCoreClient::ApplyCodeFixes(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Tree-sitter — single-issue fix preview (no disk write)
+// ─────────────────────────────────────────────────────────────────────────────
+
+void FShintCoreClient::FetchSingleFixPreview(
+	const FShintCodeIssue& Issue, FOnShintFixComplete OnComplete)
+{
+	if (Issue.FileContent.IsEmpty())
+	{
+		FShintFixResult Err;
+		Err.bSuccess     = false;
+		Err.ErrorMessage = TEXT("FetchSingleFixPreview: no FileContent on issue");
+		OnComplete.ExecuteIfBound(Err);
+		return;
+	}
+
+	TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
+	O->SetStringField(TEXT("rule_id"),   Issue.RuleId);
+	O->SetStringField(TEXT("file_path"), Issue.FilePath);
+	O->SetNumberField(TEXT("line"),      Issue.Line);
+	O->SetStringField(TEXT("content"),   Issue.FileContent);
+
+	TArray<TSharedPtr<FJsonValue>> IssuesArr;
+	IssuesArr.Add(MakeShared<FJsonValueObject>(O));
+
+	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetArrayField(TEXT("issues"), IssuesArr);
+
+	SendRequest(Config.GetBaseUrl() + TEXT("/validate/fix"),
+		EShintHttpMethod::POST, SerializeJson(Body),
+		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable
+		{
+			// Parse but do NOT write to disk
+			OnComplete.ExecuteIfBound(FShintCoreClient::ParseTreeSitterFixResponse(Raw));
+		}));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tree-sitter fix response — parse + write to disk + incremental build
 // ─────────────────────────────────────────────────────────────────────────────
 

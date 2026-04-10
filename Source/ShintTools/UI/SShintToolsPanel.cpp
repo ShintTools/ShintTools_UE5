@@ -763,10 +763,19 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 		LocationStr = FString::Printf(TEXT("%s : %d"), *Item->FileName, Item->Line);
 	}
 
-	const bool bHasContext  = !Item->ContextBefore.IsEmpty();
-	const bool bIsFixable   = Item->bIsAutoFixable && !Item->FixSuggestion.IsEmpty();
+	// bHasContext: true when server sent context window OR when we can fetch it (tree-sitter)
+	const bool bHasContext  = !Item->ContextBefore.IsEmpty() || !Item->FileContent.IsEmpty();
+	// bIsFixable: auto-fixable issues (tree-sitter or local line-replacement)
+	const bool bIsFixable   = Item->bIsAutoFixable
+		&& (!Item->FixSuggestion.IsEmpty() || !Item->FileContent.IsEmpty());
 
 	// ── Context diff panels (shown when Preview is toggled) ──────────────────
+	// AFTER panel priority: FixPreviewCode (tree-sitter) > ContextAfter (local fallback)
+	const FString& AfterText = !Item->FixPreviewCode.IsEmpty()
+		? Item->FixPreviewCode : Item->ContextAfter;
+	const bool bAfterAvailable = !AfterText.IsEmpty();
+	const bool bAfterLoading   = Item->bFixPreviewLoading;
+
 	TSharedRef<SWidget> ContextDiff = SNullWidget::NullWidget;
 	if (bHasContext)
 	{
@@ -774,10 +783,18 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 			BuildContextPanel(TEXT("BEFORE"), Item->ContextBefore,
 				Item->ContextLineStart, Item->Line, C_DiffRed());
 
-		TSharedRef<SWidget> DespuesPanelWidget = Item->ContextAfter.IsEmpty()
-			? SNullWidget::NullWidget
-			: BuildContextPanel(TEXT("AFTER"), Item->ContextAfter,
+		TSharedRef<SWidget> DespuesPanelWidget = SNullWidget::NullWidget;
+		if (bAfterLoading)
+		{
+			DespuesPanelWidget = SNew(STextBlock)
+				.Text(FText::FromString(TEXT("Fetching preview...")))
+				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()));
+		}
+		else if (bAfterAvailable)
+		{
+			DespuesPanelWidget = BuildContextPanel(TEXT("AFTER"), AfterText,
 				Item->ContextLineStart, Item->Line, C_DiffGreen());
+		}
 
 		ContextDiff =
 			SNew(SHorizontalBox)
@@ -786,7 +803,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 			+ SHorizontalBox::Slot().FillWidth(1.f).Padding(4.f, 0.f, 0.f, 0.f).HAlign(HAlign_Fill)
 			[
 				SNew(SBox)
-				.Visibility(Item->ContextAfter.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+				.Visibility((bAfterAvailable || bAfterLoading) ? EVisibility::Visible : EVisibility::Collapsed)
 				[ DespuesPanelWidget ]
 			];
 	}
@@ -862,6 +879,14 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 								.ButtonColorAndOpacity(FSlateColor(C_Surface()))
 								.OnClicked_Lambda([this, Item]() -> FReply {
 									Item->bPreviewExpanded = !Item->bPreviewExpanded;
+									// For tree-sitter issues, fetch real fixed_code on first expand
+									if (Item->bPreviewExpanded
+										&& !Item->FileContent.IsEmpty()
+										&& Item->FixPreviewCode.IsEmpty()
+										&& !Item->bFixPreviewLoading)
+									{
+										FetchFixPreview(Item);
+									}
 									if (CodeIssueListView.IsValid())
 										CodeIssueListView->RequestListRefresh();
 									return FReply::Handled();
@@ -1317,6 +1342,62 @@ FReply SShintToolsPanel::OnIgnoreSingleFix(FShintIssueItemPtr Item)
 	ApplyCodeFilter();
 	RefreshApplyCodeLabel();
 	return FReply::Handled();
+}
+
+void SShintToolsPanel::FetchFixPreview(FShintIssueItemPtr Item)
+{
+	if (!Item.IsValid() || Item->FileContent.IsEmpty() || Item->bFixPreviewLoading) return;
+
+	Item->bFixPreviewLoading = true;
+	if (CodeIssueListView.IsValid()) CodeIssueListView->RequestListRefresh();
+
+	FShintCodeIssue Issue;
+	Issue.RuleId      = Item->RuleId;
+	Issue.FilePath    = Item->FilePath;
+	Issue.Line        = Item->Line;
+	Issue.FileContent = Item->FileContent;
+
+	// Capture info needed to extract the window from fixed_code
+	const int32 ContextStart = Item->ContextLineStart; // 1-based
+	TArray<FString> BeforeLines;
+	Item->ContextBefore.ParseIntoArray(BeforeLines, TEXT("\n"), false);
+	const int32 NumContextLines = FMath::Max(1, BeforeLines.Num());
+
+	TWeakPtr<SShintToolsPanel> WeakThis = SharedThis(this);
+	TWeakPtr<FShintIssueItem>  WeakItem = Item;
+
+	CoreClient->FetchSingleFixPreview(Issue,
+		FOnShintFixComplete::CreateLambda(
+			[WeakThis, WeakItem, ContextStart, NumContextLines](const FShintFixResult& Result) mutable
+		{
+			TSharedPtr<SShintToolsPanel> PinnedPanel = WeakThis.Pin();
+			TSharedPtr<FShintIssueItem>  PinnedItem  = WeakItem.Pin();
+			if (!PinnedPanel.IsValid() || !PinnedItem.IsValid()) return;
+
+			PinnedItem->bFixPreviewLoading = false;
+
+			if (Result.bSuccess && Result.FixedFiles.Num() > 0)
+			{
+				const FString& FixedCode = Result.FixedFiles[0].CorrectedContent;
+				TArray<FString> AllLines;
+				FixedCode.ParseIntoArray(AllLines, TEXT("\n"), false);
+
+				const int32 StartIdx = FMath::Max(0, ContextStart - 1);
+				TArray<FString> Window;
+				for (int32 i = StartIdx; i < StartIdx + NumContextLines && i < AllLines.Num(); ++i)
+					Window.Add(AllLines[i]);
+
+				PinnedItem->FixPreviewCode = FString::Join(Window, TEXT("\n"));
+			}
+			else
+			{
+				UE_LOG(LogShintTools, Warning, TEXT("FetchFixPreview: server error for [%s] — %s"),
+					*PinnedItem->RuleId, *Result.ErrorMessage);
+			}
+
+			if (PinnedPanel->CodeIssueListView.IsValid())
+				PinnedPanel->CodeIssueListView->RequestListRefresh();
+		}));
 }
 
 FReply SShintToolsPanel::OnScanAssetsClicked()

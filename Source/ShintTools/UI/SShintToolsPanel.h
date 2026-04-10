@@ -69,9 +69,13 @@ struct FShintIssueItem
 
 	// Before/after diff context (from server)
 	FString ContextBefore;
-	FString ContextAfter;
+	FString ContextAfter;       // local fallback: fix_suggestion substituted into window
 	int32   ContextLineStart = 0;
 	bool    bPreviewExpanded = false;
+
+	// Tree-sitter fix preview: fetched on-demand from /validate/fix
+	FString FixPreviewCode;     // extracted window from fixed_code — shown in AFTER panel
+	bool    bFixPreviewLoading = false;
 };
 using FShintIssueItemPtr = TSharedPtr<FShintIssueItem>;
 
@@ -159,6 +163,7 @@ private:
 	FReply OnScanAssetsClicked();
 	FReply OnApplySingleFix(FShintIssueItemPtr Item);
 	FReply OnIgnoreSingleFix(FShintIssueItemPtr Item);
+	void   FetchFixPreview(FShintIssueItemPtr Item);
 	FReply OnSelectAllAssetsClicked();
 	FReply OnApplySelectedAssetFixesClicked();
 	FReply OnSendAssetToDashboardClicked();

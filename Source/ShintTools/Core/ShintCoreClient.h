@@ -228,6 +228,9 @@ public:
 	void ApplyCodeFixes(const TArray<FShintCodeIssue>& AcceptedIssues,
 	                    FOnShintFixComplete OnComplete);
 
+	/** Preview-only: calls /validate/fix for a single issue and returns the result without writing to disk. */
+	void FetchSingleFixPreview(const FShintCodeIssue& Issue, FOnShintFixComplete OnComplete);
+
 	// ── Code Validator — external web dashboard ───────────────────────────────
 	/**
 	 * Sends the full project scan to the web dashboard.

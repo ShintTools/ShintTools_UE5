@@ -49,3 +49,9 @@
 - `ParseTreeSitterFixResponse` — parses `{fixes: [{rule_id, file_path, success, fixed_code, additions, changes}], summary: {total, successful, failed}}` into `FShintFixResult`.
 - `FShintFixedFile` extended with `Additions` (suggested header additions) and `Changes` (human-readable change list) from the server.
 - Removed old fire-and-forget duplicate request to `/validate/fix` that was sending only issue metadata.
+
+#### Tree-sitter fix preview on demand
+- Preview toggle on tree-sitter issues (those with full `FileContent`) now fetches the actual post-fix code from `/validate/fix` on first expand, instead of showing the `fix_suggestion` text description.
+- `FetchFixPreview` calls `FetchSingleFixPreview` (preview-only, no disk write), receives `fixed_code`, extracts the same ±2-line context window at `ContextLineStart`, and stores it in `FixPreviewCode` on the issue item.
+- While the request is in-flight, the AFTER panel shows "Fetching preview…". On completion the list refreshes and shows the real diff.
+- `bIsFixable` and `bHasContext` now also consider `FileContent` presence, so tree-sitter issues correctly show the Preview toggle and Apply/Ignore buttons even when `fix_suggestion` or `context_before` are absent.
