@@ -140,6 +140,7 @@ void FShintCoreClient::ValidateCode(
 void FShintCoreClient::ValidateProject(
 	const FString& SourceDir, FOnShintValidateComplete OnComplete)
 {
+	const double BenchStart = FPlatformTime::Seconds();
 	TArray<FString> AbsFiles;
 	CollectSourceFiles(SourceDir, AbsFiles);
 
@@ -216,7 +217,7 @@ void FShintCoreClient::ValidateProject(
 		EShintHttpMethod::POST,
 		BodyStr,
 		FOnShintRequestComplete::CreateLambda(
-			[OnComplete, CapturedFiles, FilenameLookup](const FShintRequestResult& Raw) mutable
+			[OnComplete, CapturedFiles, FilenameLookup, BenchStart](const FShintRequestResult& Raw) mutable
 			{
 				FShintValidateResult Result = FShintCoreClient::ParseValidateResponse(Raw);
 				Result.ScannedFilePaths = CapturedFiles;
@@ -234,7 +235,10 @@ void FShintCoreClient::ValidateProject(
 					}
 				}
 
-				UE_LOG(LogShintTools, Log, TEXT("ValidateProject: %d issues from server"), Result.Issues.Num());
+				const double BenchEnd = FPlatformTime::Seconds();
+				UE_LOG(LogShintTools, Log,
+					TEXT("[BENCH] ValidateProject: %.2f s, %d files, %d issues"),
+					BenchEnd - BenchStart, CapturedFiles.Num(), Result.Issues.Num());
 
 				OnComplete.ExecuteIfBound(Result);
 			}
@@ -249,6 +253,7 @@ void FShintCoreClient::ValidateProject(
 void FShintCoreClient::ValidateBlueprints(
 	const FString& ContentDir, FOnShintValidateComplete OnComplete)
 {
+	const double BenchStart = FPlatformTime::Seconds();
 	// Discover project blueprints via Asset Registry, then LOAD each one to
 	// extract real graph/variable/function/stats data for the validator.
 	IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
@@ -488,8 +493,12 @@ void FShintCoreClient::ValidateBlueprints(
 	Body->SetArrayField (TEXT("files"),        FilesArr);
 
 	SendRequest(Config.GetBaseUrl() + TEXT("/validate/blueprints"), EShintHttpMethod::POST, SerializeJson(Body),
-		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
-			OnComplete.ExecuteIfBound(FShintCoreClient::ParseValidateResponse(Raw));
+		FOnShintRequestComplete::CreateLambda([OnComplete, BenchStart, LoadedCount](const FShintRequestResult& Raw) mutable {
+			FShintValidateResult R = FShintCoreClient::ParseValidateResponse(Raw);
+			UE_LOG(LogShintTools, Log,
+				TEXT("[BENCH] ValidateBlueprints: %.2f s, %d BPs loaded, %d issues"),
+				FPlatformTime::Seconds() - BenchStart, LoadedCount, R.Issues.Num());
+			OnComplete.ExecuteIfBound(R);
 		}));
 }
 
@@ -500,6 +509,7 @@ void FShintCoreClient::ValidateBlueprints(
 void FShintCoreClient::ApplyCodeFixes(
 	const TArray<FShintCodeIssue>& AcceptedIssues, FOnShintFixComplete OnComplete)
 {
+	const double BenchFixStart = FPlatformTime::Seconds();
 	// ── Triage issues into: tree-sitter (has content), local (no content), BP ─
 	TArray<FShintCodeIssue> TreeSitterIssues;
 	TArray<FShintCodeIssue> LocalIssues;
@@ -657,8 +667,9 @@ void FShintCoreClient::ApplyCodeFixes(
 	}
 
 	// ── No tree-sitter issues — continue with local result ───────────────────
-	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Done (local) — %d applied, %d skipped"),
-		Result.TotalFixesApplied, Result.TotalFixesSkipped);
+	UE_LOG(LogShintTools, Log,
+		TEXT("[BENCH] ApplyCodeFixes (local): %.3f s, %d applied, %d skipped"),
+		FPlatformTime::Seconds() - BenchFixStart, Result.TotalFixesApplied, Result.TotalFixesSkipped);
 
 	if (Result.FixedFiles.Num() > 0)
 	{
@@ -799,8 +810,9 @@ void FShintCoreClient::ApplyCodeFixes(
 	}
 
 	// ── No C++ files modified — fire immediately ─────────────────────────────
-	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Done (no C++ files) — %d applied, %d skipped"),
-		Result.TotalFixesApplied, Result.TotalFixesSkipped);
+	UE_LOG(LogShintTools, Log,
+		TEXT("[BENCH] ApplyCodeFixes (no build): %.3f s, %d applied, %d skipped"),
+		FPlatformTime::Seconds() - BenchFixStart, Result.TotalFixesApplied, Result.TotalFixesSkipped);
 	OnComplete.ExecuteIfBound(Result);
 }
 
@@ -1149,6 +1161,7 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 void FShintCoreClient::ScanAssetNaming(
 	const FString& ContentDir, FOnShintAssetScanComplete OnComplete)
 {
+	const double BenchStart = FPlatformTime::Seconds();
 	// Use Asset Registry to get all project assets with their types
 	IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
 
@@ -1164,9 +1177,13 @@ void FShintCoreClient::ScanAssetNaming(
 	TArray<TSharedPtr<FJsonValue>> Arr;
 	for (const FAssetData& AD : AllAssets)
 	{
+		const FString AssetClass = AD.AssetClassPath.GetAssetName().ToString();
+		// Skip redirectors — they exist at the old path after a rename and
+		// would be flagged again even though the real asset was already fixed.
+		if (AssetClass == TEXT("ObjectRedirector")) continue;
+
 		const FString PackagePath = AD.PackageName.ToString();
 		const FString AssetName   = AD.AssetName.ToString();
-		const FString AssetClass  = AD.AssetClassPath.GetAssetName().ToString();
 
 		TSharedRef<FJsonObject> AObj = MakeShared<FJsonObject>();
 		AObj->SetStringField(TEXT("asset_path"), PackagePath);
@@ -1187,9 +1204,14 @@ void FShintCoreClient::ScanAssetNaming(
 	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Scanning %d assets from /Game/"), AllAssets.Num());
 	UE_LOG(LogShintTools, Log, TEXT("AssetScan REQUEST JSON (first 3000 chars):\n%s"), *BodyStr.Left(3000));
 
+	const int32 SentAssets = Arr.Num();
 	SendRequest(Config.GetBaseUrl() + TEXT("/assets/scan"), EShintHttpMethod::POST, BodyStr,
-		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
-			OnComplete.ExecuteIfBound(ParseAssetScanResponse(Raw));
+		FOnShintRequestComplete::CreateLambda([OnComplete, BenchStart, SentAssets](const FShintRequestResult& Raw) mutable {
+			FShintAssetScanResult R = ParseAssetScanResponse(Raw);
+			UE_LOG(LogShintTools, Log,
+				TEXT("[BENCH] ScanAssetNaming: %.2f s, %d assets sent, %d violations"),
+				FPlatformTime::Seconds() - BenchStart, SentAssets, R.Issues.Num());
+			OnComplete.ExecuteIfBound(R);
 		}));
 }
 

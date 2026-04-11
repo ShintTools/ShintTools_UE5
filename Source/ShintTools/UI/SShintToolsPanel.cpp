@@ -20,9 +20,12 @@
 #include "Widgets/Views/SListView.h"
 // Style
 #include "Styling/AppStyle.h"
-// Asset tools (for IAssetTools::RenameAssets)
+// Asset tools (for IAssetTools::RenameAssets + FixupReferencers)
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "Engine/ObjectRedirector.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Algo/Count.h"
@@ -1464,6 +1467,37 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 	AssetTools.RenameAssets(RenameData);
 
+	// ── Fix redirectors left at old paths ─────────────────────────────────────
+	// After RenameAssets, UE5 creates an ObjectRedirector at the original package
+	// path. Collect all redirectors under /Game and fix references so no stale
+	// pointers remain and DefaultEngine.ini stays clean.
+	{
+		IAssetRegistry& AR =
+			FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+
+		FARFilter RedirFilter;
+		RedirFilter.ClassPaths.Add(UObjectRedirector::StaticClass()->GetClassPathName());
+		RedirFilter.PackagePaths.Add(TEXT("/Game"));
+		RedirFilter.bRecursivePaths = true;
+
+		TArray<FAssetData> RedirAssets;
+		AR.GetAssets(RedirFilter, RedirAssets);
+
+		TArray<UObjectRedirector*> Redirectors;
+		Redirectors.Reserve(RedirAssets.Num());
+		for (const FAssetData& RD : RedirAssets)
+		{
+			if (UObjectRedirector* Redir = Cast<UObjectRedirector>(RD.GetAsset()))
+				Redirectors.Add(Redir);
+		}
+		if (!Redirectors.IsEmpty())
+		{
+			UE_LOG(LogShintTools, Log,
+				TEXT("ShintPanel: fixing %d redirector(s) after asset rename"), Redirectors.Num());
+			AssetTools.FixupReferencers(Redirectors);
+		}
+	}
+
 	CoreClient->ReportAssetFixesToServer(ForServer,
 		FOnShintAssetFixComplete::CreateSP(this, &SShintToolsPanel::OnAssetFixComplete));
 
@@ -1776,6 +1810,7 @@ void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& 
 
 void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result)
 {
+	const double PopStart = FPlatformTime::Seconds();
 	// Clear visible list FIRST so Slate never references stale items during a paint tick
 	CodeIssueItems.Reset();
 	if (CodeIssueListView.IsValid()) CodeIssueListView->RequestListRefresh();
@@ -1824,6 +1859,10 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result)
 	if (ApplyCodeBtn.IsValid()) ApplyCodeBtn->SetEnabled(!AllCodeItems.IsEmpty());
 	if (SendCodeBtn.IsValid())  SendCodeBtn->SetEnabled(true);
 	RefreshApplyCodeLabel();
+
+	UE_LOG(LogShintTools, Log,
+		TEXT("[BENCH] PopulateCodeIssueList: %.3f s, %d items (filtered from %d)"),
+		FPlatformTime::Seconds() - PopStart, AllCodeItems.Num(), Result.Issues.Num());
 }
 
 void SShintToolsPanel::ApplyCodeFilter()
@@ -1922,6 +1961,7 @@ void SShintToolsPanel::ApplyAssetFilter()
 
 void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Result)
 {
+	const double PopStart = FPlatformTime::Seconds();
 	AllAssetItems.Reset();
 	AllAssetItems.Reserve(Result.Issues.Num());
 
@@ -1941,6 +1981,10 @@ void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Resul
 
 	ApplyAssetFilter();
 	if (SendAssetBtn.IsValid()) SendAssetBtn->SetEnabled(true);
+
+	UE_LOG(LogShintTools, Log,
+		TEXT("[BENCH] PopulateAssetIssueList: %.3f s, %d items"),
+		FPlatformTime::Seconds() - PopStart, AllAssetItems.Num());
 }
 
 void SShintToolsPanel::RefreshCodeStats()
