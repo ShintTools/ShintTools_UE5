@@ -640,6 +640,12 @@ void FShintCoreClient::ApplyCodeFixes(
 		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 		Body->SetArrayField(TEXT("issues"), IssuesArr);
 
+		for (const FShintCodeIssue& DbgIssue : TreeSitterIssues)
+		{
+			UE_LOG(LogShintTools, Log,
+				TEXT("ApplyFix [TS]: rule=%s file=%s line=%d contentLen=%d"),
+				*DbgIssue.RuleId, *DbgIssue.FilePath, DbgIssue.Line, DbgIssue.FileContent.Len());
+		}
 		UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Sending %d issue(s) to tree-sitter /validate/fix"),
 			TreeSitterIssues.Num());
 
@@ -849,6 +855,8 @@ FShintFixResult FShintCoreClient::ParseTreeSitterFixResponse(const FShintRequest
 		Result.ErrorMessage = Raw.ErrorMessage;
 		return Result;
 	}
+
+	UE_LOG(LogShintTools, Log, TEXT("TreeSitterFix response (first 1000): %s"), *Raw.ResponseBody.Left(1000));
 
 	TSharedPtr<FJsonObject> Root;
 	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Raw.ResponseBody);
