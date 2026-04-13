@@ -41,6 +41,9 @@ enum class EAssetTypeFilter : uint8
 	All, Materials, Textures, Meshes, Blueprints, VFX, Audio, Animations, Data
 };
 
+// Code type filter — separates C++ rules from Blueprint rules in the Deep Code Validator
+enum class ECodeTypeFilter : uint8 { All, CppOnly, BlueprintsOnly };
+
 // ─────────────────────────────────────────────────────────────────────────────
 // List item types (shared_ptr owned by TArray for SListView)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -142,6 +145,7 @@ private:
 	TSharedRef<SWidget> BuildCodeFilterBar();
 	TSharedRef<SWidget> BuildCategoryMenuContent();
 	TSharedRef<SWidget> BuildSeverityMenuContent();
+	TSharedRef<SWidget> BuildCodeTypeMenuContent();
 	TSharedRef<SWidget> BuildAssetNamingSection();
 	TSharedRef<SWidget> BuildAssetResultsPanel();
 	TSharedRef<SWidget> BuildAssetTypeMenuContent();
@@ -240,6 +244,7 @@ private:
 	EIssueCategoryFilter CurrentCategoryFilter    = EIssueCategoryFilter::All;
 	EIssueSeverityFilter CurrentSeverityFilter    = EIssueSeverityFilter::All;
 	EAssetTypeFilter     CurrentAssetTypeFilter   = EAssetTypeFilter::All;
+	ECodeTypeFilter      CurrentCodeTypeFilter    = ECodeTypeFilter::All;
 
 	// Fingerprints "FilePath:Line:RuleId" of issues fixed this session.
 	// Prevents re-showing the same issue on an incremental/BP re-scan.
@@ -282,6 +287,7 @@ private:
 
 	TSharedPtr<STextBlock> CategoryFilterLabel;
 	TSharedPtr<STextBlock> SeverityFilterLabel;
+	TSharedPtr<STextBlock> CodeTypeFilterLabel;
 	TSharedPtr<STextBlock> AssetTypeFilterLabel;
 
 	TSharedPtr<SWidget>    CodeEmptyState;
