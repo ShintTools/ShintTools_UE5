@@ -60,6 +60,7 @@ struct FShintIssueItem
 	FString FixSuggestion;
 	bool    bIsAutoFixable = false;
 	bool    bChecked       = false;
+	bool    bIsBlueprint   = false;  // true when issued by ValidateBlueprints
 	int32   OriginalIndex  = -1;
 
 	// Extended fields
