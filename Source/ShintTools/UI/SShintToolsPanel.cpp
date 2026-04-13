@@ -1334,17 +1334,6 @@ FReply SShintToolsPanel::OnScanBlueprintsClicked()
 	CoreClient->ValidateBlueprints(FPaths::ProjectContentDir(),
 		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnBlueprintValidateComplete));
 
-	// ── Asset Naming Bot: scan and auto-filter to Blueprints ──────────────────
-	SetAssetState(EModuleState::Running);
-	if (AssetEmptyText.IsValid())
-		AssetEmptyText->SetText(LOCTEXT("ANBEmpty", "Run a scan to see naming violations."));
-	AllAssetItems.Empty();
-	AssetIssueItems.Empty();
-	if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
-
-	CoreClient->ScanAssetNaming(FPaths::ProjectContentDir(),
-		FOnShintAssetScanComplete::CreateSP(this, &SShintToolsPanel::OnAssetScanFromBPComplete));
-
 	return FReply::Handled();
 }
 
@@ -2163,6 +2152,7 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result)
 		Item->FixSuggestion  = Src.FixSuggestion;
 		Item->bIsAutoFixable = Src.bIsAutoFixable;
 		Item->bChecked       = Src.bIsAutoFixable;
+		Item->bIsBlueprint   = bBlueprintScanActive;
 		Item->OriginalIndex  = i;
 		Item->Class            = Src.Class;
 		Item->Category         = Src.Category;
@@ -2204,9 +2194,8 @@ void SShintToolsPanel::ApplyCodeFilter()
 		// ── Code type filter (C++ vs Blueprint) ──────────────────────────────
 		if (!bIsBuildError && CurrentCodeTypeFilter != ECodeTypeFilter::All)
 		{
-			const bool bIsBP = Item->RuleId.StartsWith(TEXT("BP"));
-			if (CurrentCodeTypeFilter == ECodeTypeFilter::CppOnly        &&  bIsBP) continue;
-			if (CurrentCodeTypeFilter == ECodeTypeFilter::BlueprintsOnly && !bIsBP) continue;
+			if (CurrentCodeTypeFilter == ECodeTypeFilter::CppOnly        &&  Item->bIsBlueprint) continue;
+			if (CurrentCodeTypeFilter == ECodeTypeFilter::BlueprintsOnly && !Item->bIsBlueprint) continue;
 		}
 
 		// ── Fixable filter ────────────────────────────────────────────────────
