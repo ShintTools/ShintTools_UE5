@@ -29,7 +29,7 @@
 #include "IAssetTools.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
-#include "Engine/ObjectRedirector.h"
+#include "UObject/ObjectRedirector.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Algo/Count.h"
