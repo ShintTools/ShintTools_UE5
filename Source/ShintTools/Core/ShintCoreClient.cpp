@@ -926,6 +926,33 @@ FShintFixResult FShintCoreClient::ParseTreeSitterFixResponse(const FShintRequest
 // Safety Check
 // ─────────────────────────────────────────────────────────────────────────────
 
+static FShintSafetyCheckResult ParseSafetyCheckResponse(const FShintRequestResult& Raw)
+{
+	FShintSafetyCheckResult Res; // bSafe = true by default — never block on error
+	if (!Raw.bSuccess || Raw.ResponseBody.IsEmpty())
+		return Res;
+
+	TSharedPtr<FJsonObject> Root;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Raw.ResponseBody);
+	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+		return Res;
+
+	bool bSafe = true;
+	if (Root->TryGetBoolField(TEXT("safe"), bSafe))
+		Res.bSafe = bSafe;
+
+	const TArray<TSharedPtr<FJsonValue>>* Warns = nullptr;
+	if (Root->TryGetArrayField(TEXT("warnings"), Warns) && Warns)
+		for (const TSharedPtr<FJsonValue>& W : *Warns)
+			Res.Warnings.Add(W->AsString());
+
+	FString Preview;
+	if (Root->TryGetStringField(TEXT("preview"), Preview))
+		Res.Preview = MoveTemp(Preview);
+
+	return Res;
+}
+
 void FShintCoreClient::CheckFixSafety(
 	const TArray<FShintCodeIssue>& Issues, FOnShintSafetyCheckComplete OnComplete)
 {
@@ -944,30 +971,11 @@ void FShintCoreClient::CheckFixSafety(
 
 	const FString Url = Config.GetBaseUrl() / TEXT("validate/check-fix-safety");
 	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Root),
-		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw)
-		{
-			FShintSafetyCheckResult Res;
-			// On any transport/parse error → treat as safe so we never block the user
-			if (!Raw.bSuccess || Raw.ResponseBody.IsEmpty())
+		FOnShintRequestComplete::CreateLambda(
+			[OnComplete = MoveTemp(OnComplete)](const FShintRequestResult& Raw) mutable
 			{
-				OnComplete.ExecuteIfBound(Res);
-				return;
-			}
-			TSharedPtr<FJsonObject> Obj;
-			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Raw.ResponseBody);
-			if (FJsonSerializer::Deserialize(Reader, Obj) && Obj.IsValid())
-			{
-				bool bSafe = true;
-				Obj->TryGetBoolField(TEXT("safe"), bSafe);
-				Res.bSafe = bSafe;
-				const TArray<TSharedPtr<FJsonValue>>* Warns;
-				if (Obj->TryGetArrayField(TEXT("warnings"), Warns))
-					for (const auto& W : *Warns)
-						Res.Warnings.Add(W->AsString());
-				Obj->TryGetStringField(TEXT("preview"), Res.Preview);
-			}
-			OnComplete.ExecuteIfBound(Res);
-		}));
+				OnComplete.ExecuteIfBound(ParseSafetyCheckResponse(Raw));
+			}));
 }
 
 void FShintCoreClient::HandleTreeSitterFixResponse(
