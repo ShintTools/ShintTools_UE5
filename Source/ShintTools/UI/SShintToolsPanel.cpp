@@ -5,6 +5,10 @@
 #include "ShintCoreClient.h"
 #include "CoreProcessManager.h"
 
+// Slate windows / dialogs
+#include "Widgets/SWindow.h"
+#include "Framework/Application/SlateApplication.h"
+
 // Slate layout
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -25,7 +29,7 @@
 #include "IAssetTools.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
-#include "Engine/ObjectRedirector.h"
+#include "UObject/ObjectRedirector.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Algo/Count.h"
@@ -677,7 +681,8 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 	SAssignNew(CodeEmptyState, SBox)
 	.HAlign(HAlign_Center).VAlign(VAlign_Center).MinDesiredHeight(64.f)
 	[
-		SNew(STextBlock).Text(LOCTEXT("CVEmpty","Run a scan to see results here."))
+		SAssignNew(CodeEmptyText, STextBlock)
+		.Text(LOCTEXT("CVEmpty","Run a scan to see results here."))
 		.Font(F_Small()).ColorAndOpacity(FSlateColor(C_DimGray()))
 	];
 
@@ -1008,11 +1013,15 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,18.f)
 			[
-				SNew(SButton).ContentPadding(FMargin(14.f,7.f)).HAlign(HAlign_Left)
-				.OnClicked(this, &SShintToolsPanel::OnScanAssetsClicked)
+				SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f,6.f))
+				+ SWrapBox::Slot()
 				[
-					SNew(STextBlock).Text(LOCTEXT("ScanAssets","⟳  Scan All Assets")).Font(F_Small())
-					.ColorAndOpacity(FSlateColor(C_White()))
+					SNew(SButton).ContentPadding(FMargin(14.f,7.f))
+					.OnClicked(this, &SShintToolsPanel::OnScanAssetsClicked)
+					[
+						SNew(STextBlock).Text(LOCTEXT("ScanAssets","⟳  Scan All Assets")).Font(F_Small())
+						.ColorAndOpacity(FSlateColor(C_White()))
+					]
 				]
 			]
 
@@ -1026,7 +1035,8 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 	SAssignNew(AssetEmptyState, SBox)
 	.HAlign(HAlign_Center).VAlign(VAlign_Center).MinDesiredHeight(64.f)
 	[
-		SNew(STextBlock).Text(LOCTEXT("ANBEmpty","Run a scan to see naming violations."))
+		SAssignNew(AssetEmptyText, STextBlock)
+		.Text(LOCTEXT("ANBEmpty","Run a scan to see naming violations."))
 		.Font(F_Small()).ColorAndOpacity(FSlateColor(C_DimGray()))
 	];
 
@@ -1200,8 +1210,27 @@ FReply SShintToolsPanel::OnCheckConnectionClicked()
 
 FReply SShintToolsPanel::OnScanProjectClicked()
 {
+	// ── All-clear guard ───────────────────────────────────────────────────────
+	// If every issue found in the previous scan has already been fixed this
+	// session, skip the server round-trip and show an informational message.
+	// Clearing AppliedFixFingerprints means the *next* click triggers a real scan.
+	if (AllCodeItems.IsEmpty() && !AppliedFixFingerprints.IsEmpty())
+	{
+		AppliedFixFingerprints.Empty();
+		if (CodeEmptyText.IsValid())
+			CodeEmptyText->SetText(LOCTEXT("CVAllFixed",
+				"✓  All issues resolved — click 'Scan' again to do a full re-scan."));
+		if (CodeEmptyState.IsValid())
+			CodeEmptyState->SetVisibility(EVisibility::Visible);
+		return FReply::Handled();
+	}
+
 	++ScanGeneration;
+	bBlueprintScanActive = false;   // full source scan — no BP-only filter
 	SetCodeState(EModuleState::Running);
+	// Reset to default empty text before new results arrive
+	if (CodeEmptyText.IsValid())
+		CodeEmptyText->SetText(LOCTEXT("CVEmpty", "Run a scan to see results here."));
 	// Reset everything — fresh scan.  Clear visible list and notify Slate
 	// BEFORE emptying backing data, so no stale pointers are accessed.
 	CodeIssueItems.Empty();
@@ -1217,10 +1246,32 @@ FReply SShintToolsPanel::OnScanProjectClicked()
 FReply SShintToolsPanel::OnScanBlueprintsClicked()
 {
 	++ScanGeneration;
+	bBlueprintScanActive = true;
+
+	// ── Code Validator: replace list with BP-only results ─────────────────────
 	SetCodeState(EModuleState::Running);
-	// Merge into existing results (append to source scan)
+	CodeIssueItems.Empty();
+	AllCodeItems.Empty();
+	AppliedFixFingerprints.Empty();
+	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
+	LastCodeResult = FShintValidateResult();
+	if (CodeEmptyText.IsValid())
+		CodeEmptyText->SetText(LOCTEXT("CVEmpty", "Run a scan to see results here."));
+
 	CoreClient->ValidateBlueprints(FPaths::ProjectContentDir(),
 		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnBlueprintValidateComplete));
+
+	// ── Asset Naming Bot: scan and auto-filter to Blueprints ──────────────────
+	SetAssetState(EModuleState::Running);
+	if (AssetEmptyText.IsValid())
+		AssetEmptyText->SetText(LOCTEXT("ANBEmpty", "Run a scan to see naming violations."));
+	AllAssetItems.Empty();
+	AssetIssueItems.Empty();
+	if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
+
+	CoreClient->ScanAssetNaming(FPaths::ProjectContentDir(),
+		FOnShintAssetScanComplete::CreateSP(this, &SShintToolsPanel::OnAssetScanFromBPComplete));
+
 	return FReply::Handled();
 }
 
@@ -1293,10 +1344,9 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Applying %d fix(es) locally."), Accepted.Num());
 
 	PendingCodeFixes = Accepted;
-	const uint32 FixGeneration = ScanGeneration; // snapshot — used to guard async callback
 	SetCodeState(EModuleState::Running);
-	CoreClient->ApplyCodeFixes(Accepted,
-		FOnShintFixComplete::CreateSP(this, &SShintToolsPanel::OnCodeFixComplete, FixGeneration));
+	CoreClient->CheckFixSafety(Accepted,
+		FOnShintSafetyCheckComplete::CreateSP(this, &SShintToolsPanel::OnSafetyCheckComplete));
 	return FReply::Handled();
 }
 
@@ -1330,12 +1380,163 @@ FReply SShintToolsPanel::OnApplySingleFix(FShintIssueItemPtr Item)
 	Issues.Add(I);
 
 	PendingCodeFixes = Issues;
-	const uint32 FixGeneration = ScanGeneration;
 	SetCodeState(EModuleState::Running);
-	CoreClient->ApplyCodeFixes(Issues,
-		FOnShintFixComplete::CreateSP(this, &SShintToolsPanel::OnCodeFixComplete, FixGeneration));
+	CoreClient->CheckFixSafety(Issues,
+		FOnShintSafetyCheckComplete::CreateSP(this, &SShintToolsPanel::OnSafetyCheckComplete));
 	return FReply::Handled();
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Safety Check + Modal Dialog
+// ─────────────────────────────────────────────────────────────────────────────
+
+void SShintToolsPanel::OnSafetyCheckComplete(const FShintSafetyCheckResult& Result)
+{
+	if (Result.bSafe)
+	{
+		ProceedWithCodeFixes();
+	}
+	else
+	{
+		// Not safe — restore idle and show warning dialog
+		SetCodeState(EModuleState::Idle);
+		ShowSafetyWarningDialog(Result);
+	}
+}
+
+void SShintToolsPanel::ShowSafetyWarningDialog(const FShintSafetyCheckResult& Result)
+{
+	TSharedRef<SWindow> Dialog = SNew(SWindow)
+		.Title(NSLOCTEXT("ShintTools", "SafetyTitle", "Safety Check"))
+		.ClientSize(FVector2D(560, 420))
+		.SupportsMaximize(false)
+		.SupportsMinimize(false)
+		.IsTopmostWindow(true)
+		.SizingRule(ESizingRule::FixedSize);
+
+	// ── Header ────────────────────────────────────────────────────────────────
+	TSharedRef<SVerticalBox> WarningList = SNew(SVerticalBox);
+	for (int32 i = 0; i < Result.Warnings.Num(); ++i)
+	{
+		WarningList->AddSlot()
+		.AutoHeight()
+		.Padding(0.f, 2.f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 8.f, 0.f)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(FString::Printf(TEXT("%d."), i + 1)))
+				.Font(F_Small())
+				.ColorAndOpacity(C_Gray())
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(Result.Warnings[i]))
+				.Font(F_Small())
+				.ColorAndOpacity(C_White())
+				.AutoWrapText(true)
+			]
+		];
+	}
+
+	// ── Buttons ───────────────────────────────────────────────────────────────
+	TSharedPtr<SWindow> DialogPtr = TSharedPtr<SWindow>(&Dialog.Get(), [](SWindow*){});
+	TWeakPtr<SWindow> WeakDialog(Dialog);
+
+	Dialog->SetContent(
+		SNew(SBorder)
+		.BorderImage(FAppStyle::GetBrush("NoBorder"))
+		.Padding(24.f)
+		[
+			SNew(SVerticalBox)
+			// Header
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 12.f)
+			[
+				SNew(STextBlock)
+				.Text(NSLOCTEXT("ShintTools", "SafetyHeader", "These fixes may affect your code"))
+				.Font(F_H2())
+				.ColorAndOpacity(C_Yellow())
+			]
+			// Warning list
+			+ SVerticalBox::Slot().FillHeight(1.f).Padding(0.f, 0.f, 0.f, 12.f)
+			[
+				SNew(SScrollBox)
+				+ SScrollBox::Slot()
+				[
+					WarningList
+				]
+			]
+			// Preview (if provided)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 16.f)
+			[
+				SNew(SBorder)
+				.BorderImage(FAppStyle::GetBrush("NoBorder"))
+				.Visibility(Result.Preview.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString(Result.Preview))
+					.Font(F_Mono())
+					.ColorAndOpacity(C_Gray())
+					.AutoWrapText(true)
+				]
+			]
+			// Buttons
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(8.f, 0.f, 0.f, 0.f)
+				[
+					SNew(SButton)
+					.ContentPadding(FMargin(14.f, 7.f))
+					.ButtonColorAndOpacity(C_Surface())
+					.OnClicked_Lambda([WeakDialog]() -> FReply
+					{
+						if (WeakDialog.IsValid()) WeakDialog.Pin()->RequestDestroyWindow();
+						return FReply::Handled();
+					})
+					[
+						SNew(STextBlock).Text(NSLOCTEXT("ShintTools","Cancel","Cancel"))
+						.Font(F_Body()).ColorAndOpacity(C_Gray())
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(8.f, 0.f, 0.f, 0.f)
+				[
+					SNew(SButton)
+					.ContentPadding(FMargin(14.f, 7.f))
+					.ButtonColorAndOpacity(C_Yellow())
+					.OnClicked_Lambda([this, WeakDialog]() -> FReply
+					{
+						if (WeakDialog.IsValid()) WeakDialog.Pin()->RequestDestroyWindow();
+						ProceedWithCodeFixes();
+						return FReply::Handled();
+					})
+					[
+						SNew(STextBlock)
+						.Text(NSLOCTEXT("ShintTools","ApplyAnyway","Apply Anyway"))
+						.Font(F_Body()).ColorAndOpacity(C_BG())
+					]
+				]
+			]
+		]
+	);
+
+	FSlateApplication::Get().AddModalWindow(Dialog, FSlateApplication::Get().GetActiveTopLevelWindow());
+}
+
+void SShintToolsPanel::ProceedWithCodeFixes()
+{
+	if (PendingCodeFixes.IsEmpty()) return;
+
+	const uint32 FixGeneration = ScanGeneration;
+	SetCodeState(EModuleState::Running);
+	CoreClient->ApplyCodeFixes(PendingCodeFixes,
+		FOnShintFixComplete::CreateSP(this, &SShintToolsPanel::OnCodeFixComplete, FixGeneration));
+	PendingCodeFixes.Empty();
+}
+
 
 FReply SShintToolsPanel::OnIgnoreSingleFix(FShintIssueItemPtr Item)
 {
@@ -1411,7 +1612,22 @@ void SShintToolsPanel::FetchFixPreview(FShintIssueItemPtr Item)
 
 FReply SShintToolsPanel::OnScanAssetsClicked()
 {
+	// ── All-clear guard ───────────────────────────────────────────────────────
+	if (AllAssetItems.IsEmpty() && AssetFixesApplied > 0)
+	{
+		AssetFixesApplied = 0;
+		if (AssetEmptyText.IsValid())
+			AssetEmptyText->SetText(LOCTEXT("ANBAllFixed",
+				"✓  All violations resolved — click 'Scan' again to do a full re-scan."));
+		if (AssetEmptyState.IsValid())
+			AssetEmptyState->SetVisibility(EVisibility::Visible);
+		return FReply::Handled();
+	}
+
 	SetAssetState(EModuleState::Running);
+	// Reset to default empty text before new results arrive
+	if (AssetEmptyText.IsValid())
+		AssetEmptyText->SetText(LOCTEXT("ANBEmpty", "Run a scan to see naming violations."));
 	AllAssetItems.Empty();
 	AssetIssueItems.Empty();
 	if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
@@ -1567,8 +1783,10 @@ void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& R
 		RefreshAssetStats();
 	}
 
-	// Quality issues → code validator panel
-	HandleValidateResult(QualityResult, true);
+	// Quality issues → code validator panel.
+	// bBlueprintScanActive=true: REPLACE the list so only BP issues are shown.
+	// bBlueprintScanActive=false (legacy path): merge with existing C++ results.
+	HandleValidateResult(QualityResult, !bBlueprintScanActive);
 }
 
 void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, bool bMerge)
@@ -1668,6 +1886,16 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 F
 		// Re-populate visible list with updated data
 		ApplyCodeFilter();
 		RefreshCodeStats();
+
+		// If all items are now gone, show the "all resolved" state immediately
+		if (AllCodeItems.IsEmpty())
+		{
+			if (CodeEmptyText.IsValid())
+				CodeEmptyText->SetText(LOCTEXT("CVAllFixed",
+					"✓  All issues resolved — click 'Scan' again to do a full re-scan."));
+			if (CodeEmptyState.IsValid())
+				CodeEmptyState->SetVisibility(EVisibility::Visible);
+		}
 	}
 	else
 	{
@@ -1722,6 +1950,21 @@ void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
 		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnBlueprintNamingScanComplete));
 }
 
+void SShintToolsPanel::OnAssetScanFromBPComplete(const FShintAssetScanResult& Result)
+{
+	// Asset scan triggered by "Scan Blueprints":
+	//   • populate the asset list from full scan results
+	//   • auto-set filter to Blueprints so only BP naming violations are visible
+	//   • do NOT chain another ValidateBlueprints call — BP code scan is already running
+	if (!Result.bSuccess) { SetAssetState(EModuleState::Error); return; }
+	LastAssetResult = Result;
+	PopulateAssetIssueList(Result);
+
+	CurrentAssetTypeFilter = EAssetTypeFilter::Blueprints;
+	ApplyAssetFilter();
+	RefreshAssetStats();
+}
+
 void SShintToolsPanel::OnBlueprintNamingScanComplete(const FShintValidateResult& Result)
 {
 	// Extract only BPB001 (wrong/missing BP_ prefix) and add to asset panel.
@@ -1766,6 +2009,14 @@ void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
 		if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
 		RefreshAssetStats();
 		RefreshApplyAssetLabel();
+
+		// Track that fixes were applied; show "all resolved" message
+		++AssetFixesApplied;
+		if (AssetEmptyText.IsValid())
+			AssetEmptyText->SetText(LOCTEXT("ANBAllFixed",
+				"✓  All violations resolved — click 'Scan' again to do a full re-scan."));
+		if (AssetEmptyState.IsValid())
+			AssetEmptyState->SetVisibility(EVisibility::Visible);
 	}
 	else
 	{
@@ -1852,9 +2103,11 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result)
 
 	ApplyCodeFilter();
 
+	const bool bCodeEmpty = AllCodeItems.IsEmpty();
 	if (CodeEmptyState.IsValid())
-		CodeEmptyState->SetVisibility(
-			AllCodeItems.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed);
+		CodeEmptyState->SetVisibility(bCodeEmpty ? EVisibility::Visible : EVisibility::Collapsed);
+	if (bCodeEmpty && CodeEmptyText.IsValid())
+		CodeEmptyText->SetText(LOCTEXT("CVNoIssues", "✓  No issues found in your project."));
 
 	if (ApplyCodeBtn.IsValid()) ApplyCodeBtn->SetEnabled(!AllCodeItems.IsEmpty());
 	if (SendCodeBtn.IsValid())  SendCodeBtn->SetEnabled(true);
@@ -1981,6 +2234,10 @@ void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Resul
 
 	ApplyAssetFilter();
 	if (SendAssetBtn.IsValid()) SendAssetBtn->SetEnabled(true);
+
+	// If the scan returned no violations, show a clear success message
+	if (AllAssetItems.IsEmpty() && AssetEmptyText.IsValid())
+		AssetEmptyText->SetText(LOCTEXT("ANBNoIssues", "✓  No naming violations found."));
 
 	UE_LOG(LogShintTools, Log,
 		TEXT("[BENCH] PopulateAssetIssueList: %.3f s, %d items"),

@@ -164,6 +164,9 @@ private:
 	FReply OnApplySingleFix(FShintIssueItemPtr Item);
 	FReply OnIgnoreSingleFix(FShintIssueItemPtr Item);
 	void   FetchFixPreview(FShintIssueItemPtr Item);
+	void   OnSafetyCheckComplete(const FShintSafetyCheckResult& Result);
+	void   ShowSafetyWarningDialog(const FShintSafetyCheckResult& Result);
+	void   ProceedWithCodeFixes();
 	FReply OnSelectAllAssetsClicked();
 	FReply OnApplySelectedAssetFixesClicked();
 	FReply OnSendAssetToDashboardClicked();
@@ -176,6 +179,8 @@ private:
 	void OnCodeFixComplete(const FShintFixResult& Result, uint32 FixGeneration);
 	void OnCodeDashboardComplete(const FShintWebDashboardResult& Result);
 	void OnAssetScanComplete(const FShintAssetScanResult& Result);
+	/** Asset scan triggered by Scan Blueprints — auto-filters to Blueprints, no BP-naming chain. */
+	void OnAssetScanFromBPComplete(const FShintAssetScanResult& Result);
 	void OnAssetFixComplete(const FShintAssetFixResult& Result);
 	void OnAssetDashboardComplete(const FShintWebDashboardResult& Result);
 
@@ -246,7 +251,10 @@ private:
 	// The async UBT callback captures the generation at fix-time; if it changed
 	// by the time the callback fires, the scan already superseded the build check
 	// and BUILD001 errors must not be injected into the new results.
-	uint32 ScanGeneration = 0;
+	uint32 ScanGeneration      = 0;
+	/** True while the last code scan was a Blueprint-only scan (set by OnScanBlueprintsClicked,
+	 *  cleared by OnScanProjectClicked). Used to replace — not merge — the code list. */
+	bool   bBlueprintScanActive = false;
 
 	// ── Slate refs ────────────────────────────────────────────────────────────
 	TSharedPtr<SListView<FShintIssueItemPtr>> CodeIssueListView;
@@ -278,6 +286,9 @@ private:
 
 	TSharedPtr<SWidget>    CodeEmptyState;
 	TSharedPtr<SWidget>    AssetEmptyState;
+	TSharedPtr<STextBlock> CodeEmptyText;
+	TSharedPtr<STextBlock> AssetEmptyText;
+	int32                  AssetFixesApplied = 0;
 
 	// Config field widgets
 	TSharedPtr<SEditableTextBox> ProjectIdField;

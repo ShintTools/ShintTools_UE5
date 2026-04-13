@@ -922,6 +922,62 @@ FShintFixResult FShintCoreClient::ParseTreeSitterFixResponse(const FShintRequest
 	return Result;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Safety Check
+// ─────────────────────────────────────────────────────────────────────────────
+
+static FShintSafetyCheckResult ParseSafetyCheckResponse(const FShintRequestResult& Raw)
+{
+	FShintSafetyCheckResult Res; // bSafe = true by default — never block on error
+	if (!Raw.bSuccess || Raw.ResponseBody.IsEmpty())
+		return Res;
+
+	TSharedPtr<FJsonObject> Root;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Raw.ResponseBody);
+	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+		return Res;
+
+	bool bSafe = true;
+	if (Root->TryGetBoolField(TEXT("safe"), bSafe))
+		Res.bSafe = bSafe;
+
+	const TArray<TSharedPtr<FJsonValue>>* Warns = nullptr;
+	if (Root->TryGetArrayField(TEXT("warnings"), Warns) && Warns)
+		for (const TSharedPtr<FJsonValue>& W : *Warns)
+			Res.Warnings.Add(W->AsString());
+
+	FString Preview;
+	if (Root->TryGetStringField(TEXT("preview"), Preview))
+		Res.Preview = MoveTemp(Preview);
+
+	return Res;
+}
+
+void FShintCoreClient::CheckFixSafety(
+	const TArray<FShintCodeIssue>& Issues, FOnShintSafetyCheckComplete OnComplete)
+{
+	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
+	TArray<TSharedPtr<FJsonValue>> IssueArr;
+	for (const FShintCodeIssue& Issue : Issues)
+	{
+		TSharedRef<FJsonObject> Obj = MakeShared<FJsonObject>();
+		Obj->SetStringField(TEXT("rule_id"),        Issue.RuleId);
+		Obj->SetStringField(TEXT("file_path"),      Issue.FilePath);
+		Obj->SetStringField(TEXT("snippet"),        Issue.Snippet);
+		Obj->SetStringField(TEXT("fix_suggestion"), Issue.FixSuggestion);
+		IssueArr.Add(MakeShared<FJsonValueObject>(Obj));
+	}
+	Root->SetArrayField(TEXT("issues"), IssueArr);
+
+	const FString Url = Config.GetBaseUrl() / TEXT("validate/check-fix-safety");
+	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Root),
+		FOnShintRequestComplete::CreateLambda(
+			[OnComplete = MoveTemp(OnComplete)](const FShintRequestResult& Raw) mutable
+			{
+				OnComplete.ExecuteIfBound(ParseSafetyCheckResponse(Raw));
+			}));
+}
+
 void FShintCoreClient::HandleTreeSitterFixResponse(
 	const FShintRequestResult& Raw,
 	FShintFixResult             LocalResult,
