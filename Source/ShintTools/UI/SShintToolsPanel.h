@@ -281,6 +281,9 @@ private:
 
 	TSharedPtr<SWidget>    CodeEmptyState;
 	TSharedPtr<SWidget>    AssetEmptyState;
+	TSharedPtr<STextBlock> CodeEmptyText;
+	TSharedPtr<STextBlock> AssetEmptyText;
+	int32                  AssetFixesApplied = 0;
 
 	// Config field widgets
 	TSharedPtr<SEditableTextBox> ProjectIdField;
