@@ -922,6 +922,54 @@ FShintFixResult FShintCoreClient::ParseTreeSitterFixResponse(const FShintRequest
 	return Result;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Safety Check
+// ─────────────────────────────────────────────────────────────────────────────
+
+void FShintCoreClient::CheckFixSafety(
+	const TArray<FShintCodeIssue>& Issues, FOnShintSafetyCheckComplete OnComplete)
+{
+	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
+	TArray<TSharedPtr<FJsonValue>> IssueArr;
+	for (const FShintCodeIssue& Issue : Issues)
+	{
+		TSharedRef<FJsonObject> Obj = MakeShared<FJsonObject>();
+		Obj->SetStringField(TEXT("rule_id"),        Issue.RuleId);
+		Obj->SetStringField(TEXT("file_path"),      Issue.FilePath);
+		Obj->SetStringField(TEXT("snippet"),        Issue.Snippet);
+		Obj->SetStringField(TEXT("fix_suggestion"), Issue.FixSuggestion);
+		IssueArr.Add(MakeShared<FJsonValueObject>(Obj));
+	}
+	Root->SetArrayField(TEXT("issues"), IssueArr);
+
+	const FString Url = Config.GetBaseUrl() / TEXT("validate/check-fix-safety");
+	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Root),
+		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw)
+		{
+			FShintSafetyCheckResult Res;
+			// On any transport/parse error → treat as safe so we never block the user
+			if (!Raw.bSuccess || Raw.ResponseBody.IsEmpty())
+			{
+				OnComplete.ExecuteIfBound(Res);
+				return;
+			}
+			TSharedPtr<FJsonObject> Obj;
+			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Raw.ResponseBody);
+			if (FJsonSerializer::Deserialize(Reader, Obj) && Obj.IsValid())
+			{
+				bool bSafe = true;
+				Obj->TryGetBoolField(TEXT("safe"), bSafe);
+				Res.bSafe = bSafe;
+				const TArray<TSharedPtr<FJsonValue>>* Warns;
+				if (Obj->TryGetArrayField(TEXT("warnings"), Warns))
+					for (const auto& W : *Warns)
+						Res.Warnings.Add(W->AsString());
+				Obj->TryGetStringField(TEXT("preview"), Res.Preview);
+			}
+			OnComplete.ExecuteIfBound(Res);
+		}));
+}
+
 void FShintCoreClient::HandleTreeSitterFixResponse(
 	const FShintRequestResult& Raw,
 	FShintFixResult             LocalResult,

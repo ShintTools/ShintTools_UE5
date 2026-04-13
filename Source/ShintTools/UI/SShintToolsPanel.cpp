@@ -5,6 +5,10 @@
 #include "ShintCoreClient.h"
 #include "CoreProcessManager.h"
 
+// Slate windows / dialogs
+#include "Widgets/SWindow.h"
+#include "Framework/Application/SlateApplication.h"
+
 // Slate layout
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -1293,10 +1297,9 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Applying %d fix(es) locally."), Accepted.Num());
 
 	PendingCodeFixes = Accepted;
-	const uint32 FixGeneration = ScanGeneration; // snapshot — used to guard async callback
 	SetCodeState(EModuleState::Running);
-	CoreClient->ApplyCodeFixes(Accepted,
-		FOnShintFixComplete::CreateSP(this, &SShintToolsPanel::OnCodeFixComplete, FixGeneration));
+	CoreClient->CheckFixSafety(Accepted,
+		FOnShintSafetyCheckComplete::CreateSP(this, &SShintToolsPanel::OnSafetyCheckComplete));
 	return FReply::Handled();
 }
 
@@ -1330,12 +1333,163 @@ FReply SShintToolsPanel::OnApplySingleFix(FShintIssueItemPtr Item)
 	Issues.Add(I);
 
 	PendingCodeFixes = Issues;
-	const uint32 FixGeneration = ScanGeneration;
 	SetCodeState(EModuleState::Running);
-	CoreClient->ApplyCodeFixes(Issues,
-		FOnShintFixComplete::CreateSP(this, &SShintToolsPanel::OnCodeFixComplete, FixGeneration));
+	CoreClient->CheckFixSafety(Issues,
+		FOnShintSafetyCheckComplete::CreateSP(this, &SShintToolsPanel::OnSafetyCheckComplete));
 	return FReply::Handled();
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Safety Check + Modal Dialog
+// ─────────────────────────────────────────────────────────────────────────────
+
+void SShintToolsPanel::OnSafetyCheckComplete(const FShintSafetyCheckResult& Result)
+{
+	if (Result.bSafe)
+	{
+		ProceedWithCodeFixes();
+	}
+	else
+	{
+		// Not safe — restore idle and show warning dialog
+		SetCodeState(EModuleState::Idle);
+		ShowSafetyWarningDialog(Result);
+	}
+}
+
+void SShintToolsPanel::ShowSafetyWarningDialog(const FShintSafetyCheckResult& Result)
+{
+	TSharedRef<SWindow> Dialog = SNew(SWindow)
+		.Title(NSLOCTEXT("ShintTools", "SafetyTitle", "Safety Check"))
+		.ClientSize(FVector2D(560, 420))
+		.SupportsMaximize(false)
+		.SupportsMinimize(false)
+		.IsTopmostWindow(true)
+		.SizingRule(ESizingRule::FixedSize);
+
+	// ── Header ────────────────────────────────────────────────────────────────
+	TSharedRef<SVerticalBox> WarningList = SNew(SVerticalBox);
+	for (int32 i = 0; i < Result.Warnings.Num(); ++i)
+	{
+		WarningList->AddSlot()
+		.AutoHeight()
+		.Padding(0.f, 2.f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 8.f, 0.f)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(FString::Printf(TEXT("%d."), i + 1)))
+				.Font(F_Small())
+				.ColorAndOpacity(C_Gray())
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(Result.Warnings[i]))
+				.Font(F_Small())
+				.ColorAndOpacity(C_White())
+				.AutoWrapText(true)
+			]
+		];
+	}
+
+	// ── Buttons ───────────────────────────────────────────────────────────────
+	TSharedPtr<SWindow> DialogPtr = TSharedPtr<SWindow>(&Dialog.Get(), [](SWindow*){});
+	TWeakPtr<SWindow> WeakDialog(Dialog);
+
+	Dialog->SetContent(
+		SNew(SBorder)
+		.BorderImage(FAppStyle::GetBrush("NoBorder"))
+		.Padding(24.f)
+		[
+			SNew(SVerticalBox)
+			// Header
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 12.f)
+			[
+				SNew(STextBlock)
+				.Text(NSLOCTEXT("ShintTools", "SafetyHeader", "These fixes may affect your code"))
+				.Font(F_H2())
+				.ColorAndOpacity(C_Yellow())
+			]
+			// Warning list
+			+ SVerticalBox::Slot().FillHeight(1.f).Padding(0.f, 0.f, 0.f, 12.f)
+			[
+				SNew(SScrollBox)
+				+ SScrollBox::Slot()
+				[
+					WarningList
+				]
+			]
+			// Preview (if provided)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 16.f)
+			[
+				SNew(SBorder)
+				.BorderImage(FAppStyle::GetBrush("NoBorder"))
+				.Visibility(Result.Preview.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString(Result.Preview))
+					.Font(F_Mono())
+					.ColorAndOpacity(C_Gray())
+					.AutoWrapText(true)
+				]
+			]
+			// Buttons
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(8.f, 0.f, 0.f, 0.f)
+				[
+					SNew(SButton)
+					.ContentPadding(FMargin(14.f, 7.f))
+					.ButtonColorAndOpacity(C_Surface())
+					.OnClicked_Lambda([WeakDialog]() -> FReply
+					{
+						if (WeakDialog.IsValid()) WeakDialog.Pin()->RequestDestroyWindow();
+						return FReply::Handled();
+					})
+					[
+						SNew(STextBlock).Text(NSLOCTEXT("ShintTools","Cancel","Cancel"))
+						.Font(F_Body()).ColorAndOpacity(C_Gray())
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(8.f, 0.f, 0.f, 0.f)
+				[
+					SNew(SButton)
+					.ContentPadding(FMargin(14.f, 7.f))
+					.ButtonColorAndOpacity(C_Yellow())
+					.OnClicked_Lambda([this, WeakDialog]() -> FReply
+					{
+						if (WeakDialog.IsValid()) WeakDialog.Pin()->RequestDestroyWindow();
+						ProceedWithCodeFixes();
+						return FReply::Handled();
+					})
+					[
+						SNew(STextBlock)
+						.Text(NSLOCTEXT("ShintTools","ApplyAnyway","Apply Anyway"))
+						.Font(F_Body()).ColorAndOpacity(C_BG())
+					]
+				]
+			]
+		]
+	);
+
+	FSlateApplication::Get().AddModalWindow(Dialog, FSlateApplication::Get().GetActiveTopLevelWindow());
+}
+
+void SShintToolsPanel::ProceedWithCodeFixes()
+{
+	if (PendingCodeFixes.IsEmpty()) return;
+
+	const uint32 FixGeneration = ScanGeneration;
+	SetCodeState(EModuleState::Running);
+	CoreClient->ApplyCodeFixes(PendingCodeFixes,
+		FOnShintFixComplete::CreateSP(this, &SShintToolsPanel::OnCodeFixComplete, FixGeneration));
+	PendingCodeFixes.Empty();
+}
+
 
 FReply SShintToolsPanel::OnIgnoreSingleFix(FShintIssueItemPtr Item)
 {

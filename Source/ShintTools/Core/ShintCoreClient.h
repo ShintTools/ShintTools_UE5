@@ -106,6 +106,18 @@ struct FShintFixResult
 DECLARE_DELEGATE_OneParam(FOnShintFixComplete, const FShintFixResult&);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Fix Safety Check
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct FShintSafetyCheckResult
+{
+	bool            bSafe    = true;
+	TArray<FString> Warnings;
+	FString         Preview;
+};
+DECLARE_DELEGATE_OneParam(FOnShintSafetyCheckComplete, const FShintSafetyCheckResult&);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Asset Naming Bot
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -230,6 +242,9 @@ public:
 
 	/** Preview-only: calls /validate/fix for a single issue and returns the result without writing to disk. */
 	void FetchSingleFixPreview(const FShintCodeIssue& Issue, FOnShintFixComplete OnComplete);
+
+	/** Pre-flight safety check: calls /validate/check-fix-safety. On HTTP error, treats as safe. */
+	void CheckFixSafety(const TArray<FShintCodeIssue>& Issues, FOnShintSafetyCheckComplete OnComplete);
 
 	// ── Code Validator — external web dashboard ───────────────────────────────
 	/**

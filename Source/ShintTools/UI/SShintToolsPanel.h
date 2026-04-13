@@ -164,6 +164,9 @@ private:
 	FReply OnApplySingleFix(FShintIssueItemPtr Item);
 	FReply OnIgnoreSingleFix(FShintIssueItemPtr Item);
 	void   FetchFixPreview(FShintIssueItemPtr Item);
+	void   OnSafetyCheckComplete(const FShintSafetyCheckResult& Result);
+	void   ShowSafetyWarningDialog(const FShintSafetyCheckResult& Result);
+	void   ProceedWithCodeFixes();
 	FReply OnSelectAllAssetsClicked();
 	FReply OnApplySelectedAssetFixesClicked();
 	FReply OnSendAssetToDashboardClicked();
