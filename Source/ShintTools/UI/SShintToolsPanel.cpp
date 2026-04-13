@@ -1013,11 +1013,15 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,18.f)
 			[
-				SNew(SButton).ContentPadding(FMargin(14.f,7.f)).HAlign(HAlign_Left)
-				.OnClicked(this, &SShintToolsPanel::OnScanAssetsClicked)
+				SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f,6.f))
+				+ SWrapBox::Slot()
 				[
-					SNew(STextBlock).Text(LOCTEXT("ScanAssets","⟳  Scan All Assets")).Font(F_Small())
-					.ColorAndOpacity(FSlateColor(C_White()))
+					SNew(SButton).ContentPadding(FMargin(14.f,7.f))
+					.OnClicked(this, &SShintToolsPanel::OnScanAssetsClicked)
+					[
+						SNew(STextBlock).Text(LOCTEXT("ScanAssets","⟳  Scan All Assets")).Font(F_Small())
+						.ColorAndOpacity(FSlateColor(C_White()))
+					]
 				]
 			]
 
