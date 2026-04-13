@@ -431,7 +431,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 					SNew(SButton).ContentPadding(FMargin(14.f,7.f))
 					.OnClicked(this, &SShintToolsPanel::OnScanProjectClicked)
 					[
-						SNew(STextBlock).Text(LOCTEXT("ScanSrc","⟳  Scan All Source")).Font(F_Small())
+						SNew(STextBlock).Text(LOCTEXT("ScanSrc","⟳  Scan All C++ Source")).Font(F_Small())
 						.ColorAndOpacity(FSlateColor(C_White()))
 					]
 				]
@@ -440,7 +440,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 					SNew(SButton).ContentPadding(FMargin(14.f,7.f))
 					.OnClicked(this, &SShintToolsPanel::OnScanBlueprintsClicked)
 					[
-						SNew(STextBlock).Text(LOCTEXT("ScanBP","⟳  Scan Blueprints")).Font(F_Small())
+						SNew(STextBlock).Text(LOCTEXT("ScanBP","⟳  Scan All BP")).Font(F_Small())
 						.ColorAndOpacity(FSlateColor(C_White()))
 					]
 				]
@@ -577,6 +577,44 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetTypeMenuContent()
 		[ Menu ];
 }
 
+TSharedRef<SWidget> SShintToolsPanel::BuildCodeTypeMenuContent()
+{
+	struct FEntry { FText Label; ECodeTypeFilter Value; };
+	const TArray<FEntry> Entries = {
+		{ LOCTEXT("CodeTypeAll", "All Types"),       ECodeTypeFilter::All           },
+		{ LOCTEXT("CodeTypeCpp", "C++ Only"),         ECodeTypeFilter::CppOnly       },
+		{ LOCTEXT("CodeTypeBP",  "Blueprints Only"),  ECodeTypeFilter::BlueprintsOnly},
+	};
+
+	TSharedRef<SVerticalBox> Menu = SNew(SVerticalBox);
+	for (const FEntry& E : Entries)
+	{
+		const FText  Label = E.Label;
+		const ECodeTypeFilter Value = E.Value;
+		Menu->AddSlot().AutoHeight()
+		[
+			SNew(SButton).ContentPadding(FMargin(10.f, 5.f))
+			.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+			.OnClicked_Lambda([this, Label, Value]() -> FReply
+			{
+				CurrentCodeTypeFilter = Value;
+				if (CodeTypeFilterLabel.IsValid())
+					CodeTypeFilterLabel->SetText(Label);
+				ApplyCodeFilter();
+				return FReply::Handled();
+			})
+			[
+				SNew(STextBlock).Text(Label).Font(F_Label())
+				.ColorAndOpacity(FSlateColor(C_Gray()))
+			]
+		];
+	}
+	return SNew(SBorder)
+		.BorderImage(ST4::Solid(C_Surface()))
+		.Padding(2.f)
+		[ Menu ];
+}
+
 TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 {
 	// Category dropdown
@@ -625,6 +663,29 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			]
 		];
 
+	// Code type dropdown (C++ / Blueprints / All)
+	TSharedRef<SWidget> CodeTypeCombo =
+		SNew(SComboButton)
+		.ContentPadding(FMargin(8.f, 4.f))
+		.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+		.OnGetMenuContent(this, &SShintToolsPanel::BuildCodeTypeMenuContent)
+		.ButtonContent()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SAssignNew(CodeTypeFilterLabel, STextBlock)
+				.Text(LOCTEXT("CodeTypeAll","All Types"))
+				.Font(F_Label())
+				.ColorAndOpacity(FSlateColor(C_Gray()))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
+			[
+				SNew(STextBlock).Text(FText::FromString(TEXT("\u25BE")))
+				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
+			]
+		];
+
 	// Fixable toggle
 	TSharedRef<SWidget> FixableBtn =
 		SNew(SButton).ContentPadding(FMargin(8.f, 4.f))
@@ -652,6 +713,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 				SNew(STextBlock).Text(LOCTEXT("ResLbl","RESULTS")).Font(F_Label())
 				.ColorAndOpacity(FSlateColor(C_DimGray()))
 			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f) [ CodeTypeCombo ]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f) [ CategoryCombo ]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f) [ SeverityCombo ]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,10.f,0.f) [ FixableBtn    ]
@@ -1227,6 +1289,12 @@ FReply SShintToolsPanel::OnScanProjectClicked()
 
 	++ScanGeneration;
 	bBlueprintScanActive = false;   // full source scan — no BP-only filter
+
+	// Auto-set the code type filter to C++ Only for this scan
+	CurrentCodeTypeFilter = ECodeTypeFilter::CppOnly;
+	if (CodeTypeFilterLabel.IsValid())
+		CodeTypeFilterLabel->SetText(LOCTEXT("CodeTypeCpp","C++ Only"));
+
 	SetCodeState(EModuleState::Running);
 	// Reset to default empty text before new results arrive
 	if (CodeEmptyText.IsValid())
@@ -1247,6 +1315,11 @@ FReply SShintToolsPanel::OnScanBlueprintsClicked()
 {
 	++ScanGeneration;
 	bBlueprintScanActive = true;
+
+	// Auto-set the code type filter to Blueprints Only for this scan
+	CurrentCodeTypeFilter = ECodeTypeFilter::BlueprintsOnly;
+	if (CodeTypeFilterLabel.IsValid())
+		CodeTypeFilterLabel->SetText(LOCTEXT("CodeTypeBP","Blueprints Only"));
 
 	// ── Code Validator: replace list with BP-only results ─────────────────────
 	SetCodeState(EModuleState::Running);
@@ -2127,6 +2200,14 @@ void SShintToolsPanel::ApplyCodeFilter()
 	{
 		// Compile errors always show regardless of active filters — they are critical
 		const bool bIsBuildError = (Item->RuleId == TEXT("BUILD001"));
+
+		// ── Code type filter (C++ vs Blueprint) ──────────────────────────────
+		if (!bIsBuildError && CurrentCodeTypeFilter != ECodeTypeFilter::All)
+		{
+			const bool bIsBP = Item->RuleId.StartsWith(TEXT("BP"));
+			if (CurrentCodeTypeFilter == ECodeTypeFilter::CppOnly        &&  bIsBP) continue;
+			if (CurrentCodeTypeFilter == ECodeTypeFilter::BlueprintsOnly && !bIsBP) continue;
+		}
 
 		// ── Fixable filter ────────────────────────────────────────────────────
 		if (!bIsBuildError && CurrentFilter == EIssueFilter::FixableOnly && !Item->bIsAutoFixable)
