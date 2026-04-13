@@ -1226,6 +1226,7 @@ FReply SShintToolsPanel::OnScanProjectClicked()
 	}
 
 	++ScanGeneration;
+	bBlueprintScanActive = false;   // full source scan — no BP-only filter
 	SetCodeState(EModuleState::Running);
 	// Reset to default empty text before new results arrive
 	if (CodeEmptyText.IsValid())
@@ -1245,10 +1246,32 @@ FReply SShintToolsPanel::OnScanProjectClicked()
 FReply SShintToolsPanel::OnScanBlueprintsClicked()
 {
 	++ScanGeneration;
+	bBlueprintScanActive = true;
+
+	// ── Code Validator: replace list with BP-only results ─────────────────────
 	SetCodeState(EModuleState::Running);
-	// Merge into existing results (append to source scan)
+	CodeIssueItems.Empty();
+	AllCodeItems.Empty();
+	AppliedFixFingerprints.Empty();
+	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
+	LastCodeResult = FShintValidateResult();
+	if (CodeEmptyText.IsValid())
+		CodeEmptyText->SetText(LOCTEXT("CVEmpty", "Run a scan to see results here."));
+
 	CoreClient->ValidateBlueprints(FPaths::ProjectContentDir(),
 		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnBlueprintValidateComplete));
+
+	// ── Asset Naming Bot: scan and auto-filter to Blueprints ──────────────────
+	SetAssetState(EModuleState::Running);
+	if (AssetEmptyText.IsValid())
+		AssetEmptyText->SetText(LOCTEXT("ANBEmpty", "Run a scan to see naming violations."));
+	AllAssetItems.Empty();
+	AssetIssueItems.Empty();
+	if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
+
+	CoreClient->ScanAssetNaming(FPaths::ProjectContentDir(),
+		FOnShintAssetScanComplete::CreateSP(this, &SShintToolsPanel::OnAssetScanFromBPComplete));
+
 	return FReply::Handled();
 }
 
@@ -1760,8 +1783,10 @@ void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& R
 		RefreshAssetStats();
 	}
 
-	// Quality issues → code validator panel
-	HandleValidateResult(QualityResult, true);
+	// Quality issues → code validator panel.
+	// bBlueprintScanActive=true: REPLACE the list so only BP issues are shown.
+	// bBlueprintScanActive=false (legacy path): merge with existing C++ results.
+	HandleValidateResult(QualityResult, !bBlueprintScanActive);
 }
 
 void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, bool bMerge)
@@ -1923,6 +1948,21 @@ void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
 	// Results go ONLY to the asset naming panel — code validator is not touched.
 	CoreClient->ValidateBlueprints(FPaths::ProjectContentDir(),
 		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnBlueprintNamingScanComplete));
+}
+
+void SShintToolsPanel::OnAssetScanFromBPComplete(const FShintAssetScanResult& Result)
+{
+	// Asset scan triggered by "Scan Blueprints":
+	//   • populate the asset list from full scan results
+	//   • auto-set filter to Blueprints so only BP naming violations are visible
+	//   • do NOT chain another ValidateBlueprints call — BP code scan is already running
+	if (!Result.bSuccess) { SetAssetState(EModuleState::Error); return; }
+	LastAssetResult = Result;
+	PopulateAssetIssueList(Result);
+
+	CurrentAssetTypeFilter = EAssetTypeFilter::Blueprints;
+	ApplyAssetFilter();
+	RefreshAssetStats();
 }
 
 void SShintToolsPanel::OnBlueprintNamingScanComplete(const FShintValidateResult& Result)
