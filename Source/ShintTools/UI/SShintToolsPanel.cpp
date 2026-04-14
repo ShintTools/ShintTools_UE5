@@ -1815,7 +1815,10 @@ void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& R
 
 	for (const FShintCodeIssue& Issue : Result.Issues)
 	{
-		if (Issue.RuleId == TEXT("BPB001"))
+		// BPB001 (naming) → Asset Naming panel ONLY when triggered by the legacy
+		// naming-chain path (bBlueprintScanActive=false). When the user clicks
+		// "Scan All BP", all issues stay in the Code Validator — no asset panel side-effect.
+		if (!bBlueprintScanActive && Issue.RuleId == TEXT("BPB001"))
 		{
 			// Convert to asset naming item and add to backing store
 			FShintAssetItemPtr Item = MakeShared<FShintAssetItem>();
