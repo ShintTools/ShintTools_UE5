@@ -569,7 +569,7 @@ void FShintCoreClient::ApplyCodeFixes(
 				{
 					CDO->PrimaryActorTick.bCanEverTick        = false;
 					CDO->PrimaryActorTick.bStartWithTickEnabled = false;
-					BP->MarkPackageDirty();
+					(void)BP->MarkPackageDirty();
 					UE_LOG(LogShintTools, Log,
 						TEXT("ApplyFix: [BPP001] Disabled tick on '%s'"), *Issue->FilePath);
 					++BPApplied;
@@ -601,7 +601,7 @@ void FShintCoreClient::ApplyCodeFixes(
 				{
 					FBlueprintEditorUtils::RemoveMemberVariable(BP, FName(*VarName));
 					FKismetEditorUtilities::CompileBlueprint(BP);
-					BP->MarkPackageDirty();
+					(void)BP->MarkPackageDirty();
 					UE_LOG(LogShintTools, Log,
 						TEXT("ApplyFix: [BPM001] Removed variable '%s' from '%s'"), *VarName, *Issue->FilePath);
 					++BPApplied;
@@ -660,7 +660,7 @@ void FShintCoreClient::ApplyCodeFixes(
 				if (RemovedNodes > 0)
 				{
 					FKismetEditorUtilities::CompileBlueprint(BP);
-					BP->MarkPackageDirty();
+					(void)BP->MarkPackageDirty();
 					UE_LOG(LogShintTools, Log,
 						TEXT("ApplyFix: [BPM002] Removed %d disconnected node(s) from '%s'"),
 						RemovedNodes, *Issue->FilePath);
@@ -705,7 +705,7 @@ void FShintCoreClient::ApplyCodeFixes(
 					{
 						FBlueprintEditorUtils::RefreshAllNodes(BP);
 						FKismetEditorUtilities::CompileBlueprint(BP);
-						BP->MarkPackageDirty();
+						(void)BP->MarkPackageDirty();
 						UE_LOG(LogShintTools, Log,
 							TEXT("ApplyFix: [BPB007] Set category 'Default' on '%s' in '%s'"),
 							*VarName, *Issue->FilePath);
