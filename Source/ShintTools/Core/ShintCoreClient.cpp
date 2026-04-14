@@ -32,6 +32,10 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 
+// Blueprint fix helpers
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Construction
 // ─────────────────────────────────────────────────────────────────────────────
@@ -567,8 +571,148 @@ void FShintCoreClient::ApplyCodeFixes(
 				TEXT("ApplyFix: [BPP001] Could not load BP '%s'"), *Issue->FilePath);
 			++BPSkipped;
 		}
+		else if (Issue->RuleId == TEXT("BPM001"))
+		{
+			// Remove unused member variable — parse var name from Message:
+			// "Variable 'VarName' is declared but never used"
+			FString VarName;
+			const FString& Msg = Issue->Message;
+			int32 Q1 = INDEX_NONE, Q2 = INDEX_NONE;
+			Msg.FindChar(TCHAR('\''), Q1);
+			if (Q1 != INDEX_NONE)
+				Msg.FindChar(TCHAR('\''), Q2, ESearchCase::CaseSensitive, ESearchDir::FromStart, Q1 + 1);
+
+			if (Q1 != INDEX_NONE && Q2 != INDEX_NONE && Q2 > Q1)
+				VarName = Msg.Mid(Q1 + 1, Q2 - Q1 - 1);
+
+			if (!VarName.IsEmpty())
+			{
+				UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *Issue->FilePath);
+				if (BP)
+				{
+					FBlueprintEditorUtils::RemoveMemberVariable(BP, FName(*VarName));
+					FKismetEditorUtilities::CompileBlueprint(BP);
+					BP->MarkPackageDirty();
+					UE_LOG(LogShintTools, Log,
+						TEXT("ApplyFix: [BPM001] Removed variable '%s' from '%s'"), *VarName, *Issue->FilePath);
+					++BPApplied;
+					continue;
+				}
+			}
+			UE_LOG(LogShintTools, Warning,
+				TEXT("ApplyFix: [BPM001] Could not fix '%s' — VarName='%s'"), *Issue->FilePath, *VarName);
+			++BPSkipped;
+		}
+		else if (Issue->RuleId == TEXT("BPM002"))
+		{
+			// Delete disconnected (orphan) nodes
+			UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *Issue->FilePath);
+			if (BP)
+			{
+				// Collect all graphs (ubergraph + function graphs)
+				TArray<UEdGraph*> AllGraphs;
+				AllGraphs.Append(BP->UbergraphPages);
+				AllGraphs.Append(BP->FunctionGraphs);
+
+				int32 RemovedNodes = 0;
+				for (UEdGraph* Graph : AllGraphs)
+				{
+					if (!Graph) continue;
+					// Iterate backwards so we can safely remove while iterating
+					for (int32 NodeIdx = Graph->Nodes.Num() - 1; NodeIdx >= 0; --NodeIdx)
+					{
+						UEdGraphNode* Node = Graph->Nodes[NodeIdx];
+						if (!Node) continue;
+
+						// Skip entry/event nodes — they have no execution inputs but are not orphans
+						if (Node->IsA<UK2Node_FunctionEntry>()) continue;
+						if (Node->GetClass()->GetName().Contains(TEXT("Event"))) continue;
+						if (Node->GetClass()->GetName().Contains(TEXT("Tunnel"))) continue;
+
+						// Check if ALL pins are disconnected
+						bool bAllDisconnected = true;
+						for (UEdGraphPin* Pin : Node->Pins)
+						{
+							if (Pin && Pin->LinkedTo.Num() > 0)
+							{
+								bAllDisconnected = false;
+								break;
+							}
+						}
+
+						if (bAllDisconnected)
+						{
+							FBlueprintEditorUtils::RemoveNode(BP, Node, /*bDontRecompile=*/true);
+							++RemovedNodes;
+						}
+					}
+				}
+
+				if (RemovedNodes > 0)
+				{
+					FKismetEditorUtilities::CompileBlueprint(BP);
+					BP->MarkPackageDirty();
+					UE_LOG(LogShintTools, Log,
+						TEXT("ApplyFix: [BPM002] Removed %d disconnected node(s) from '%s'"),
+						RemovedNodes, *Issue->FilePath);
+					++BPApplied;
+					continue;
+				}
+			}
+			UE_LOG(LogShintTools, Warning,
+				TEXT("ApplyFix: [BPM002] Could not fix '%s'"), *Issue->FilePath);
+			++BPSkipped;
+		}
+		else if (Issue->RuleId == TEXT("BPB007"))
+		{
+			// Assign default category to uncategorized public variable
+			// Message: "Public variable 'VarName' has no category"
+			FString VarName;
+			const FString& Msg = Issue->Message;
+			int32 Q1 = INDEX_NONE, Q2 = INDEX_NONE;
+			Msg.FindChar(TCHAR('\''), Q1);
+			if (Q1 != INDEX_NONE)
+				Msg.FindChar(TCHAR('\''), Q2, ESearchCase::CaseSensitive, ESearchDir::FromStart, Q1 + 1);
+
+			if (Q1 != INDEX_NONE && Q2 != INDEX_NONE && Q2 > Q1)
+				VarName = Msg.Mid(Q1 + 1, Q2 - Q1 - 1);
+
+			if (!VarName.IsEmpty())
+			{
+				UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *Issue->FilePath);
+				if (BP)
+				{
+					bool bFound = false;
+					for (FBPVariableDescription& Var : BP->NewVariables)
+					{
+						if (Var.VarName == FName(*VarName))
+						{
+							Var.Category = NSLOCTEXT("ShintTools", "DefaultCategory", "Default");
+							bFound = true;
+							break;
+						}
+					}
+					if (bFound)
+					{
+						FBlueprintEditorUtils::RefreshAllNodes(BP);
+						FKismetEditorUtilities::CompileBlueprint(BP);
+						BP->MarkPackageDirty();
+						UE_LOG(LogShintTools, Log,
+							TEXT("ApplyFix: [BPB007] Set category 'Default' on '%s' in '%s'"),
+							*VarName, *Issue->FilePath);
+						++BPApplied;
+						continue;
+					}
+				}
+			}
+			UE_LOG(LogShintTools, Warning,
+				TEXT("ApplyFix: [BPB007] Could not fix '%s' — VarName='%s'"), *Issue->FilePath, *VarName);
+			++BPSkipped;
+		}
 		else
 		{
+			UE_LOG(LogShintTools, Warning,
+				TEXT("ApplyFix: BP rule '%s' has no plugin-side handler — skipping"), *Issue->RuleId);
 			++BPSkipped;
 		}
 	}
