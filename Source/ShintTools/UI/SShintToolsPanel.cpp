@@ -835,9 +835,9 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 
 	// bHasContext: true when server sent context window OR when we can fetch it (tree-sitter)
 	const bool bHasContext  = !Item->ContextBefore.IsEmpty() || !Item->FileContent.IsEmpty();
-	// bIsFixable: auto-fixable issues (tree-sitter or local line-replacement)
+	// bIsFixable: auto-fixable issues (tree-sitter, local line-replacement, or plugin-side BP handler)
 	const bool bIsFixable   = Item->bIsAutoFixable
-		&& (!Item->FixSuggestion.IsEmpty() || !Item->FileContent.IsEmpty());
+		&& (!Item->FixSuggestion.IsEmpty() || !Item->FileContent.IsEmpty() || Item->bIsBlueprint);
 
 	// ── Context diff panels (shown when Preview is toggled) ──────────────────
 	// Priority: FixPreviewCode (fetched on-demand from /validate/fix) >
@@ -1366,7 +1366,8 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 	{
 		// Only accept issues that are checked AND actually auto-fixable
 		if (!Item->bChecked || !Item->bIsAutoFixable) continue;
-		if (Item->FixSuggestion.IsEmpty()) continue;
+		// BP issues use plugin-side handlers — no FixSuggestion required
+		if (!Item->bIsBlueprint && Item->FixSuggestion.IsEmpty()) continue;
 
 		FShintCodeIssue I;
 		I.RuleId         = Item->RuleId;
@@ -1421,7 +1422,8 @@ FReply SShintToolsPanel::OnSendCodeToDashboardClicked()
 
 FReply SShintToolsPanel::OnApplySingleFix(FShintIssueItemPtr Item)
 {
-	if (!Item.IsValid() || !Item->bIsAutoFixable || Item->FixSuggestion.IsEmpty())
+	if (!Item.IsValid() || !Item->bIsAutoFixable
+		|| (!Item->bIsBlueprint && Item->FixSuggestion.IsEmpty()))
 		return FReply::Handled();
 
 	TArray<FShintCodeIssue> Issues;
@@ -1905,7 +1907,8 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 F
 
 		// Now safe to remove from backing data
 		AllCodeItems.RemoveAll([](const FShintIssueItemPtr& I) {
-			return I->bChecked && I->bIsAutoFixable && !I->FixSuggestion.IsEmpty();
+			return I->bChecked && I->bIsAutoFixable
+				&& (!I->FixSuggestion.IsEmpty() || I->bIsBlueprint);
 		});
 
 		// ── Inject compile errors from the incremental build check ──────────────
