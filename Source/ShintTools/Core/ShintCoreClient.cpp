@@ -546,13 +546,22 @@ void FShintCoreClient::ApplyCodeFixes(
 	}
 
 	// ── Apply Blueprint fixes programmatically ────────────────────────────────
+	// Helper: UE5 LoadObject needs the full object path "/Game/Pkg/Asset.Asset",
+	// but the server returns only the package path "/Game/Pkg/Asset". Append the
+	// asset name suffix when not already present.
+	auto MakeBPPath = [](const FString& Pkg) -> FString
+	{
+		if (Pkg.IsEmpty() || Pkg.Contains(TEXT("."))) return Pkg;
+		return Pkg + TEXT(".") + FPaths::GetBaseFilename(Pkg);
+	};
+
 	int32 BPApplied = 0;
 	int32 BPSkipped = 0;
 	for (const FShintCodeIssue* Issue : BPIssues)
 	{
 		if (Issue->RuleId == TEXT("BPP001"))
 		{
-			UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *Issue->FilePath);
+			UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *MakeBPPath(Issue->FilePath));
 			if (BP && BP->GeneratedClass)
 			{
 				AActor* CDO = Cast<AActor>(BP->GeneratedClass->GetDefaultObject(true));
@@ -587,7 +596,7 @@ void FShintCoreClient::ApplyCodeFixes(
 
 			if (!VarName.IsEmpty())
 			{
-				UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *Issue->FilePath);
+				UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *MakeBPPath(Issue->FilePath));
 				if (BP)
 				{
 					FBlueprintEditorUtils::RemoveMemberVariable(BP, FName(*VarName));
@@ -606,7 +615,7 @@ void FShintCoreClient::ApplyCodeFixes(
 		else if (Issue->RuleId == TEXT("BPM002"))
 		{
 			// Delete disconnected (orphan) nodes
-			UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *Issue->FilePath);
+			UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *MakeBPPath(Issue->FilePath));
 			if (BP)
 			{
 				// Collect all graphs (ubergraph + function graphs)
@@ -679,7 +688,7 @@ void FShintCoreClient::ApplyCodeFixes(
 
 			if (!VarName.IsEmpty())
 			{
-				UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *Issue->FilePath);
+				UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *MakeBPPath(Issue->FilePath));
 				if (BP)
 				{
 					bool bFound = false;
