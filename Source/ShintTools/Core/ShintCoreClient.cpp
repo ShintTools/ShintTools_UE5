@@ -596,8 +596,7 @@ void FShintCoreClient::ApplyCodeFixes(
 
 			if (!VarName.IsEmpty())
 			{
-				UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *MakeBPPath(Issue->FilePath));
-				if (BP)
+				if (UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *MakeBPPath(Issue->FilePath)))
 				{
 					FBlueprintEditorUtils::RemoveMemberVariable(BP, FName(*VarName));
 					FKismetEditorUtilities::CompileBlueprint(BP);
