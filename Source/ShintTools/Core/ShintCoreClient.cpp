@@ -589,7 +589,7 @@ void FShintCoreClient::ApplyCodeFixes(
 			int32 Q1 = INDEX_NONE, Q2 = INDEX_NONE;
 			Msg.FindChar(TCHAR('\''), Q1);
 			if (Q1 != INDEX_NONE)
-				Msg.FindChar(TCHAR('\''), Q2, ESearchCase::CaseSensitive, ESearchDir::FromStart, Q1 + 1);
+				Q2 = Msg.Find(TEXT("'"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Q1 + 1);
 
 			if (Q1 != INDEX_NONE && Q2 != INDEX_NONE && Q2 > Q1)
 				VarName = Msg.Mid(Q1 + 1, Q2 - Q1 - 1);
@@ -681,7 +681,7 @@ void FShintCoreClient::ApplyCodeFixes(
 			int32 Q1 = INDEX_NONE, Q2 = INDEX_NONE;
 			Msg.FindChar(TCHAR('\''), Q1);
 			if (Q1 != INDEX_NONE)
-				Msg.FindChar(TCHAR('\''), Q2, ESearchCase::CaseSensitive, ESearchDir::FromStart, Q1 + 1);
+				Q2 = Msg.Find(TEXT("'"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Q1 + 1);
 
 			if (Q1 != INDEX_NONE && Q2 != INDEX_NONE && Q2 > Q1)
 				VarName = Msg.Mid(Q1 + 1, Q2 - Q1 - 1);
