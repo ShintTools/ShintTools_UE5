@@ -1800,7 +1800,7 @@ void SShintToolsPanel::OnHealthCheckComplete(const FShintRequestResult& Result)
 
 void SShintToolsPanel::OnProjectValidateComplete(const FShintValidateResult& Result)
 {
-	HandleValidateResult(Result, false);
+	HandleValidateResult(Result, /*bMerge=*/false, /*bIsBPScan=*/false);
 }
 
 void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& Result)
@@ -1851,10 +1851,10 @@ void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& R
 	// Quality issues → code validator panel.
 	// bBlueprintScanActive=true: REPLACE the list so only BP issues are shown.
 	// bBlueprintScanActive=false (legacy path): merge with existing C++ results.
-	HandleValidateResult(QualityResult, !bBlueprintScanActive);
+	HandleValidateResult(QualityResult, /*bMerge=*/!bBlueprintScanActive, /*bIsBPScan=*/bBlueprintScanActive);
 }
 
-void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, bool bMerge)
+void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, bool bMerge, bool bIsBPScan)
 {
 	if (!Result.bSuccess) { SetCodeState(EModuleState::Error); return; }
 
@@ -1876,7 +1876,7 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 	}
 
 	SetCodeState(EModuleState::Done);
-	PopulateCodeIssueList(LastCodeResult);
+	PopulateCodeIssueList(LastCodeResult, bIsBPScan);
 	RefreshCodeStats();
 }
 
@@ -2124,7 +2124,7 @@ void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& 
 // Populate + refresh
 // ─────────────────────────────────────────────────────────────────────────────
 
-void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result)
+void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result, bool bIsBPScan)
 {
 	const double PopStart = FPlatformTime::Seconds();
 	// Clear visible list FIRST so Slate never references stale items during a paint tick
@@ -2155,7 +2155,7 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result)
 		Item->FixSuggestion  = Src.FixSuggestion;
 		Item->bIsAutoFixable = Src.bIsAutoFixable;
 		Item->bChecked       = Src.bIsAutoFixable;
-		Item->bIsBlueprint   = bBlueprintScanActive;
+		Item->bIsBlueprint   = bIsBPScan;
 		Item->OriginalIndex  = i;
 		Item->Class            = Src.Class;
 		Item->Category         = Src.Category;

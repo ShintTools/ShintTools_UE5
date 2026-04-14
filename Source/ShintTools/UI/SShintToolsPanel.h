@@ -193,7 +193,7 @@ private:
 	void SetStatus(ECoreStatus S);
 	void SetCodeState(EModuleState S);
 	void SetAssetState(EModuleState S);
-	void PopulateCodeIssueList(const FShintValidateResult& Result);
+	void PopulateCodeIssueList(const FShintValidateResult& Result, bool bIsBPScan);
 	void PopulateAssetIssueList(const FShintAssetScanResult& Result);
 	void ApplyCodeFilter();
 	void ApplyAssetFilter();
@@ -208,7 +208,7 @@ private:
 	TOptional<float> GetCodeProgress()  const;
 	TOptional<float> GetAssetProgress() const;
 
-	void HandleValidateResult(const FShintValidateResult& Result, bool bMerge);
+	void HandleValidateResult(const FShintValidateResult& Result, bool bMerge, bool bIsBPScan);
 
 	static FString FmtN(int32 N);
 	static TSharedRef<SWidget> Divider();
