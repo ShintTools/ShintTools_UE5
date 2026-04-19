@@ -431,7 +431,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 					SNew(SButton).ContentPadding(FMargin(14.f,7.f))
 					.OnClicked(this, &SShintToolsPanel::OnScanProjectClicked)
 					[
-						SNew(STextBlock).Text(LOCTEXT("ScanSrc","⟳  Scan All C++ Source")).Font(F_Small())
+						SNew(STextBlock).Text(LOCTEXT("ScanSrc",">  Scan All C++ Source")).Font(F_Small())
 						.ColorAndOpacity(FSlateColor(C_White()))
 					]
 				]
@@ -440,7 +440,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 					SNew(SButton).ContentPadding(FMargin(14.f,7.f))
 					.OnClicked(this, &SShintToolsPanel::OnScanBlueprintsClicked)
 					[
-						SNew(STextBlock).Text(LOCTEXT("ScanBP","⟳  Scan All BP")).Font(F_Small())
+						SNew(STextBlock).Text(LOCTEXT("ScanBP",">  Scan All BP")).Font(F_Small())
 						.ColorAndOpacity(FSlateColor(C_White()))
 					]
 				]
@@ -635,7 +635,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
 			[
-				SNew(STextBlock).Text(FText::FromString(TEXT("\u25BE")))
+				SNew(STextBlock).Text(FText::FromString(TEXT("v")))
 				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
 			]
 		];
@@ -658,7 +658,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
 			[
-				SNew(STextBlock).Text(FText::FromString(TEXT("\u25BE")))
+				SNew(STextBlock).Text(FText::FromString(TEXT("v")))
 				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
 			]
 		];
@@ -681,7 +681,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
 			[
-				SNew(STextBlock).Text(FText::FromString(TEXT("\u25BE")))
+				SNew(STextBlock).Text(FText::FromString(TEXT("v")))
 				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
 			]
 		];
@@ -893,7 +893,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				SNew(SBox).Visibility(Item->Snippet.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
-				[ BuildDiffLine(TEXT("\u25B8"), Item->Snippet, C_Red(), C_DiffRed()) ]
+				[ BuildDiffLine(TEXT(">"), Item->Snippet, C_Red(), C_DiffRed()) ]
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f, 0.f, 0.f)
 			[
@@ -1081,7 +1081,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 					SNew(SButton).ContentPadding(FMargin(14.f,7.f))
 					.OnClicked(this, &SShintToolsPanel::OnScanAssetsClicked)
 					[
-						SNew(STextBlock).Text(LOCTEXT("ScanAssets","⟳  Scan All Assets")).Font(F_Small())
+						SNew(STextBlock).Text(LOCTEXT("ScanAssets",">  Scan All Assets")).Font(F_Small())
 						.ColorAndOpacity(FSlateColor(C_White()))
 					]
 				]
@@ -1119,7 +1119,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
 			[
-				SNew(STextBlock).Text(FText::FromString(TEXT("\u25BE")))
+				SNew(STextBlock).Text(FText::FromString(TEXT("v")))
 				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
 			]
 		];
@@ -1240,7 +1240,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateAssetIssueRow(
 						[
 							SNew(SHorizontalBox)
 							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f)
-							[ SNew(STextBlock).Text(FText::FromString(TEXT("\u25B8"))).Font(F_Mono())
+							[ SNew(STextBlock).Text(FText::FromString(TEXT(">"))).Font(F_Mono())
 							  .ColorAndOpacity(FSlateColor(C_Red())) ]
 							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,12.f,0.f)
 							[ SNew(STextBlock).Text(FText::FromString(Item->CurrentName))
@@ -1720,19 +1720,51 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 	FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
 
 	IAssetTools& AssetTools = AssetToolsModule.Get();
-	
+
+	IAssetRegistry& AR =
+		FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+
 	TArray<FAssetRenameData> RenameData;
 	TArray<FShintAssetIssue> ForServer;
+	int32 SkippedCircular  = 0;
+	int32 SkippedCollision = 0;
 
 	for (const FShintAssetItemPtr& Item : AssetIssueItems)
 	{
 		if (!Item->bChecked) continue;
+
+		// ── E-001: skip circular / no-op renames ─────────────────────────────
+		// If the suggested name equals the current on-disk name, firing a rename
+		// creates a self-referencing ObjectRedirector and triggers an UE5 ensure.
+		if (Item->SuggestedName.IsEmpty() ||
+			Item->SuggestedName.Equals(Item->CurrentName, ESearchCase::CaseSensitive))
+		{
+			++SkippedCircular;
+			continue;
+		}
 
 		// Load the UObject from its package path (/Game/...AssetName)
 		UObject* Asset = StaticLoadObject(UObject::StaticClass(), nullptr, *Item->AssetPath);
 		if (!Asset) continue;
 
 		const FString NewPackagePath = FPaths::GetPath(Item->AssetPath);
+
+		// ── E-002: skip if the destination package already exists ────────────
+		// Otherwise UE5 fails the rename with "An object named 'X' already exists".
+		{
+			const FString NewPackageName = NewPackagePath / Item->SuggestedName;
+			TArray<FAssetData> ExistingAssets;
+			AR.GetAssetsByPackageName(FName(*NewPackageName), ExistingAssets);
+			if (ExistingAssets.Num() > 0)
+			{
+				UE_LOG(LogShintTools, Warning,
+					TEXT("ShintPanel: skipped rename '%s' → '%s' (target already exists at %s)"),
+					*Item->CurrentName, *Item->SuggestedName, *NewPackageName);
+				++SkippedCollision;
+				continue;
+			}
+		}
+
 		RenameData.Add(FAssetRenameData(Asset, NewPackagePath, Item->SuggestedName));
 
 		FShintAssetIssue I;
@@ -1741,6 +1773,13 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 		I.SuggestedName= Item->SuggestedName;
 		I.AssetType    = Item->AssetType;
 		ForServer.Add(I);
+	}
+
+	if (SkippedCircular + SkippedCollision > 0)
+	{
+		UE_LOG(LogShintTools, Log,
+			TEXT("ShintPanel: asset rename pre-check skipped %d circular and %d collision(s)"),
+			SkippedCircular, SkippedCollision);
 	}
 
 	if (RenameData.IsEmpty()) return FReply::Handled();
@@ -1752,9 +1791,6 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 	// path. Collect all redirectors under /Game and fix references so no stale
 	// pointers remain and DefaultEngine.ini stays clean.
 	{
-		IAssetRegistry& AR =
-			FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
-
 		FARFilter RedirFilter;
 		RedirFilter.ClassPaths.Add(UObjectRedirector::StaticClass()->GetClassPathName());
 		RedirFilter.PackagePaths.Add(TEXT("/Game"));
@@ -2129,6 +2165,7 @@ void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& 
 
 void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result, bool bIsBPScan)
 {
+	(void)bIsBPScan;   // classification is now derived from FilePath (see BUG-001)
 	const double PopStart = FPlatformTime::Seconds();
 	// Clear visible list FIRST so Slate never references stale items during a paint tick
 	CodeIssueItems.Reset();
@@ -2158,7 +2195,11 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result,
 		Item->FixSuggestion  = Src.FixSuggestion;
 		Item->bIsAutoFixable = Src.bIsAutoFixable;
 		Item->bChecked       = Src.bIsAutoFixable;
-		Item->bIsBlueprint   = bIsBPScan;
+		// BUG-001: classify each issue by its actual path, not by which scan
+		// produced it. /Game/... assets are BPs; .cpp/.h are C++. This matches
+		// the same convention used by ApplyCodeFixes() when routing fix handlers
+		// and makes the "C++ Only" filter actually hide Blueprint issues.
+		Item->bIsBlueprint   = Src.FilePath.StartsWith(TEXT("/Game/"));
 		Item->OriginalIndex  = i;
 		Item->Class            = Src.Class;
 		Item->Category         = Src.Category;

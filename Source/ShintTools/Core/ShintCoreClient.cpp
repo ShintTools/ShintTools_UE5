@@ -555,6 +555,28 @@ void FShintCoreClient::ApplyCodeFixes(
 		return Pkg + TEXT(".") + FPaths::GetBaseFilename(Pkg);
 	};
 
+	// ── E-005 guard ───────────────────────────────────────────────────────────
+	// ControlRigBlueprint does not use standard UEdGraphPin wiring, so BPM001
+	// (variable removal) and BPM002 (orphan node deletion) end up corrupting
+	// the rig graph ("Cannot find pin 'VariableNode_X.Value'"). Detect by walking
+	// the class hierarchy so we don't need a hard dep on the ControlRig module.
+	auto IsControlRigBP = [](UBlueprint* BP) -> bool
+	{
+		if (!BP) return false;
+		for (UClass* Cls = BP->GetClass(); Cls; Cls = Cls->GetSuperClass())
+		{
+			if (Cls->GetName().Contains(TEXT("ControlRig"))) return true;
+		}
+		if (BP->ParentClass)
+		{
+			for (UClass* Cls = BP->ParentClass; Cls; Cls = Cls->GetSuperClass())
+			{
+				if (Cls->GetName().Contains(TEXT("ControlRig"))) return true;
+			}
+		}
+		return false;
+	};
+
 	int32 BPApplied = 0;
 	int32 BPSkipped = 0;
 	for (const FShintCodeIssue* Issue : BPIssues)
@@ -598,6 +620,14 @@ void FShintCoreClient::ApplyCodeFixes(
 			{
 				if (UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *MakeBPPath(Issue->FilePath)))
 				{
+					// E-005: ControlRigBlueprint uses a non-standard graph — skip it.
+					if (IsControlRigBP(BP))
+					{
+						UE_LOG(LogShintTools, Log,
+							TEXT("ApplyFix: [BPM001] Skipped ControlRigBlueprint '%s'"), *Issue->FilePath);
+						++BPSkipped;
+						continue;
+					}
 					FBlueprintEditorUtils::RemoveMemberVariable(BP, FName(*VarName));
 					FKismetEditorUtilities::CompileBlueprint(BP);
 					(void)BP->MarkPackageDirty();
@@ -617,6 +647,14 @@ void FShintCoreClient::ApplyCodeFixes(
 			UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *MakeBPPath(Issue->FilePath));
 			if (BP)
 			{
+				// E-005: ControlRigBlueprint uses a non-standard graph — skip it.
+				if (IsControlRigBP(BP))
+				{
+					UE_LOG(LogShintTools, Log,
+						TEXT("ApplyFix: [BPM002] Skipped ControlRigBlueprint '%s'"), *Issue->FilePath);
+					++BPSkipped;
+					continue;
+				}
 				// Collect all graphs (ubergraph + function graphs)
 				TArray<UEdGraph*> AllGraphs;
 				AllGraphs.Append(BP->UbergraphPages);
@@ -717,9 +755,16 @@ void FShintCoreClient::ApplyCodeFixes(
 				TEXT("ApplyFix: [BPB007] Could not fix '%s' — VarName='%s'"), *Issue->FilePath, *VarName);
 			++BPSkipped;
 		}
+		else if (Issue->RuleId == TEXT("BPB001"))
+		{
+			// W-003: BPB001 (BP naming) is handled by the Asset Naming pipeline
+			// (see SShintToolsPanel::OnBlueprintValidateComplete). It's never a
+			// fix target here — count as skipped silently, no warning spam.
+			++BPSkipped;
+		}
 		else
 		{
-			UE_LOG(LogShintTools, Warning,
+			UE_LOG(LogShintTools, Verbose,
 				TEXT("ApplyFix: BP rule '%s' has no plugin-side handler — skipping"), *Issue->RuleId);
 			++BPSkipped;
 		}
