@@ -113,27 +113,6 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 	CoreClient     = MakeShared<FShintCoreClient>();
 	ProcessManager = MakeShared<FCoreProcessManager>();
 
-	// Startup probe — surface connection issues immediately on panel open
-	// instead of waiting for the user to hit Scan/Validate and see nothing.
-	CoreClient->CheckHealth(FOnShintRequestComplete::CreateLambda(
-		[](const FShintRequestResult& R)
-		{
-			if (R.bSuccess)
-			{
-				UE_LOG(LogShintTools, Display,
-					TEXT("ShintCoreClient: Startup health probe OK."));
-			}
-			else
-			{
-				UE_LOG(LogShintTools, Error,
-					TEXT("ShintCoreClient: Startup health probe FAILED: %s"),
-					*R.ErrorMessage);
-				ShintShowErrorToast(
-					TEXT("ShintTools — Core Engine not reachable"),
-					R.ErrorMessage + TEXT("\n\nOpen start_engine.bat from the launcher install folder to start the server."));
-			}
-		}));
-
 	ChildSlot
 	[
 		SNew(SBorder)
