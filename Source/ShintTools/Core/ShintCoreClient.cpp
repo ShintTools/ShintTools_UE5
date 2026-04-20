@@ -1641,8 +1641,12 @@ void FShintCoreClient::OnHttpRequestComplete(
 	FShintRequestResult Result;
 	if (!bConnectedSuccessfully || !Response.IsValid())
 	{
-		Result.bSuccess     = false;
-		Result.ErrorMessage = TEXT("Connection failed — Core Engine may not be running.");
+		Result.bSuccess = false;
+		const FString TriedUrl = Request.IsValid() ? Request->GetURL() : FString();
+		Result.ErrorMessage = FString::Printf(
+			TEXT("Connection failed — could not reach Core Engine at %s. "
+			     "Is start_engine.bat running? (uvicorn on 127.0.0.1:%d)"),
+			*TriedUrl, Config.CorePort);
 		OnComplete.ExecuteIfBound(Result); return;
 	}
 	Result.StatusCode   = Response->GetResponseCode();

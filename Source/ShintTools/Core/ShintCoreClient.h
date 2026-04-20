@@ -190,8 +190,12 @@ DECLARE_DELEGATE_OneParam(FOnShintDashboardComplete, const FShintDashboardResult
 
 struct FShintCoreConfig
 {
-	// Local core engine
-	FString CoreHost        = TEXT("localhost");  // override in shinttools.config.json for remote core
+	// Local core engine.
+	// Default is 127.0.0.1 (NOT "localhost") because on some Windows installs
+	// "localhost" resolves to ::1 (IPv6 loopback) while uvicorn bound with
+	// --host 0.0.0.0 only listens on IPv4 — the plugin would then get
+	// "connection refused" with the engine clearly running. Force IPv4.
+	FString CoreHost        = TEXT("127.0.0.1");
 	int32   CorePort        = 18200;
 	bool    bAutoStartCore  = false;
 
@@ -205,7 +209,16 @@ struct FShintCoreConfig
 
 	FString GetBaseUrl() const
 	{
-		const FString Host = CoreHost.IsEmpty() ? TEXT("localhost") : CoreHost;
+		FString Host = CoreHost.IsEmpty() ? TEXT("127.0.0.1") : CoreHost;
+		// Reject obvious bind-only addresses — they are valid for the server
+		// (uvicorn --host 0.0.0.0 means "listen on every interface") but they
+		// are NOT routable from a client. If the user accidentally pasted the
+		// uvicorn bind address into shinttools.config.json, fall back to IPv4
+		// loopback so requests still reach the local engine.
+		if (Host == TEXT("0.0.0.0") || Host == TEXT("::") || Host == TEXT("localhost"))
+		{
+			Host = TEXT("127.0.0.1");
+		}
 		return FString::Printf(TEXT("http://%s:%d"), *Host, CorePort);
 	}
 
