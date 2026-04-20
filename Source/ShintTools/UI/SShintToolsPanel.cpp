@@ -21,6 +21,8 @@
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SComboButton.h"
 #include "Widgets/Notifications/SProgressBar.h"
+#include "Widgets/Notifications/SNotificationList.h"
+#include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Views/SListView.h"
 // Style
 #include "Styling/AppStyle.h"
@@ -36,6 +38,26 @@
 #include "Containers/Ticker.h"
 
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Toast helper — surfaces backend / connectivity failures to the user instead
+// of silently leaving the UI in an empty state. Without this, "no response
+// from server" looked like the buttons were dead.
+// ─────────────────────────────────────────────────────────────────────────────
+static void ShintShowErrorToast(const FString& Title, const FString& Detail)
+{
+	FNotificationInfo Info(FText::FromString(Title));
+	Info.SubText      = FText::FromString(Detail.IsEmpty()
+		? FString(TEXT("Check that the Core Engine container is running and that "
+		               "core_host / core_port in shinttools.config.json point to it."))
+		: Detail);
+	Info.ExpireDuration = 8.0f;
+	Info.bUseLargeFont  = false;
+	Info.bUseSuccessFailIcons = true;
+	TSharedPtr<SNotificationItem> N = FSlateNotificationManager::Get().AddNotification(Info);
+	if (N.IsValid()) N->SetCompletionState(SNotificationItem::CS_Fail);
+	UE_LOG(LogShintTools, Error, TEXT("%s — %s"), *Title, *Detail);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Brush cache
@@ -1894,7 +1916,12 @@ void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& R
 
 void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, bool bMerge, bool bIsBPScan)
 {
-	if (!Result.bSuccess) { SetCodeState(EModuleState::Error); return; }
+	if (!Result.bSuccess)
+	{
+		ShintShowErrorToast(TEXT("Code validation failed"), Result.ErrorMessage);
+		SetCodeState(EModuleState::Error);
+		return;
+	}
 
 	if (bMerge)
 	{
@@ -2043,7 +2070,12 @@ void SShintToolsPanel::OnCodeDashboardComplete(const FShintWebDashboardResult& R
 
 void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
 {
-	if (!Result.bSuccess) { SetAssetState(EModuleState::Error); return; }
+	if (!Result.bSuccess)
+	{
+		ShintShowErrorToast(TEXT("Asset scan failed"), Result.ErrorMessage);
+		SetAssetState(EModuleState::Error);
+		return;
+	}
 	LastAssetResult = Result;
 	PopulateAssetIssueList(Result);
 	RefreshAssetStats();
@@ -2060,7 +2092,12 @@ void SShintToolsPanel::OnAssetScanFromBPComplete(const FShintAssetScanResult& Re
 	//   • populate the asset list from full scan results
 	//   • auto-set filter to Blueprints so only BP naming violations are visible
 	//   • do NOT chain another ValidateBlueprints call — BP code scan is already running
-	if (!Result.bSuccess) { SetAssetState(EModuleState::Error); return; }
+	if (!Result.bSuccess)
+	{
+		ShintShowErrorToast(TEXT("Blueprint asset scan failed"), Result.ErrorMessage);
+		SetAssetState(EModuleState::Error);
+		return;
+	}
 	LastAssetResult = Result;
 	PopulateAssetIssueList(Result);
 

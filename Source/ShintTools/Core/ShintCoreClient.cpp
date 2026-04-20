@@ -67,6 +67,7 @@ bool FShintCoreClient::LoadConfig()
 	if (Json->TryGetBoolField(TEXT("auto_start_core"), bAuto)) Config.bAutoStartCore = bAuto;
 
 	FString S;
+	if (Json->TryGetStringField(TEXT("core_host"),    S) && !S.IsEmpty()) Config.CoreHost = S;
 	if (Json->TryGetStringField(TEXT("project_name"), S)) Config.ProjectName = S;
 	if (Json->TryGetStringField(TEXT("project_id"),   S)) Config.ProjectId   = S;
 	if (Json->TryGetStringField(TEXT("api_key"),      S)) Config.ApiKey      = S;
@@ -92,6 +93,7 @@ bool FShintCoreClient::SaveConfig() const
 	if (!Json.IsValid()) Json = MakeShared<FJsonObject>();
 
 	// Overwrite config fields
+	Json->SetStringField(TEXT("core_host"),       Config.CoreHost);
 	Json->SetNumberField(TEXT("core_port"),       Config.CorePort);
 	Json->SetBoolField(TEXT("auto_start_core"),   Config.bAutoStartCore);
 	Json->SetStringField(TEXT("project_name"),    Config.ProjectName);

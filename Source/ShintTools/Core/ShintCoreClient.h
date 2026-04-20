@@ -191,6 +191,7 @@ DECLARE_DELEGATE_OneParam(FOnShintDashboardComplete, const FShintDashboardResult
 struct FShintCoreConfig
 {
 	// Local core engine
+	FString CoreHost        = TEXT("localhost");  // override in shinttools.config.json for remote core
 	int32   CorePort        = 18200;
 	bool    bAutoStartCore  = false;
 
@@ -204,7 +205,8 @@ struct FShintCoreConfig
 
 	FString GetBaseUrl() const
 	{
-		return FString::Printf(TEXT("http://localhost:%d"), CorePort);
+		const FString Host = CoreHost.IsEmpty() ? TEXT("localhost") : CoreHost;
+		return FString::Printf(TEXT("http://%s:%d"), *Host, CorePort);
 	}
 
 	bool HasExternalDashboard() const
