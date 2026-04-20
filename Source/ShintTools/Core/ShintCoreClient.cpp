@@ -40,7 +40,15 @@
 // Construction
 // ─────────────────────────────────────────────────────────────────────────────
 
-FShintCoreClient::FShintCoreClient()  { LoadConfig(); }
+FShintCoreClient::FShintCoreClient()
+{
+	LoadConfig();
+	// Visible at default log verbosity — lets us diagnose connection issues on
+	// client PCs without having to crank up LogShintTools verbosity manually.
+	UE_LOG(LogShintTools, Display,
+		TEXT("ShintCoreClient: Core Engine URL resolved to %s (host='%s', port=%d)"),
+		*Config.GetBaseUrl(), *Config.CoreHost, Config.CorePort);
+}
 FShintCoreClient::~FShintCoreClient() {}
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1600,7 +1608,8 @@ void FShintCoreClient::SendRequest(
 	const FString& Body, FOnShintRequestComplete OnComplete,
 	const TMap<FString, FString>& ExtraHeaders)
 {
-	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: %s %s"), *MethodToString(Method), *FullUrl);
+	// Display-level so users can see the request trail in a stock editor log.
+	UE_LOG(LogShintTools, Display, TEXT("ShintCoreClient: %s %s"), *MethodToString(Method), *FullUrl);
 
 	FHttpModule& Http = FHttpModule::Get();
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Req = Http.CreateRequest();
@@ -1647,6 +1656,8 @@ void FShintCoreClient::OnHttpRequestComplete(
 			TEXT("Connection failed — could not reach Core Engine at %s. "
 			     "Is start_engine.bat running? (uvicorn on 127.0.0.1:%d)"),
 			*TriedUrl, Config.CorePort);
+		UE_LOG(LogShintTools, Error,
+			TEXT("ShintCoreClient: %s"), *Result.ErrorMessage);
 		OnComplete.ExecuteIfBound(Result); return;
 	}
 	Result.StatusCode   = Response->GetResponseCode();
