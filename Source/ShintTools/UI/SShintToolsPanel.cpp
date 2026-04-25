@@ -1750,8 +1750,13 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 	TArray<FShintAssetIssue> ForServer;
 	int32 SkippedCircular  = 0;
 	int32 SkippedCollision = 0;
+	int32 SkippedLoadFail  = 0;
 
-	for (const FShintAssetItemPtr& Item : AssetIssueItems)
+	// Iterate the FULL backing store, not the filtered view. The previous
+	// behavior renamed only the currently-visible items, so any active type
+	// filter (Materials / Textures / etc.) silently skipped everything else
+	// even though "Apply Corrections" advertises "all selected".
+	for (const FShintAssetItemPtr& Item : AllAssetItems)
 	{
 		if (!Item->bChecked) continue;
 
@@ -1767,7 +1772,14 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 		// Load the UObject from its package path (/Game/...AssetName)
 		UObject* Asset = StaticLoadObject(UObject::StaticClass(), nullptr, *Item->AssetPath);
-		if (!Asset) continue;
+		if (!Asset)
+		{
+			++SkippedLoadFail;
+			UE_LOG(LogShintTools, Warning,
+				TEXT("ShintPanel: skipped rename '%s' — failed to load UObject at %s"),
+				*Item->CurrentName, *Item->AssetPath);
+			continue;
+		}
 
 		const FString NewPackagePath = FPaths::GetPath(Item->AssetPath);
 
@@ -1797,11 +1809,11 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 		ForServer.Add(I);
 	}
 
-	if (SkippedCircular + SkippedCollision > 0)
+	if (SkippedCircular + SkippedCollision + SkippedLoadFail > 0)
 	{
 		UE_LOG(LogShintTools, Log,
-			TEXT("ShintPanel: asset rename pre-check skipped %d circular and %d collision(s)"),
-			SkippedCircular, SkippedCollision);
+			TEXT("ShintPanel: asset rename pre-check skipped %d circular, %d collision(s), %d load-fail"),
+			SkippedCircular, SkippedCollision, SkippedLoadFail);
 	}
 
 	if (RenameData.IsEmpty()) return FReply::Handled();
