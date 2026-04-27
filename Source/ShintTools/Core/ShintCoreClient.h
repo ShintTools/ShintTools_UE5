@@ -165,6 +165,33 @@ struct FShintWebDashboardResult
 DECLARE_DELEGATE_OneParam(FOnShintWebDashboardComplete, const FShintWebDashboardResult&);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Agent — Auto-Fix Plan (Indie tier; free SKU never builds the UI button)
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct FShintAgentPlanStep
+{
+	int32   Order = 0;
+	FString RuleId;
+	FString FilePath;
+	int32   Line = 0;
+	FString Severity;
+	FString Priority;     // critical | high | medium | low
+	FString Rationale;
+	bool    bIsAutoFixable = false;
+};
+
+struct FShintAgentPlanResult
+{
+	bool                          bSuccess = false;
+	FString                       ErrorMessage;
+	FString                       Tier;     // free | indie | …
+	FString                       Summary;  // "5 critical · 3 high · …"
+	TArray<FShintAgentPlanStep>   Steps;
+};
+DECLARE_DELEGATE_OneParam(FOnShintAgentPlanComplete, const FShintAgentPlanResult&);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Local dashboard report (legacy — keeps local MongoDB sync)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -288,6 +315,16 @@ public:
 	void SendDashboardReport(const FShintDashboardReport& Report,
 	                         FOnShintDashboardComplete OnComplete);
 
+	// ── Agent — Auto-Fix Plan (Indie tier) ────────────────────────────────────
+	/**
+	 * Sends the validator's last result to /agent/plan and receives a
+	 * prioritized fix plan with per-step rationale. Free-tier servers
+	 * respond 403 — callers should hide the UI affordance there rather
+	 * than display the error.
+	 */
+	void RequestAgentPlan(const FShintValidateResult& Source,
+	                      FOnShintAgentPlanComplete OnComplete);
+
 	// ── Generic ───────────────────────────────────────────────────────────────
 	void SendRequest(const FString& FullUrl, EShintHttpMethod Method,
 	                 const FString& Body, FOnShintRequestComplete OnComplete,
@@ -312,6 +349,7 @@ private:
 
 	// Infer asset category from UE type string (for dashboard payload)
 	static FString AssetTypeToCategory(const FString& AssetType);
+	static FShintAgentPlanResult ParseAgentPlanResponse(const FShintRequestResult& Raw);
 
 	FShintCoreConfig Config;
 };

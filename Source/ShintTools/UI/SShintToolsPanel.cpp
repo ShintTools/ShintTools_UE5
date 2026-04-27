@@ -818,6 +818,20 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Blue()))
 				]
 			]
+			+ SWrapBox::Slot()
+			[
+				// Auto-Fix Plan — calls /agent/plan, shows a modal with the
+				// prioritized step list. Indie-only: free-tier servers
+				// answer 403 and the modal surfaces an upgrade hint.
+				SNew(SButton)
+				.ContentPadding(FMargin(14.f,7.f))
+				.OnClicked(this, &SShintToolsPanel::OnAutoFixPlanClicked)
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("AutoFixPlan","✨  Auto-Fix Plan"))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(FLinearColor(0.55f, 0.42f, 0.95f)))
+				]
+			]
 		];
 
 	return SNew(SVerticalBox)
@@ -2494,6 +2508,121 @@ TOptional<float> SShintToolsPanel::GetAssetProgress() const
 	if (AssetState == EModuleState::Running) return TOptional<float>();
 	if (AssetState == EModuleState::Done)    return TOptional<float>(1.f);
 	return TOptional<float>(0.f);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent — Auto-Fix Plan
+// ─────────────────────────────────────────────────────────────────────────────
+
+FReply SShintToolsPanel::OnAutoFixPlanClicked()
+{
+	if (LastCodeResult.Issues.IsEmpty())
+	{
+		ShintShowErrorToast(
+			TEXT("Auto-Fix Plan"),
+			TEXT("Run a code scan first — the planner needs issues to prioritize."));
+		return FReply::Handled();
+	}
+
+	CoreClient->RequestAgentPlan(
+		LastCodeResult,
+		FOnShintAgentPlanComplete::CreateSP(this, &SShintToolsPanel::OnAgentPlanComplete));
+	return FReply::Handled();
+}
+
+void SShintToolsPanel::OnAgentPlanComplete(const FShintAgentPlanResult& Result)
+{
+	if (!Result.bSuccess)
+	{
+		// Free-tier servers answer 403; surface as a friendly upgrade hint
+		// rather than as a generic HTTP error.
+		const bool bForbidden = Result.ErrorMessage.Contains(TEXT("Indie-tier"))
+			|| Result.ErrorMessage.Contains(TEXT("403"));
+		const FString Title = bForbidden
+			? TEXT("Auto-Fix Plan — Indie only")
+			: TEXT("Auto-Fix Plan failed");
+		ShintShowErrorToast(*Title, *Result.ErrorMessage);
+		return;
+	}
+	ShowAgentPlanDialog(Result);
+}
+
+void SShintToolsPanel::ShowAgentPlanDialog(const FShintAgentPlanResult& Result)
+{
+	TSharedRef<SVerticalBox> Body = SNew(SVerticalBox);
+
+	Body->AddSlot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
+	[
+		SNew(STextBlock)
+		.Text(FText::FromString(FString::Printf(
+			TEXT("%d pasos · %s"), Result.Steps.Num(), *Result.Summary)))
+		.Font(F_Label())
+		.ColorAndOpacity(FSlateColor(C_DimGray()))
+	];
+
+	for (const FShintAgentPlanStep& S : Result.Steps)
+	{
+		FLinearColor PriorityColor = FLinearColor::Gray;
+		if      (S.Priority == TEXT("critical")) PriorityColor = FLinearColor(0.93f, 0.27f, 0.27f);
+		else if (S.Priority == TEXT("high"))     PriorityColor = FLinearColor(0.97f, 0.45f, 0.09f);
+		else if (S.Priority == TEXT("medium"))   PriorityColor = FLinearColor(0.86f, 0.78f, 0.16f);
+		else                                     PriorityColor = FLinearColor(0.42f, 0.65f, 0.42f);
+
+		Body->AddSlot().AutoHeight().Padding(0.f, 4.f)
+		[
+			SNew(SBorder).BorderImage(ST4::Solid(C_Surface())).Padding(8.f)
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 8.f, 0.f)
+					[
+						SNew(STextBlock)
+						.Text(FText::FromString(FString::Printf(
+							TEXT("%d. [%s] %s"), S.Order, *S.Priority.ToUpper(), *S.RuleId)))
+						.Font(F_Label())
+						.ColorAndOpacity(FSlateColor(PriorityColor))
+					]
+					+ SHorizontalBox::Slot().FillWidth(1.f)
+					[
+						SNew(STextBlock)
+						.Text(FText::FromString(FString::Printf(
+							TEXT("%s:%d"),
+							*FPaths::GetCleanFilename(S.FilePath), S.Line)))
+						.Font(F_Small())
+						.ColorAndOpacity(FSlateColor(C_DimGray()))
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f, 0.f, 0.f)
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString(S.Rationale))
+					.Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_White()))
+					.AutoWrapText(true)
+				]
+			]
+		];
+	}
+
+	TSharedRef<SWindow> Win = SNew(SWindow)
+		.Title(LOCTEXT("AgentPlanWin", "ShintTools — Auto-Fix Plan"))
+		.ClientSize(FVector2D(720.f, 520.f))
+		.SizingRule(ESizingRule::UserSized);
+
+	Win->SetContent(
+		SNew(SBorder).BorderImage(ST4::Solid(C_BG())).Padding(16.f)
+		[
+			SNew(SScrollBox)
+			+ SScrollBox::Slot()
+			[
+				Body
+			]
+		]
+	);
+
+	FSlateApplication::Get().AddWindow(Win, true);
 }
 
 #undef LOCTEXT_NAMESPACE

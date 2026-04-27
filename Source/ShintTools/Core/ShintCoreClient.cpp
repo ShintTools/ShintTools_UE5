@@ -1914,3 +1914,103 @@ FString FShintCoreClient::SerializeJson(const TSharedRef<FJsonObject>& Obj)
 	FJsonSerializer::Serialize(Obj, W);
 	return Out;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent — Auto-Fix Plan
+// ─────────────────────────────────────────────────────────────────────────────
+
+void FShintCoreClient::RequestAgentPlan(
+	const FShintValidateResult& Source, FOnShintAgentPlanComplete OnComplete)
+{
+	// Translate the local FShintCodeIssue array into the JSON the
+	// /agent/plan endpoint expects. Schema mirrors api/routes/agent.py
+	// exactly — keep them in sync.
+	TArray<TSharedPtr<FJsonValue>> IssArr;
+	IssArr.Reserve(Source.Issues.Num());
+	for (const FShintCodeIssue& I : Source.Issues)
+	{
+		TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
+		O->SetStringField(TEXT("rule_id"),         I.RuleId);
+		O->SetStringField(TEXT("severity"),        I.Severity);
+		O->SetStringField(TEXT("category"),        I.Category);
+		O->SetStringField(TEXT("file_path"),       I.FilePath);
+		O->SetNumberField(TEXT("line"),            I.Line);
+		O->SetStringField(TEXT("message"),         I.Message);
+		O->SetStringField(TEXT("fix_suggestion"),  I.FixSuggestion);
+		O->SetBoolField  (TEXT("is_auto_fixable"), I.bIsAutoFixable);
+		IssArr.Add(MakeShared<FJsonValueObject>(O));
+	}
+
+	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("api_key"), Config.ApiKey);
+	Body->SetArrayField (TEXT("issues"),  IssArr);
+
+	const FString Url = Config.GetBaseUrl() / TEXT("agent/plan");
+
+	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Body),
+		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw)
+		{
+			OnComplete.ExecuteIfBound(ParseAgentPlanResponse(Raw));
+		}));
+}
+
+FShintAgentPlanResult FShintCoreClient::ParseAgentPlanResponse(
+	const FShintRequestResult& Raw)
+{
+	FShintAgentPlanResult R;
+	if (!Raw.bSuccess)
+	{
+		R.bSuccess     = false;
+		R.ErrorMessage = Raw.ErrorMessage.IsEmpty()
+			? TEXT("HTTP request to /agent/plan failed")
+			: Raw.ErrorMessage;
+		return R;
+	}
+
+	TSharedPtr<FJsonObject> Root;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Raw.ResponseBody);
+	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+	{
+		R.bSuccess     = false;
+		R.ErrorMessage = TEXT("Malformed JSON in /agent/plan response");
+		return R;
+	}
+
+	bool bServerOk = false;
+	Root->TryGetBoolField(TEXT("success"), bServerOk);
+	Root->TryGetStringField(TEXT("tier"),    R.Tier);
+	Root->TryGetStringField(TEXT("summary"), R.Summary);
+
+	const TArray<TSharedPtr<FJsonValue>>* StepsArr = nullptr;
+	if (Root->TryGetArrayField(TEXT("steps"), StepsArr) && StepsArr)
+	{
+		R.Steps.Reserve(StepsArr->Num());
+		for (const TSharedPtr<FJsonValue>& V : *StepsArr)
+		{
+			const TSharedPtr<FJsonObject>* O = nullptr;
+			if (!V->TryGetObject(O) || !O || !O->IsValid()) continue;
+
+			FShintAgentPlanStep S;
+			(*O)->TryGetNumberField(TEXT("order"),           S.Order);
+			(*O)->TryGetStringField(TEXT("rule_id"),         S.RuleId);
+			(*O)->TryGetStringField(TEXT("file_path"),       S.FilePath);
+			(*O)->TryGetNumberField(TEXT("line"),            S.Line);
+			(*O)->TryGetStringField(TEXT("severity"),        S.Severity);
+			(*O)->TryGetStringField(TEXT("priority"),        S.Priority);
+			(*O)->TryGetStringField(TEXT("rationale"),       S.Rationale);
+			(*O)->TryGetBoolField  (TEXT("is_auto_fixable"), S.bIsAutoFixable);
+			R.Steps.Add(MoveTemp(S));
+		}
+	}
+
+	R.bSuccess = bServerOk;
+	if (!R.bSuccess && R.ErrorMessage.IsEmpty())
+	{
+		Root->TryGetStringField(TEXT("detail"), R.ErrorMessage);
+		if (R.ErrorMessage.IsEmpty())
+		{
+			R.ErrorMessage = TEXT("Agent plan request rejected by server");
+		}
+	}
+	return R;
+}

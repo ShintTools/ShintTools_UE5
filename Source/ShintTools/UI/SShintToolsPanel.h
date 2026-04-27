@@ -165,6 +165,9 @@ private:
 	FReply OnDeselectAllCodeClicked();
 	FReply OnApplySelectedCodeFixesClicked();
 	FReply OnSendCodeToDashboardClicked();
+	FReply OnAutoFixPlanClicked();
+	void   OnAgentPlanComplete(const FShintAgentPlanResult& Result);
+	void   ShowAgentPlanDialog(const FShintAgentPlanResult& Result);
 	FReply OnScanAssetsClicked();
 	FReply OnApplySingleFix(FShintIssueItemPtr Item);
 	FReply OnIgnoreSingleFix(FShintIssueItemPtr Item);
