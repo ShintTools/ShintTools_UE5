@@ -2258,11 +2258,24 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result,
 		Item->FixSuggestion  = Src.FixSuggestion;
 		Item->bIsAutoFixable = Src.bIsAutoFixable;
 		Item->bChecked       = Src.bIsAutoFixable;
-		// BUG-001: classify each issue by its actual path, not by which scan
-		// produced it. /Game/... assets are BPs; .cpp/.h are C++. This matches
-		// the same convention used by ApplyCodeFixes() when routing fix handlers
-		// and makes the "C++ Only" filter actually hide Blueprint issues.
-		Item->bIsBlueprint   = Src.FilePath.StartsWith(TEXT("/Game/"));
+		// Classify each issue. The previous implementation looked only at
+		// FilePath.StartsWith("/Game/") which broke whenever the server
+		// normalised C++ paths in odd ways (mixed slashes, trimmed roots),
+		// causing the "C++ Only" filter to silently skip every C++ issue
+		// while "Blueprints Only" worked. Use the rule-id prefix as the
+		// primary signal — BP* rules can only be produced by Blueprint
+		// scanning, C{P,B,S,M}* rules can only be produced by C++ scanning
+		// — and fall back to the path heuristic only when RuleId is empty.
+		const FString& Rid = Src.RuleId;
+		// BUILD* (compile errors) belong to C++ — keep them out of the BP set
+		// so fix-routing logic that branches on bIsBlueprint stays correct.
+		const bool bRidIsBP = Rid.StartsWith(TEXT("BP"));
+		const bool bRidIsCpp =
+			Rid.StartsWith(TEXT("CP")) || Rid.StartsWith(TEXT("CB"))
+		 || Rid.StartsWith(TEXT("CS")) || Rid.StartsWith(TEXT("CM"));
+		if (bRidIsBP)        Item->bIsBlueprint = true;
+		else if (bRidIsCpp)  Item->bIsBlueprint = false;
+		else                 Item->bIsBlueprint = Src.FilePath.StartsWith(TEXT("/Game/"));
 		Item->OriginalIndex  = i;
 		Item->Class            = Src.Class;
 		Item->Category         = Src.Category;
@@ -2398,9 +2411,31 @@ void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Resul
 	AllAssetItems.Reset();
 	AllAssetItems.Reserve(Result.Issues.Num());
 
+	// Free-tier display cap: never expose issues from more than 500 unique
+	// assets, no matter how many issues each asset has. The server already
+	// caps the *scan* at 500 assets but a single asset can produce several
+	// issues, so the visible row count balloons past the user-facing
+	// promise. Counting unique AssetPaths here keeps the UI honest while
+	// still showing every issue for the assets that DO make the cut.
+	// On paid tiers this is harmless — projects rarely have 500 distinct
+	// asset paths in a single scan, and if they do the cap matches the
+	// free-tier behaviour the user already sees on a free build.
+	constexpr int32 MaxUniqueAssets = 500;
+	TSet<FString> SeenAssetPaths;
+	SeenAssetPaths.Reserve(MaxUniqueAssets);
+
 	for (int32 i = 0; i < Result.Issues.Num(); ++i)
 	{
 		const FShintAssetIssue& Src = Result.Issues[i];
+		// If we've already accepted this asset's path, keep its issues even
+		// past the cap (they belong to an in-cap asset). Only reject when we'd
+		// be ADDING a new unique path beyond the limit.
+		if (!SeenAssetPaths.Contains(Src.AssetPath))
+		{
+			if (SeenAssetPaths.Num() >= MaxUniqueAssets) continue;
+			SeenAssetPaths.Add(Src.AssetPath);
+		}
+
 		FShintAssetItemPtr Item = MakeShared<FShintAssetItem>();
 		Item->AssetPath    = Src.AssetPath;
 		Item->CurrentName  = Src.CurrentName;
@@ -2434,9 +2469,18 @@ void SShintToolsPanel::RefreshCodeStats()
 void SShintToolsPanel::RefreshAssetStats()
 {
 	// Drive counters from the backing store so stats reflect total, not the filtered view.
-	const int32 Total = AllAssetItems.Num();
-	if (AssetTotal_Label.IsValid())   AssetTotal_Label->SetText(FText::FromString(FmtN(Total)));
-	if (AssetInvalid_Label.IsValid()) AssetInvalid_Label->SetText(FText::FromString(FmtN(Total)));
+	// AssetTotal: count of UNIQUE assets (one per asset_path), not issue rows
+	// — multiple issues on the same asset must not inflate the headline number
+	// and break the free-tier 500-asset promise. AssetInvalid: total flagged
+	// rows, kept as-is so the user can see "37 issues across 19 assets".
+	TSet<FString> Unique;
+	Unique.Reserve(AllAssetItems.Num());
+	for (const FShintAssetItemPtr& It : AllAssetItems)
+		if (It.IsValid()) Unique.Add(It->AssetPath);
+	const int32 UniqueAssets = Unique.Num();
+	const int32 IssueRows    = AllAssetItems.Num();
+	if (AssetTotal_Label.IsValid())   AssetTotal_Label->SetText(FText::FromString(FmtN(UniqueAssets)));
+	if (AssetInvalid_Label.IsValid()) AssetInvalid_Label->SetText(FText::FromString(FmtN(IssueRows)));
 	if (AssetTime_Label.IsValid())    AssetTime_Label->SetText(FText::FromString(
 		FString::Printf(TEXT("%.2f"), LastAssetResult.ScanTimeSeconds)));
 }
