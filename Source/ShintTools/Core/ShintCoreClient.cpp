@@ -1767,6 +1767,7 @@ FShintAssetScanResult FShintCoreClient::ParseAssetScanResponse(const FShintReque
 		(*Sum)->TryGetNumberField(TEXT("total_assets"),       R.TotalAssets);
 		(*Sum)->TryGetNumberField(TEXT("invalid_assets"),     R.InvalidAssets);
 		(*Sum)->TryGetNumberField(TEXT("scan_time_seconds"),  R.ScanTimeSeconds);
+		(*Sum)->TryGetStringField(TEXT("tier"),               R.Tier);
 	}
 
 	// Try multiple possible array field names the server may return

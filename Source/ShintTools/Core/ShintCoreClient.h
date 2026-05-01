@@ -140,6 +140,9 @@ struct FShintAssetScanResult
 	int32   TotalAssets     = 0;
 	int32   InvalidAssets   = 0;
 	float   ScanTimeSeconds = 0.0f;
+	// Subscription tier the server resolved this request to ("free" | "indie").
+	// Empty = not parsed (older server build). Populated from summary.tier.
+	FString Tier;
 	TArray<FShintAssetIssue> Issues;
 };
 DECLARE_DELEGATE_OneParam(FOnShintAssetScanComplete, const FShintAssetScanResult&);

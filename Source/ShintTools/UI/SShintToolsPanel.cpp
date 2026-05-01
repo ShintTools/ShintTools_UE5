@@ -2411,26 +2411,21 @@ void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Resul
 	AllAssetItems.Reset();
 	AllAssetItems.Reserve(Result.Issues.Num());
 
-	// Free-tier display cap: never expose issues from more than 500 unique
-	// assets, no matter how many issues each asset has. The server already
-	// caps the *scan* at 500 assets but a single asset can produce several
-	// issues, so the visible row count balloons past the user-facing
-	// promise. Counting unique AssetPaths here keeps the UI honest while
-	// still showing every issue for the assets that DO make the cut.
-	// On paid tiers this is harmless — projects rarely have 500 distinct
-	// asset paths in a single scan, and if they do the cap matches the
-	// free-tier behaviour the user already sees on a free build.
+	// Free-tier display cap. Server caps the *scan* at 500 asset records but
+	// each asset can fire several rules, so issue rows can outnumber assets.
+	// Cap by unique AssetPath so AssetTotal_Label honours the 500-asset
+	// promise without dropping the second / third issue on the same asset.
+	// Only apply when the server reports tier="free"; Indie returns the full
+	// set untouched.
 	constexpr int32 MaxUniqueAssets = 500;
+	const bool bApplyFreeCap = (Result.Tier == TEXT("free"));
 	TSet<FString> SeenAssetPaths;
-	SeenAssetPaths.Reserve(MaxUniqueAssets);
+	if (bApplyFreeCap) SeenAssetPaths.Reserve(MaxUniqueAssets);
 
 	for (int32 i = 0; i < Result.Issues.Num(); ++i)
 	{
 		const FShintAssetIssue& Src = Result.Issues[i];
-		// If we've already accepted this asset's path, keep its issues even
-		// past the cap (they belong to an in-cap asset). Only reject when we'd
-		// be ADDING a new unique path beyond the limit.
-		if (!SeenAssetPaths.Contains(Src.AssetPath))
+		if (bApplyFreeCap && !SeenAssetPaths.Contains(Src.AssetPath))
 		{
 			if (SeenAssetPaths.Num() >= MaxUniqueAssets) continue;
 			SeenAssetPaths.Add(Src.AssetPath);
