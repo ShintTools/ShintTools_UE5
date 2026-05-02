@@ -176,6 +176,7 @@ private:
 	void   ShowSafetyWarningDialog(const FShintSafetyCheckResult& Result);
 	void   ProceedWithCodeFixes();
 	FReply OnSelectAllAssetsClicked();
+	FReply OnDeselectAllAssetsClicked();   // T6
 	FReply OnApplySelectedAssetFixesClicked();
 	FReply OnSendAssetToDashboardClicked();
 

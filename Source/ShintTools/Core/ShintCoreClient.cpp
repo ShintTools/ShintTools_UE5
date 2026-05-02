@@ -2173,10 +2173,30 @@ FShintAgentPlanResult FShintCoreClient::ParseAgentPlanResponse(
 	FShintAgentPlanResult R;
 	if (!Raw.bSuccess)
 	{
-		R.bSuccess     = false;
-		R.ErrorMessage = Raw.ErrorMessage.IsEmpty()
-			? TEXT("HTTP request to /agent/plan failed")
-			: Raw.ErrorMessage;
+		R.bSuccess = false;
+		// T2 — A 404 here means the connected core engine doesn't expose the
+		// agent router. The free SKU strips agent.py at build time, so users
+		// running the free Docker image hit this. Translate the HTTP status
+		// into a user-meaningful message instead of leaking "404 Not Found".
+		if (Raw.StatusCode == 404)
+		{
+			R.ErrorMessage = TEXT(
+				"Auto-Fix Plan requires the Indie core engine. "
+				"The connected server (free SKU) doesn't expose /agent/plan — "
+				"upgrade your subscription at https://shint.tools to enable it.");
+		}
+		else if (Raw.StatusCode == 403)
+		{
+			R.ErrorMessage = TEXT(
+				"Auto-Fix Plan is an Indie-tier feature. "
+				"Your API key resolved to the free tier on this core engine.");
+		}
+		else
+		{
+			R.ErrorMessage = Raw.ErrorMessage.IsEmpty()
+				? FString::Printf(TEXT("HTTP %d on /agent/plan"), Raw.StatusCode)
+				: Raw.ErrorMessage;
+		}
 		return R;
 	}
 

@@ -35,6 +35,7 @@
 #include "Engine/Blueprint.h"          // T2 — detect BP for ClassRedirects entries
 #include "Misc/ConfigCacheIni.h"       // T2 — write CoreRedirects to DefaultEngine.ini
 #include "Misc/FileHelper.h"
+#include "Misc/MessageDialog.h"        // T4 — Yes/No confirm before safety check
 #include "Misc/Paths.h"
 #include "Algo/Count.h"
 #include "Containers/Ticker.h"
@@ -1251,12 +1252,21 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 				.ColorAndOpacity(FSlateColor(C_DimGray()))
 			]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,6.f,0.f) [ AssetTypeCombo ]
-			+ SHorizontalBox::Slot().AutoWidth()
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,4.f,0.f)
 			[
 				SNew(SButton).ContentPadding(FMargin(10.f,4.f))
 				.OnClicked(this, &SShintToolsPanel::OnSelectAllAssetsClicked)
 				[ SNew(STextBlock).Text(LOCTEXT("ANBSel","Select All")).Font(F_Label())
 				  .ColorAndOpacity(FSlateColor(C_Blue())) ]
+			]
+			// T6 — Deselect All companion button. Lives next to Select All so
+			// users have symmetric controls for the asset rename batch.
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SButton).ContentPadding(FMargin(10.f,4.f))
+				.OnClicked(this, &SShintToolsPanel::OnDeselectAllAssetsClicked)
+				[ SNew(STextBlock).Text(LOCTEXT("ANBDes","Deselect All")).Font(F_Label())
+				  .ColorAndOpacity(FSlateColor(C_DimGray())) ]
 			]
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f) [ Divider() ]
@@ -1407,21 +1417,26 @@ FReply SShintToolsPanel::OnScanProjectClicked()
 	bBlueprintScanActive = false;   // full source scan — no BP-only filter
 
 	// Auto-set the code type filter to C++ Only for this scan
-	CurrentCodeTypeFilter = ECodeTypeFilter::CppOnly;
+	// T1 — Auto-switch the visible filter to "All" so the user sees both
+	// kinds at once (the previous flow forced CppOnly/BlueprintsOnly on every
+	// click, which silently hid the other half of the merged list).
+	CurrentCodeTypeFilter = ECodeTypeFilter::All;
 	if (CodeTypeFilterLabel.IsValid())
-		CodeTypeFilterLabel->SetText(LOCTEXT("CodeTypeCpp","C++ Only"));
+		CodeTypeFilterLabel->SetText(LOCTEXT("CodeTypeAll","All"));
 
 	SetCodeState(EModuleState::Running);
-	// Reset to default empty text before new results arrive
 	if (CodeEmptyText.IsValid())
 		CodeEmptyText->SetText(LOCTEXT("CVEmpty", "Run a scan to see results here."));
-	// Reset everything — fresh scan.  Clear visible list and notify Slate
-	// BEFORE emptying backing data, so no stale pointers are accessed.
-	CodeIssueItems.Empty();
-	AllCodeItems.Empty();
-	AppliedFixFingerprints.Empty(); // fresh scan: re-evaluate all issues
+
+	// T1 — Do NOT wipe LastCodeResult or AllCodeItems here. HandleValidateResult
+	// merges the new C++ findings against the existing Blueprint findings (and
+	// vice-versa) by RuleId prefix; clearing them on click defeats the merge
+	// and the BP results disappear the moment a C++ scan starts.
+	// We only reset the visible (filtered) list so the panel doesn't paint stale
+	// rows during the scan.
+	CodeIssueItems.Reset();
 	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
-	LastCodeResult = FShintValidateResult();
+
 	CoreClient->ValidateProject(FPaths::GameSourceDir(),
 		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnProjectValidateComplete));
 	return FReply::Handled();
@@ -1432,20 +1447,18 @@ FReply SShintToolsPanel::OnScanBlueprintsClicked()
 	++ScanGeneration;
 	bBlueprintScanActive = true;
 
-	// Auto-set the code type filter to Blueprints Only for this scan
-	CurrentCodeTypeFilter = ECodeTypeFilter::BlueprintsOnly;
+	// T1 — see OnScanProjectClicked. Auto-switch to "All" instead of forcing
+	// BlueprintsOnly, and preserve previous-scan state so the merge survives.
+	CurrentCodeTypeFilter = ECodeTypeFilter::All;
 	if (CodeTypeFilterLabel.IsValid())
-		CodeTypeFilterLabel->SetText(LOCTEXT("CodeTypeBP","Blueprints Only"));
+		CodeTypeFilterLabel->SetText(LOCTEXT("CodeTypeAll","All"));
 
-	// ── Code Validator: replace list with BP-only results ─────────────────────
 	SetCodeState(EModuleState::Running);
-	CodeIssueItems.Empty();
-	AllCodeItems.Empty();
-	AppliedFixFingerprints.Empty();
-	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
-	LastCodeResult = FShintValidateResult();
 	if (CodeEmptyText.IsValid())
 		CodeEmptyText->SetText(LOCTEXT("CVEmpty", "Run a scan to see results here."));
+
+	CodeIssueItems.Reset();
+	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
 
 	CoreClient->ValidateBlueprints(FPaths::ProjectContentDir(),
 		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnBlueprintValidateComplete));
@@ -1523,9 +1536,35 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Applying %d fix(es) locally."), Accepted.Num());
 
 	PendingCodeFixes = Accepted;
+
+	// T4 — Always ask first. The safety check is the dry-run that flags
+	// fixes which would alter signatures, public API, or otherwise risk
+	// breaking dependent code. The previous flow ran it implicitly, so the
+	// user never knew it happened and either trusted the silent green path
+	// or was confused by the warning popping up out of nowhere.
+	const FText DialogTitle = FText::FromString(TEXT("ShintTools — Safety Check"));
+	const FText DialogBody  = FText::FromString(TEXT(
+		"Do you want to check if the fix breaks any code structure?\n\n"
+		"Recommended: pick Yes. ShintTools will dry-run the fix server-side "
+		"and warn you about anything that could ripple into other files.\n\n"
+		"Pick No to apply immediately without the safety dry-run."));
+	const EAppReturnType::Type Choice =
+		FMessageDialog::Open(EAppMsgType::YesNo, DialogBody, DialogTitle);
+
 	SetCodeState(EModuleState::Running);
-	CoreClient->CheckFixSafety(Accepted,
-		FOnShintSafetyCheckComplete::CreateSP(this, &SShintToolsPanel::OnSafetyCheckComplete));
+
+	if (Choice == EAppReturnType::Yes)
+	{
+		CoreClient->CheckFixSafety(Accepted,
+			FOnShintSafetyCheckComplete::CreateSP(this, &SShintToolsPanel::OnSafetyCheckComplete));
+	}
+	else
+	{
+		// User opted to skip the dry-run — short-circuit straight to apply.
+		FShintSafetyCheckResult Skipped;
+		Skipped.bSafe = true;
+		OnSafetyCheckComplete(Skipped);
+	}
 	return FReply::Handled();
 }
 
@@ -1560,9 +1599,31 @@ FReply SShintToolsPanel::OnApplySingleFix(FShintIssueItemPtr Item)
 	Issues.Add(I);
 
 	PendingCodeFixes = Issues;
+
+	// T4 — same Yes/No prompt as the batch path so the single-issue Apply
+	// button gives the user the same control over the safety dry-run.
+	const FText DialogTitle = FText::FromString(TEXT("ShintTools — Safety Check"));
+	const FText DialogBody  = FText::FromString(TEXT(
+		"Do you want to check if the fix breaks any code structure?\n\n"
+		"Recommended: pick Yes. ShintTools will dry-run the fix server-side "
+		"and warn you about anything that could ripple into other files.\n\n"
+		"Pick No to apply immediately without the safety dry-run."));
+	const EAppReturnType::Type Choice =
+		FMessageDialog::Open(EAppMsgType::YesNo, DialogBody, DialogTitle);
+
 	SetCodeState(EModuleState::Running);
-	CoreClient->CheckFixSafety(Issues,
-		FOnShintSafetyCheckComplete::CreateSP(this, &SShintToolsPanel::OnSafetyCheckComplete));
+
+	if (Choice == EAppReturnType::Yes)
+	{
+		CoreClient->CheckFixSafety(Issues,
+			FOnShintSafetyCheckComplete::CreateSP(this, &SShintToolsPanel::OnSafetyCheckComplete));
+	}
+	else
+	{
+		FShintSafetyCheckResult Skipped;
+		Skipped.bSafe = true;
+		OnSafetyCheckComplete(Skipped);
+	}
 	return FReply::Handled();
 }
 
@@ -1818,7 +1879,22 @@ FReply SShintToolsPanel::OnScanAssetsClicked()
 
 FReply SShintToolsPanel::OnSelectAllAssetsClicked()
 {
-	for (FShintAssetItemPtr& I : AssetIssueItems) I->bChecked = true;
+	// Toggle the FULL backing store, not just the filtered view, so a partial
+	// type filter doesn't leave items off-screen unchanged.
+	for (FShintAssetItemPtr& I : AllAssetItems)   if (I.IsValid()) I->bChecked = true;
+	for (FShintAssetItemPtr& I : AssetIssueItems) if (I.IsValid()) I->bChecked = true;
+	if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
+	RefreshApplyAssetLabel();
+	return FReply::Handled();
+}
+
+// T6 — Deselect All for the asset naming bot. Symmetric companion to
+// OnSelectAllAssetsClicked. Operates on AllAssetItems first so any items
+// hidden by the active type filter are also unticked.
+FReply SShintToolsPanel::OnDeselectAllAssetsClicked()
+{
+	for (FShintAssetItemPtr& I : AllAssetItems)   if (I.IsValid()) I->bChecked = false;
+	for (FShintAssetItemPtr& I : AssetIssueItems) if (I.IsValid()) I->bChecked = false;
 	if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
 	RefreshApplyAssetLabel();
 	return FReply::Handled();
@@ -2537,20 +2613,33 @@ void SShintToolsPanel::ApplyCodeFilter()
 		}
 
 		// ── Category filter ───────────────────────────────────────────────────
+		// T1 — Fall back to the RuleId prefix when the server didn't populate
+		// `category` (some BP and validator rules return it empty). Without
+		// this the filter dropped every uncategorised issue, so selecting
+		// e.g. "Performance" silently emptied the panel.
 		if (!bIsBuildError && CurrentCategoryFilter != EIssueCategoryFilter::All)
 		{
-			const FString CatLower = Item->Category.ToLower();
+			const FString  CatLower = Item->Category.ToLower();
+			const FString& Rid      = Item->RuleId;
 			bool bCatMatch = false;
 			switch (CurrentCategoryFilter)
 			{
 			case EIssueCategoryFilter::Performance:
-				bCatMatch = CatLower.Contains(TEXT("performance")); break;
+				bCatMatch = CatLower.Contains(TEXT("performance"))
+				         || Rid.StartsWith(TEXT("CP")) || Rid.StartsWith(TEXT("BPP"));
+				break;
 			case EIssueCategoryFilter::BestPractices:
-				bCatMatch = CatLower.Contains(TEXT("best")) || CatLower.Contains(TEXT("practice")); break;
+				bCatMatch = CatLower.Contains(TEXT("best")) || CatLower.Contains(TEXT("practice"))
+				         || Rid.StartsWith(TEXT("CB")) || Rid.StartsWith(TEXT("BPB"));
+				break;
 			case EIssueCategoryFilter::Security:
-				bCatMatch = CatLower.Contains(TEXT("security")); break;
+				bCatMatch = CatLower.Contains(TEXT("security"))
+				         || Rid.StartsWith(TEXT("CS")) || Rid.StartsWith(TEXT("BPS"));
+				break;
 			case EIssueCategoryFilter::Maintainability:
-				bCatMatch = CatLower.Contains(TEXT("maintain")); break;
+				bCatMatch = CatLower.Contains(TEXT("maintain"))
+				         || Rid.StartsWith(TEXT("CM")) || Rid.StartsWith(TEXT("BPM"));
+				break;
 			default: bCatMatch = true; break;
 			}
 			if (!bCatMatch) continue;
