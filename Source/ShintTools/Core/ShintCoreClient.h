@@ -68,6 +68,10 @@ struct FShintValidateResult
 
 	// Kept for "Send to Dashboard" — populated during scan
 	TArray<FString> ScannedFilePaths;  // absolute paths of all scanned files
+
+	// Slice B: Quality Score overall echoed by /validate/project and /validate/blueprints.
+	// -1.f = not present (older server, free SKU, or fix endpoint).
+	float   QualityScoreOverall = -1.f;
 };
 DECLARE_DELEGATE_OneParam(FOnShintValidateComplete, const FShintValidateResult&);
 
@@ -154,6 +158,48 @@ struct FShintAssetFixResult
 	FString ErrorMessage;
 };
 DECLARE_DELEGATE_OneParam(FOnShintAssetFixComplete, const FShintAssetFixResult&);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Quality Score (Slice B) — full breakdown fetched via /metrics/score/latest
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct FShintQualityScoreSnapshot
+{
+	bool    bValid               = false;
+	int32   StatusCode           = 0;
+	FString ErrorMessage;
+
+	float   OverallScore         = 0.f;
+	// Sub-scores (0-100). Default to 100 = "no issues in this category yet".
+	float   PerformanceScore     = 100.f;
+	float   SecurityScore        = 100.f;
+	float   BestPracticesScore   = 100.f;
+	float   MaintainabilityScore = 100.f;
+	float   NamingScore          = 100.f;
+
+	int32   Errors               = 0;
+	int32   Warnings             = 0;
+	int32   Infos                = 0;
+	int32   FilesScanned         = 0;
+	int32   TotalIssues          = 0;
+	float   TotalPenalty         = 0.f;
+
+	FString ProjectId;
+	FString Timestamp;     // ISO-8601 from server
+	FString ScanType;      // "full" | "incremental" | "fix_update"
+	FString Tier;          // "free" | "indie"
+};
+DECLARE_DELEGATE_OneParam(FOnShintQualityScoreComplete, const FShintQualityScoreSnapshot&);
+
+struct FShintQualityScoreHistory
+{
+	bool    bValid     = false;
+	int32   StatusCode = 0;
+	FString ErrorMessage;
+	FString ProjectId;
+	TArray<FShintQualityScoreSnapshot> Scores;  // newest first, as the server returns them
+};
+DECLARE_DELEGATE_OneParam(FOnShintQualityScoreHistoryComplete, const FShintQualityScoreHistory&);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // External web dashboard results
@@ -300,6 +346,19 @@ public:
 	void SendCodeValidatorToDashboard(const FShintValidateResult& LastResult,
 	                                  FOnShintWebDashboardComplete OnComplete);
 
+	// ── Quality Score (Slice B) ──────────────────────────────────────────────
+	/**
+	 * Fetches the latest Quality Score for the configured project.
+	 * Calls GET {core}/metrics/score/latest?project_id=...
+	 * Returns bValid=false if the server has no score yet for this project.
+	 */
+	void GetLatestQualityScore(const FString& ProjectId,
+	                           FOnShintQualityScoreComplete OnComplete);
+
+	/** Fetches the score history (newest first). Used by the trend chart. */
+	void GetQualityScoreHistory(const FString& ProjectId, int32 Limit,
+	                            FOnShintQualityScoreHistoryComplete OnComplete);
+
 	// ── Asset Naming Bot — local engine ──────────────────────────────────────
 	void ScanAssetNaming(const FString& ContentDir, FOnShintAssetScanComplete OnComplete);
 	void ReportAssetFixesToServer(const TArray<FShintAssetIssue>& Fixed,
@@ -343,6 +402,12 @@ private:
 	static FShintAssetScanResult ParseAssetScanResponse(const FShintRequestResult& Raw);
 	static FShintFixResult       ParseFixResponse      (const FShintRequestResult& Raw);
 	static FShintFixResult       ParseTreeSitterFixResponse(const FShintRequestResult& Raw);
+	// Slice B helpers — populate one snapshot from a JSON object that matches
+	// the score document shape persisted in MongoDB by the core engine.
+	static bool                  ParseScoreObject(const TSharedPtr<class FJsonObject>& Obj,
+	                                              FShintQualityScoreSnapshot& Out);
+	static FShintQualityScoreSnapshot         ParseLatestScoreResponse (const FShintRequestResult& Raw);
+	static FShintQualityScoreHistory          ParseScoreHistoryResponse(const FShintRequestResult& Raw);
 	static void CollectSourceFiles(const FString& Dir, TArray<FString>& Out);
 
 	void HandleTreeSitterFixResponse(const FShintRequestResult& Raw,

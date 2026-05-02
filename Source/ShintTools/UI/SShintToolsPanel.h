@@ -202,6 +202,10 @@ private:
 	void ApplyAssetFilter();
 	void RefreshCodeStats();
 	void RefreshAssetStats();
+
+	// Slice B — Quality Score
+	void RefreshQualityScore();                               // updates score badge + breakdown from LastQualityScore
+	void OnLatestScoreFetched(const FShintQualityScoreSnapshot& Snap);  // /metrics/score/latest callback
 	void RefreshApplyCodeLabel();
 	void RefreshApplyAssetLabel();
 	void SaveConfigOverrides();
@@ -236,6 +240,7 @@ private:
 
 	FShintValidateResult  LastCodeResult;
 	FShintAssetScanResult LastAssetResult;
+	FShintQualityScoreSnapshot LastQualityScore;  // Slice B
 
 	// All issues from last scan
 	TArray<FShintIssueItemPtr> AllCodeItems;
@@ -272,6 +277,8 @@ private:
 	TSharedPtr<STextBlock> CodeFiles_Label;
 	TSharedPtr<STextBlock> CodeErrors_Label;
 	TSharedPtr<STextBlock> CodeWarnings_Label;
+	TSharedPtr<STextBlock> CodeScore_Label;            // Slice B — overall Quality Score badge
+	TSharedPtr<STextBlock> CodeScoreBreakdown_Label;   // Slice B — sub-scores under stats
 	TSharedPtr<STextBlock> AssetTotal_Label;
 	TSharedPtr<STextBlock> AssetInvalid_Label;
 	TSharedPtr<STextBlock> AssetTime_Label;

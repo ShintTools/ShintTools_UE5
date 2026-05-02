@@ -426,7 +426,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 			]
 
 			// Stats
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,16.f)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,4.f)
 			[
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
@@ -435,6 +435,18 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 				[ StatBadge(CodeErrors_Label,   LOCTEXT("CVE","ERRORS"),   C_Red())    ]
 				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
 				[ StatBadge(CodeWarnings_Label, LOCTEXT("CVW","WARNINGS"), C_Yellow()) ]
+				// Slice B — Quality Score overall badge
+				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
+				[ StatBadge(CodeScore_Label,    LOCTEXT("CVQ","QUALITY"),  C_Green())  ]
+			]
+			// Slice B — sub-score breakdown line (perf / sec / bp / maint / naming)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,16.f).HAlign(HAlign_Center)
+			[
+				SAssignNew(CodeScoreBreakdown_Label, STextBlock)
+					.Text(LOCTEXT("CVQBreakdownEmpty",
+						"Quality Score: run a scan to compute"))
+					.Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_Gray()))
 			]
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,14.f)
@@ -1969,6 +1981,31 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 	SetCodeState(EModuleState::Done);
 	PopulateCodeIssueList(LastCodeResult, bIsBPScan);
 	RefreshCodeStats();
+
+	// Slice B — show the overall score the server returned inline (no extra round-trip),
+	// then fetch the full per-category breakdown via /metrics/score/latest.
+	if (LastCodeResult.QualityScoreOverall >= 0.f)
+	{
+		LastQualityScore = FShintQualityScoreSnapshot();
+		LastQualityScore.bValid       = true;
+		LastQualityScore.OverallScore = LastCodeResult.QualityScoreOverall;
+		LastQualityScore.Errors       = LastCodeResult.TotalErrors;
+		LastQualityScore.Warnings     = LastCodeResult.TotalWarnings;
+		LastQualityScore.TotalIssues  = LastCodeResult.TotalIssues;
+		LastQualityScore.FilesScanned = LastCodeResult.FilesScanned;
+		RefreshQualityScore();
+	}
+
+	if (CoreClient.IsValid())
+	{
+		const FString& ProjectId = CoreClient->GetConfig().ProjectId;
+		if (!ProjectId.IsEmpty())
+		{
+			CoreClient->GetLatestQualityScore(
+				ProjectId,
+				FOnShintQualityScoreComplete::CreateSP(this, &SShintToolsPanel::OnLatestScoreFetched));
+		}
+	}
 }
 
 void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 FixGeneration)
@@ -2459,6 +2496,81 @@ void SShintToolsPanel::RefreshCodeStats()
 	if (CodeFiles_Label.IsValid())    CodeFiles_Label->SetText(FText::FromString(FmtN(LastCodeResult.FilesScanned)));
 	if (CodeErrors_Label.IsValid())   CodeErrors_Label->SetText(FText::FromString(FmtN(LastCodeResult.TotalErrors)));
 	if (CodeWarnings_Label.IsValid()) CodeWarnings_Label->SetText(FText::FromString(FmtN(LastCodeResult.TotalWarnings)));
+}
+
+// ─── Slice B — Quality Score helpers ───────────────────────────────────────
+//
+// Color thresholds match the dashboard convention:
+//   ≥ 90 → green   (healthy)
+//   ≥ 70 → yellow  (needs attention)
+//   < 70 → red     (poor quality)
+namespace
+{
+	FLinearColor ScoreColor(float Score)
+	{
+		if (Score >= 90.f) return SShintToolsPanel::C_Green();
+		if (Score >= 70.f) return SShintToolsPanel::C_Yellow();
+		return SShintToolsPanel::C_Red();
+	}
+}
+
+void SShintToolsPanel::RefreshQualityScore()
+{
+	if (CodeScore_Label.IsValid())
+	{
+		if (LastQualityScore.bValid)
+		{
+			CodeScore_Label->SetText(FText::FromString(
+				FString::Printf(TEXT("%.0f"), LastQualityScore.OverallScore)));
+			CodeScore_Label->SetColorAndOpacity(
+				FSlateColor(ScoreColor(LastQualityScore.OverallScore)));
+		}
+		else
+		{
+			CodeScore_Label->SetText(FText::FromString(TEXT("—")));
+			CodeScore_Label->SetColorAndOpacity(FSlateColor(C_Gray()));
+		}
+	}
+
+	if (CodeScoreBreakdown_Label.IsValid())
+	{
+		if (LastQualityScore.bValid)
+		{
+			// Compact one-liner. Server-side category names match these labels.
+			const FString Line = FString::Printf(
+				TEXT("Perf %.0f  ·  Sec %.0f  ·  BP %.0f  ·  Maint %.0f  ·  Naming %.0f"),
+				LastQualityScore.PerformanceScore,
+				LastQualityScore.SecurityScore,
+				LastQualityScore.BestPracticesScore,
+				LastQualityScore.MaintainabilityScore,
+				LastQualityScore.NamingScore);
+			CodeScoreBreakdown_Label->SetText(FText::FromString(Line));
+			CodeScoreBreakdown_Label->SetColorAndOpacity(
+				FSlateColor(ScoreColor(LastQualityScore.OverallScore)));
+		}
+		else
+		{
+			CodeScoreBreakdown_Label->SetText(LOCTEXT("CVQBreakdownEmpty",
+				"Quality Score: run a scan to compute"));
+			CodeScoreBreakdown_Label->SetColorAndOpacity(FSlateColor(C_Gray()));
+		}
+	}
+}
+
+void SShintToolsPanel::OnLatestScoreFetched(const FShintQualityScoreSnapshot& Snap)
+{
+	if (!Snap.bValid)
+	{
+		// 404 / older free server / empty project — keep the inline overall we already
+		// painted from the scan response, just log for diagnostics.
+		UE_LOG(LogShintTools, Verbose,
+			TEXT("Slice B: /metrics/score/latest returned no score (%s)"),
+			Snap.ErrorMessage.IsEmpty() ? TEXT("not found") : *Snap.ErrorMessage);
+		return;
+	}
+
+	LastQualityScore = Snap;
+	RefreshQualityScore();
 }
 
 void SShintToolsPanel::RefreshAssetStats()
