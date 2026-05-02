@@ -32,12 +32,80 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "UObject/ObjectRedirector.h"
+#include "Engine/Blueprint.h"          // T2 — detect BP for ClassRedirects entries
+#include "Misc/ConfigCacheIni.h"       // T2 — write CoreRedirects to DefaultEngine.ini
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Algo/Count.h"
 #include "Containers/Ticker.h"
 
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T2 — CoreRedirects writer.
+//
+// IAssetTools::RenameAssets + FixupReferencers fixes references that exist as
+// soft/hard pointers in other assets. It does NOT survive when the .uasset
+// redirector is later deleted, and it does not cover **native parent class
+// references** — child Blueprints whose parent is a renamed Blueprint reload
+// with "Class not found" until you provide a CoreRedirects mapping.
+//
+// This helper appends one entry per rename to Config/DefaultEngine.ini under
+// [CoreRedirects]. Blueprints get +ClassRedirects (covers parent-class lookup);
+// every other asset gets +PackageRedirects (covers package-path lookup).
+// Existing entries are deduplicated so re-running the bot is idempotent.
+// ─────────────────────────────────────────────────────────────────────────────
+struct FShintRedirectEntry
+{
+	FString Key;     // "+ClassRedirects" or "+PackageRedirects"
+	FString OldName; // /Game/Path/Asset (no .uasset, no _C — added by callers)
+	FString NewName;
+};
+
+static FString FormatCoreRedirectValue(const FString& OldName, const FString& NewName)
+{
+	return FString::Printf(TEXT("(OldName=\"%s\",NewName=\"%s\")"), *OldName, *NewName);
+}
+
+static int32 WriteShintCoreRedirects(const TArray<FShintRedirectEntry>& Entries)
+{
+	if (Entries.IsEmpty()) return 0;
+
+	const FString IniPath = FPaths::ProjectConfigDir() / TEXT("DefaultEngine.ini");
+	const TCHAR* Section  = TEXT("CoreRedirects");
+
+	// Read existing entries so we can dedupe. GConfig stores +Foo=... lines as
+	// an array under the Foo key, so we split read by entry kind.
+	TArray<FString> ExistingClass;
+	TArray<FString> ExistingPackage;
+	GConfig->GetArray(Section, TEXT("+ClassRedirects"),   ExistingClass,   IniPath);
+	GConfig->GetArray(Section, TEXT("+PackageRedirects"), ExistingPackage, IniPath);
+
+	int32 Added = 0;
+	for (const FShintRedirectEntry& E : Entries)
+	{
+		const FString Value = FormatCoreRedirectValue(E.OldName, E.NewName);
+		TArray<FString>& Bucket = E.Key.Equals(TEXT("+ClassRedirects"))
+			? ExistingClass : ExistingPackage;
+
+		// Dedupe by exact textual match — UE normalises whitespace away.
+		const bool bAlreadyPresent = Bucket.ContainsByPredicate(
+			[&Value](const FString& S) { return S.Equals(Value, ESearchCase::IgnoreCase); });
+		if (!bAlreadyPresent)
+		{
+			Bucket.Add(Value);
+			++Added;
+		}
+	}
+
+	if (Added > 0)
+	{
+		GConfig->SetArray(Section, TEXT("+ClassRedirects"),   ExistingClass,   IniPath);
+		GConfig->SetArray(Section, TEXT("+PackageRedirects"), ExistingPackage, IniPath);
+		GConfig->Flush(/*Read=*/false, IniPath);
+	}
+	return Added;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Toast helper — surfaces backend / connectivity failures to the user instead
@@ -1774,6 +1842,10 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 	TArray<FAssetRenameData> RenameData;
 	TArray<FShintAssetIssue> ForServer;
+	// T2 — captured BEFORE RenameAssets() so we know the old object path.
+	// After the rename, Asset->GetPathName() reports the new path, so any later
+	// attempt to derive OldName would only emit identity mappings.
+	TArray<FShintRedirectEntry> RedirectEntries;
 	int32 SkippedCircular  = 0;
 	int32 SkippedCollision = 0;
 	int32 SkippedLoadFail  = 0;
@@ -1827,6 +1899,29 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 		RenameData.Add(FAssetRenameData(Asset, NewPackagePath, Item->SuggestedName));
 
+		// T2 — record the redirect mapping for DefaultEngine.ini.
+		// Blueprints need +ClassRedirects with the "_C" suffix because UE looks
+		// up the **generated class**, not the package, for parent inheritance.
+		// Everything else gets +PackageRedirects.
+		{
+			const FString OldPackage = Item->AssetPath;                          // /Game/.../OldName
+			const FString NewPackage = NewPackagePath / Item->SuggestedName;     // /Game/.../NewName
+			FShintRedirectEntry RE;
+			if (Asset->IsA<UBlueprint>())
+			{
+				RE.Key     = TEXT("+ClassRedirects");
+				RE.OldName = OldPackage + TEXT(".") + FPaths::GetBaseFilename(OldPackage) + TEXT("_C");
+				RE.NewName = NewPackage + TEXT(".") + Item->SuggestedName        + TEXT("_C");
+			}
+			else
+			{
+				RE.Key     = TEXT("+PackageRedirects");
+				RE.OldName = OldPackage;
+				RE.NewName = NewPackage;
+			}
+			RedirectEntries.Add(MoveTemp(RE));
+		}
+
 		FShintAssetIssue I;
 		I.AssetPath    = Item->AssetPath;
 		I.CurrentName  = Item->CurrentName;
@@ -1871,6 +1966,21 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 			UE_LOG(LogShintTools, Log,
 				TEXT("ShintPanel: fixing %d redirector(s) after asset rename"), Redirectors.Num());
 			AssetTools.FixupReferencers(Redirectors);
+		}
+	}
+
+	// T2 — Persist redirect mappings to DefaultEngine.ini. ObjectRedirector
+	// .uasset files cover live references but are fragile (deleted by clean,
+	// missed by native parent-class lookup on child Blueprints). The
+	// [CoreRedirects] entries make the rename survive both.
+	{
+		const int32 Added = WriteShintCoreRedirects(RedirectEntries);
+		if (Added > 0)
+		{
+			UE_LOG(LogShintTools, Log,
+				TEXT("ShintPanel: wrote %d new entr(ies) to [CoreRedirects] in DefaultEngine.ini "
+				     "(restart editor for child Blueprint parents to resolve)."),
+				Added);
 		}
 	}
 
@@ -1946,10 +2056,12 @@ void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& R
 		RefreshAssetStats();
 	}
 
-	// Quality issues → code validator panel.
-	// bBlueprintScanActive=true: REPLACE the list so only BP issues are shown.
-	// bBlueprintScanActive=false (legacy path): merge with existing C++ results.
-	HandleValidateResult(QualityResult, /*bMerge=*/!bBlueprintScanActive, /*bIsBPScan=*/bBlueprintScanActive);
+	// T4 — Always merge into the unified code-validator panel so the user
+	// sees C++ AND Blueprint findings in the same list. The Code-Type filter
+	// (CppOnly / BlueprintsOnly) and the Category filter let them slice the
+	// view; they don't need a destructive REPLACE on every BP scan.
+	// `bIsBPScan` is still passed so PopulateCodeIssueList tags rows correctly.
+	HandleValidateResult(QualityResult, /*bMerge=*/true, /*bIsBPScan=*/bBlueprintScanActive);
 }
 
 void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, bool bMerge, bool bIsBPScan)
@@ -1963,12 +2075,30 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 
 	if (bMerge)
 	{
-		LastCodeResult.bSuccess       = true;
-		LastCodeResult.TotalIssues   += Result.TotalIssues;
-		LastCodeResult.TotalErrors   += Result.TotalErrors;
-		LastCodeResult.TotalWarnings += Result.TotalWarnings;
-		LastCodeResult.FilesScanned  += Result.FilesScanned;
+		// T4 — merge-by-scan-type. A C++ scan replaces only C++ issues (RuleId
+		// prefixed CP/CB/CS/CM); a BP scan replaces only BP issues (BP* prefix).
+		// Re-running either scan does NOT duplicate findings, and the unified
+		// list keeps both kinds visible at once.
+		auto IsBP = [](const FShintCodeIssue& I) {
+			return I.RuleId.StartsWith(TEXT("BP"));
+		};
+		LastCodeResult.Issues.RemoveAll([&](const FShintCodeIssue& I)
+		{
+			return bIsBPScan ? IsBP(I) : !IsBP(I);
+		});
 		LastCodeResult.Issues.Append(Result.Issues);
+
+		// Recompute counters from the merged set so they always match the list.
+		LastCodeResult.bSuccess      = true;
+		LastCodeResult.FilesScanned  = Result.FilesScanned;  // last scan's coverage
+		LastCodeResult.TotalIssues   = LastCodeResult.Issues.Num();
+		LastCodeResult.TotalErrors   = 0;
+		LastCodeResult.TotalWarnings = 0;
+		for (const FShintCodeIssue& I : LastCodeResult.Issues)
+		{
+			if (I.Severity == TEXT("error"))   ++LastCodeResult.TotalErrors;
+			if (I.Severity == TEXT("warning")) ++LastCodeResult.TotalWarnings;
+		}
 	}
 	else
 	{
@@ -2017,6 +2147,34 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 F
 		UE_LOG(LogShintTools, Log,
 			TEXT("ApplyFix: %d fix(es) applied, %d skipped."),
 			Result.TotalFixesApplied, Result.TotalFixesSkipped);
+
+		// T3 — Surface a success toast so the user sees what just landed.
+		// Without this, the panel only updated counters and the "click was
+		// silent" perception drove repeat-clicks. Mention the kind of scan
+		// (Blueprint vs C++) explicitly because BP fixes were the most
+		// visually-quiet flow.
+		{
+			const TCHAR* Kind = bBlueprintScanActive ? TEXT("Blueprint") : TEXT("C++");
+			FNotificationInfo Info(FText::FromString(
+				FString::Printf(TEXT("✓  %d %s fix(es) applied"),
+					Result.TotalFixesApplied, Kind)));
+			if (Result.TotalFixesSkipped > 0)
+			{
+				Info.SubText = FText::FromString(
+					FString::Printf(TEXT("%d skipped — open the log for details."),
+						Result.TotalFixesSkipped));
+			}
+			Info.ExpireDuration       = 5.0f;
+			Info.bUseSuccessFailIcons = true;
+			TSharedPtr<SNotificationItem> N =
+				FSlateNotificationManager::Get().AddNotification(Info);
+			if (N.IsValid())
+			{
+				N->SetCompletionState(Result.TotalFixesApplied > 0
+					? SNotificationItem::CS_Success
+					: SNotificationItem::CS_None);
+			}
+		}
 
 		// Record fingerprints so these issues are suppressed on any future
 		// incremental re-scan within this session.

@@ -2117,21 +2117,42 @@ void FShintCoreClient::RequestAgentPlan(
 	// Translate the local FShintCodeIssue array into the JSON the
 	// /agent/plan endpoint expects. Schema mirrors api/routes/agent.py
 	// exactly — keep them in sync.
+	// T6 — Defensive payload sanitisation. The /agent/plan Pydantic schema
+	// requires `rule_id` and `severity` (non-empty strings) and a non-negative
+	// `line`. Sending issues that fail validation returns 422 with a NESTED
+	// detail array that the previous parser couldn't surface — the user just
+	// saw "Agent plan request rejected by server" with no clue what was wrong.
+	// Filter the bad apples here so the request only carries valid payload,
+	// and log how many we dropped for diagnostics.
 	TArray<TSharedPtr<FJsonValue>> IssArr;
 	IssArr.Reserve(Source.Issues.Num());
+	int32 SkippedEmpty = 0;
 	for (const FShintCodeIssue& I : Source.Issues)
 	{
+		if (I.RuleId.IsEmpty() || I.Severity.IsEmpty())
+		{
+			++SkippedEmpty;
+			continue;
+		}
 		TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
 		O->SetStringField(TEXT("rule_id"),         I.RuleId);
 		O->SetStringField(TEXT("severity"),        I.Severity);
 		O->SetStringField(TEXT("category"),        I.Category);
 		O->SetStringField(TEXT("file_path"),       I.FilePath);
-		O->SetNumberField(TEXT("line"),            I.Line);
+		O->SetNumberField(TEXT("line"),            FMath::Max(0, I.Line));
 		O->SetStringField(TEXT("message"),         I.Message);
 		O->SetStringField(TEXT("fix_suggestion"),  I.FixSuggestion);
 		O->SetBoolField  (TEXT("is_auto_fixable"), I.bIsAutoFixable);
 		IssArr.Add(MakeShared<FJsonValueObject>(O));
 	}
+	if (SkippedEmpty > 0)
+	{
+		UE_LOG(LogShintTools, Warning,
+			TEXT("RequestAgentPlan: dropped %d issue(s) with empty rule_id or severity"),
+			SkippedEmpty);
+	}
+	UE_LOG(LogShintTools, Log,
+		TEXT("RequestAgentPlan: sending %d issue(s) to /agent/plan"), IssArr.Num());
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetStringField(TEXT("api_key"), Config.ApiKey);
@@ -2198,11 +2219,57 @@ FShintAgentPlanResult FShintCoreClient::ParseAgentPlanResponse(
 	R.bSuccess = bServerOk;
 	if (!R.bSuccess && R.ErrorMessage.IsEmpty())
 	{
-		Root->TryGetStringField(TEXT("detail"), R.ErrorMessage);
+		// T6 — FastAPI sends two shapes when /agent/plan rejects a request:
+		//   • HTTPException → {"detail": "Auto-Fix Plan is an Indie-tier feature."}
+		//     (string)
+		//   • Pydantic 422 → {"detail": [{"loc":[...], "msg":"...", "type":"..."}]}
+		//     (array of objects)
+		// The previous code only handled the string form, so 422 errors
+		// (caused by issues with empty rule_id/severity) reached the user
+		// as "Agent plan request rejected by server" with no actionable hint.
+		if (Root->TryGetStringField(TEXT("detail"), R.ErrorMessage)
+		    && !R.ErrorMessage.IsEmpty())
+		{
+			// String detail — already in R.ErrorMessage.
+		}
+		else
+		{
+			const TArray<TSharedPtr<FJsonValue>>* DetailArr = nullptr;
+			if (Root->TryGetArrayField(TEXT("detail"), DetailArr) && DetailArr)
+			{
+				TArray<FString> Msgs;
+				Msgs.Reserve(DetailArr->Num());
+				for (const TSharedPtr<FJsonValue>& V : *DetailArr)
+				{
+					const TSharedPtr<FJsonObject>* O = nullptr;
+					if (!V->TryGetObject(O) || !O || !O->IsValid()) continue;
+					FString Msg, Loc;
+					(*O)->TryGetStringField(TEXT("msg"), Msg);
+					const TArray<TSharedPtr<FJsonValue>>* LocArr = nullptr;
+					if ((*O)->TryGetArrayField(TEXT("loc"), LocArr) && LocArr && LocArr->Num() > 0)
+					{
+						TArray<FString> Parts;
+						for (const TSharedPtr<FJsonValue>& LV : *LocArr)
+						{
+							FString S;
+							if (LV->TryGetString(S)) Parts.Add(S);
+						}
+						Loc = FString::Join(Parts, TEXT("."));
+					}
+					Msgs.Add(Loc.IsEmpty() ? Msg : FString::Printf(TEXT("%s: %s"), *Loc, *Msg));
+				}
+				R.ErrorMessage = FString::Join(Msgs, TEXT(" | "));
+			}
+		}
 		if (R.ErrorMessage.IsEmpty())
 		{
 			R.ErrorMessage = TEXT("Agent plan request rejected by server");
 		}
+		// Always log the raw body when something went wrong — the user only
+		// sees the first toast line, the engineer needs the rest.
+		UE_LOG(LogShintTools, Warning,
+			TEXT("ParseAgentPlanResponse: server rejected request — %s | raw: %s"),
+			*R.ErrorMessage, *Raw.ResponseBody.Left(800));
 	}
 	return R;
 }
