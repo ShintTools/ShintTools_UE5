@@ -312,4 +312,18 @@ private:
 	TSharedPtr<SEditableTextBox> ProjectIdField;
 	TSharedPtr<SEditableTextBox> ApiKeyField;
 	TSharedPtr<SEditableTextBox> DashboardUrlField;
+
+	// ── UI-REDESIGN: navigation state ────────────────────────────────────────
+	// The panel routes between four destinations via a SWidgetSwitcher driven
+	// by the sidebar. CurrentDestinationIndex is the source of truth; both
+	// SShintSidebar and the switcher consume it. Stored as a plain int32 to
+	// avoid pulling SShintSidebar.h into this header just to use its enum.
+	// The .cpp casts to / from EShintDestination at the boundary.
+	int32                             CurrentDestinationIndex = 0; // Overview
+	int32                             CurrentConnStateIndex   = 0; // Unknown
+	TSharedPtr<class SWidgetSwitcher> DestinationSwitcher;
+
+	/** Switches the active destination. Index matches EShintDestination
+	 *  (0 Overview / 1 Code / 2 Assets / 3 Settings). */
+	void SetDestinationIndex(int32 Index);
 };

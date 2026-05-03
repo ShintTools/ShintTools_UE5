@@ -11,6 +11,9 @@
 #include "SShintSeverityBadge.h"
 #include "SShintKpiTile.h"
 #include "SShintEmptyState.h"
+#include "SShintSidebar.h"
+#include "SShintTopBar.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
 
 // Slate windows / dialogs
 #include "Widgets/SWindow.h"
@@ -206,20 +209,139 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 	CoreClient     = MakeShared<FShintCoreClient>();
 	ProcessManager = MakeShared<FCoreProcessManager>();
 
+	// UI-REDESIGN — dashboard shell: VBox(TopBar) over HBox(Sidebar, SwitcherContent).
+	// The sidebar pushes destination changes to SetDestinationIndex(); the switcher
+	// reads CurrentDestinationIndex via a lambda so the routing stays declarative
+	// without manual SetActiveWidgetIndex() calls.
+	//
+	// Each destination wraps a single existing Build*Section() inside a SScrollBox
+	// so per-section vertical scrolling works independently of the sidebar — the
+	// rail itself never scrolls.
+
+	auto CurrentTitle = [this]() -> FText
+	{
+		switch (static_cast<EShintDestination>(CurrentDestinationIndex))
+		{
+		case EShintDestination::Code:     return NSLOCTEXT("ShintPanel","TitleCode",     "Code Validator");
+		case EShintDestination::Assets:   return NSLOCTEXT("ShintPanel","TitleAssets",   "Asset Naming Bot");
+		case EShintDestination::Settings: return NSLOCTEXT("ShintPanel","TitleSettings", "Settings");
+		case EShintDestination::Overview:
+		default:                          return NSLOCTEXT("ShintPanel","TitleOverview", "Overview");
+		}
+	};
+
+	auto StatusText = [this]() -> FText
+	{
+		switch (static_cast<EShintConnState>(CurrentConnStateIndex))
+		{
+		case EShintConnState::Connected:    return NSLOCTEXT("ShintPanel","Conn",  "Connected");
+		case EShintConnState::Connecting:   return NSLOCTEXT("ShintPanel","Probe", "Connecting…");
+		case EShintConnState::Disconnected: return NSLOCTEXT("ShintPanel","Down",  "Core offline");
+		case EShintConnState::Unknown:
+		default:                            return NSLOCTEXT("ShintPanel","Idle",  "Idle");
+		}
+	};
+
+	auto ActiveDest = [this]() -> EShintDestination
+	{
+		return static_cast<EShintDestination>(CurrentDestinationIndex);
+	};
+
+	auto ConnState = [this]() -> EShintConnState
+	{
+		return static_cast<EShintConnState>(CurrentConnStateIndex);
+	};
+
+	// Wrap a section in a vertical scrollbox so long content doesn't push the
+	// sidebar/topbar off-screen. Padding around the section uses S5 (24px) to
+	// give the dashboard feel some breathing room from the edges.
+	auto WrapSection = [](TSharedRef<SWidget> Content) -> TSharedRef<SWidget>
+	{
+		return SNew(SScrollBox)
+			.Orientation(Orient_Vertical)
+			+ SScrollBox::Slot()
+			.Padding(FMargin(FShintStyle::Space::S5))
+			[ Content ];
+	};
+
 	ChildSlot
 	[
 		SNew(SBorder)
 		.BorderImage(ST4::Solid(C_BG()))
 		.Padding(0.f)
 		[
-			SNew(SScrollBox).Orientation(Orient_Vertical)
-			+ SScrollBox::Slot().Padding(0.f) [ BuildHeader()               ]
-			+ SScrollBox::Slot().Padding(0.f) [ BuildConfigSection()        ]
-			+ SScrollBox::Slot().Padding(0.f) [ BuildStatusBar()            ]
-			+ SScrollBox::Slot().Padding(0.f) [ BuildCodeValidatorSection() ]
-			+ SScrollBox::Slot().Padding(0.f) [ BuildAssetNamingSection()   ]
+			SNew(SVerticalBox)
+
+			// ── Top bar ──────────────────────────────────────────────────
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			[
+				SNew(SShintTopBar)
+				.Title_Lambda(CurrentTitle)
+				.StatusText_Lambda(StatusText)
+				.ConnState_Lambda(ConnState)
+			]
+
+			// ── Body: sidebar | content ──────────────────────────────────
+			+ SVerticalBox::Slot()
+			.FillHeight(1.f)
+			[
+				SNew(SHorizontalBox)
+
+				// Left rail
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					SNew(SShintSidebar)
+					.Active_Lambda(ActiveDest)
+					.OnSelected_Lambda([this](EShintDestination Dest)
+					{
+						SetDestinationIndex(static_cast<int32>(Dest));
+					})
+				]
+
+				// Destination switcher
+				+ SHorizontalBox::Slot()
+				.FillWidth(1.f)
+				[
+					SAssignNew(DestinationSwitcher, SWidgetSwitcher)
+					.WidgetIndex_Lambda([this]() { return CurrentDestinationIndex; })
+
+					// 0 — Overview: header + status bar (legacy; KPI tile hero
+					// will replace this in a future step)
+					+ SWidgetSwitcher::Slot()
+					[
+						WrapSection(
+							SNew(SVerticalBox)
+							+ SVerticalBox::Slot().AutoHeight() [ BuildHeader()    ]
+							+ SVerticalBox::Slot().AutoHeight() [ BuildStatusBar() ])
+					]
+
+					// 1 — Code Validator
+					+ SWidgetSwitcher::Slot()
+					[ WrapSection(BuildCodeValidatorSection()) ]
+
+					// 2 — Asset Naming Bot
+					+ SWidgetSwitcher::Slot()
+					[ WrapSection(BuildAssetNamingSection()) ]
+
+					// 3 — Settings (was Config Section, now its own destination)
+					+ SWidgetSwitcher::Slot()
+					[ WrapSection(BuildConfigSection()) ]
+				]
+			]
 		]
 	];
+}
+
+void SShintToolsPanel::SetDestinationIndex(int32 Index)
+{
+	// Clamp defensively so an out-of-range value can't crash the switcher.
+	if (Index < 0) Index = 0;
+	if (Index > 3) Index = 3;
+	CurrentDestinationIndex = Index;
+	// The switcher's WidgetIndex_Lambda will read the new value on the next
+	// tick — no explicit refresh needed.
 }
 
 SShintToolsPanel::~SShintToolsPanel()
