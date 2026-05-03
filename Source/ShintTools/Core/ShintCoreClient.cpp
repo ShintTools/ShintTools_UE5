@@ -1531,7 +1531,7 @@ FShintQualityScoreHistory FShintCoreClient::ParseScoreHistoryResponse(const FShi
 		for (const TSharedPtr<FJsonValue>& V : *Arr)
 		{
 			const TSharedPtr<FJsonObject>* O = nullptr;
-			if (!V->TryGetObject(O) || !O) continue;
+			if (!V->TryGetObject(O) || !O || !O->IsValid()) continue;
 			FShintQualityScoreSnapshot Snap;
 			if (ParseScoreObject(*O, Snap))
 			{
@@ -1887,7 +1887,7 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 		for (const TSharedPtr<FJsonValue>& V : *IssArr)
 		{
 			const TSharedPtr<FJsonObject>* O = nullptr;
-			if (!V->TryGetObject(O) || !O) continue;
+			if (!V->TryGetObject(O) || !O || !O->IsValid()) continue;
 			FShintCodeIssue Issue;
 			(*O)->TryGetStringField(TEXT("rule_id"),        Issue.RuleId);
 			(*O)->TryGetStringField(TEXT("severity"),       Issue.Severity);
@@ -1979,7 +1979,7 @@ FShintAssetScanResult FShintCoreClient::ParseAssetScanResponse(const FShintReque
 		for (const TSharedPtr<FJsonValue>& V : *IssArr)
 		{
 			const TSharedPtr<FJsonObject>* O = nullptr;
-			if (!V->TryGetObject(O) || !O) continue;
+			if (!V->TryGetObject(O) || !O || !O->IsValid()) continue;
 			FShintAssetIssue Issue;
 			// Try both possible field names for path
 			if (!(*O)->TryGetStringField(TEXT("asset_path"), Issue.AssetPath))
@@ -2033,7 +2033,7 @@ FShintFixResult FShintCoreClient::ParseFixResponse(const FShintRequestResult& Ra
 		for (const TSharedPtr<FJsonValue>& V : *FilesArr)
 		{
 			const TSharedPtr<FJsonObject>* O = nullptr;
-			if (!V->TryGetObject(O) || !O) continue;
+			if (!V->TryGetObject(O) || !O || !O->IsValid()) continue;
 			FShintFixedFile FF;
 			// Try multiple field names for path
 			if (!(*O)->TryGetStringField(TEXT("file_path"), FF.FilePath))

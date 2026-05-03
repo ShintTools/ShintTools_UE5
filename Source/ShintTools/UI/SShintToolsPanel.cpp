@@ -33,6 +33,9 @@
 #include "AssetRegistry/IAssetRegistry.h"
 #include "UObject/ObjectRedirector.h"
 #include "Engine/Blueprint.h"          // T2 — detect BP for ClassRedirects entries
+#include "Kismet2/KismetEditorUtilities.h" // ASSET-FIX-2 — recompile descendants after parent rename
+#include "Kismet2/BlueprintEditorUtils.h"  // ASSET-FIX-2 — FBlueprintTags::ParentClassPath
+#include "FileHelpers.h"               // ASSET-FIX-2 — auto-save renamed packages
 #include "Misc/ConfigCacheIni.h"       // T2 — write CoreRedirects to DefaultEngine.ini
 #include "Misc/FileHelper.h"
 #include "Misc/MessageDialog.h"        // T4 — Yes/No confirm before safety check
@@ -43,23 +46,30 @@
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// T2 — CoreRedirects writer.
+// T2 / ASSET-FIX-2 — CoreRedirects writer.
 //
 // IAssetTools::RenameAssets + FixupReferencers fixes references that exist as
-// soft/hard pointers in other assets. It does NOT survive when the .uasset
-// redirector is later deleted, and it does not cover **native parent class
-// references** — child Blueprints whose parent is a renamed Blueprint reload
-// with "Class not found" until you provide a CoreRedirects mapping.
+// soft/hard pointers in other LOADED assets. It does NOT survive when the
+// .uasset redirector is later deleted, and it does not cover unloaded packages
+// or **native parent class references** — child Blueprints whose parent is a
+// renamed Blueprint reload with "Class not found" until you provide a
+// CoreRedirects mapping.
 //
-// This helper appends one entry per rename to Config/DefaultEngine.ini under
-// [CoreRedirects]. Blueprints get +ClassRedirects (covers parent-class lookup);
-// every other asset gets +PackageRedirects (covers package-path lookup).
-// Existing entries are deduplicated so re-running the bot is idempotent.
+// ASSET-FIX-2 widens coverage to three redirect kinds per rename:
+//   +ClassRedirects   — Blueprint generated-class lookup ("BP_Old_C")
+//   +PackageRedirects — soft package paths ("/Game/.../BP_Old")
+//   +ObjectRedirects  — UObject paths ("/Game/.../BP_Old.BP_Old")
+//
+// Previously only one of the three was emitted per asset; soft references and
+// FObjectPath-style references therefore broke until the editor restarted with
+// hand-written redirects. Now every BP rename emits all three; non-BP renames
+// emit Package + Object. Existing entries are deduplicated so re-running the
+// bot is idempotent.
 // ─────────────────────────────────────────────────────────────────────────────
 struct FShintRedirectEntry
 {
-	FString Key;     // "+ClassRedirects" or "+PackageRedirects"
-	FString OldName; // /Game/Path/Asset (no .uasset, no _C — added by callers)
+	FString Key;     // "+ClassRedirects" / "+PackageRedirects" / "+ObjectRedirects"
+	FString OldName; // /Game/Path/Asset (caller adds .Asset / _C suffixes per kind)
 	FString NewName;
 };
 
@@ -79,22 +89,28 @@ static int32 WriteShintCoreRedirects(const TArray<FShintRedirectEntry>& Entries)
 	// an array under the Foo key, so we split read by entry kind.
 	TArray<FString> ExistingClass;
 	TArray<FString> ExistingPackage;
+	TArray<FString> ExistingObject;
 	GConfig->GetArray(Section, TEXT("+ClassRedirects"),   ExistingClass,   IniPath);
 	GConfig->GetArray(Section, TEXT("+PackageRedirects"), ExistingPackage, IniPath);
+	GConfig->GetArray(Section, TEXT("+ObjectRedirects"),  ExistingObject,  IniPath);
 
 	int32 Added = 0;
 	for (const FShintRedirectEntry& E : Entries)
 	{
 		const FString Value = FormatCoreRedirectValue(E.OldName, E.NewName);
-		TArray<FString>& Bucket = E.Key.Equals(TEXT("+ClassRedirects"))
-			? ExistingClass : ExistingPackage;
+
+		TArray<FString>* Bucket = nullptr;
+		if      (E.Key.Equals(TEXT("+ClassRedirects")))   Bucket = &ExistingClass;
+		else if (E.Key.Equals(TEXT("+PackageRedirects"))) Bucket = &ExistingPackage;
+		else if (E.Key.Equals(TEXT("+ObjectRedirects")))  Bucket = &ExistingObject;
+		else continue; // unknown redirect kind — skip rather than corrupt the .ini
 
 		// Dedupe by exact textual match — UE normalises whitespace away.
-		const bool bAlreadyPresent = Bucket.ContainsByPredicate(
+		const bool bAlreadyPresent = Bucket->ContainsByPredicate(
 			[&Value](const FString& S) { return S.Equals(Value, ESearchCase::IgnoreCase); });
 		if (!bAlreadyPresent)
 		{
-			Bucket.Add(Value);
+			Bucket->Add(Value);
 			++Added;
 		}
 	}
@@ -103,6 +119,7 @@ static int32 WriteShintCoreRedirects(const TArray<FShintRedirectEntry>& Entries)
 	{
 		GConfig->SetArray(Section, TEXT("+ClassRedirects"),   ExistingClass,   IniPath);
 		GConfig->SetArray(Section, TEXT("+PackageRedirects"), ExistingPackage, IniPath);
+		GConfig->SetArray(Section, TEXT("+ObjectRedirects"),  ExistingObject,  IniPath);
 		GConfig->Flush(/*Read=*/false, IniPath);
 	}
 	return Added;
@@ -1975,27 +1992,51 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 		RenameData.Add(FAssetRenameData(Asset, NewPackagePath, Item->SuggestedName));
 
-		// T2 — record the redirect mapping for DefaultEngine.ini.
-		// Blueprints need +ClassRedirects with the "_C" suffix because UE looks
-		// up the **generated class**, not the package, for parent inheritance.
-		// Everything else gets +PackageRedirects.
+		// ASSET-FIX-2 — record redirect mappings for DefaultEngine.ini.
+		// Three redirect kinds, emitted per asset, because UE5 resolves
+		// references through different paths depending on context:
+		//
+		//   +PackageRedirects (always)  — soft asset paths "/Game/.../OldName"
+		//   +ObjectRedirects  (always)  — UObject paths    "/Game/.../OldName.OldName"
+		//   +ClassRedirects   (BP only) — generated class  "/Game/.../OldName.OldName_C"
+		//
+		// Previously we emitted only one of these per asset, so renames broke
+		// soft references in unloaded packages and child Blueprints whose parent
+		// was renamed (parent class lookup fell through to "Class not found").
 		{
 			const FString OldPackage = Item->AssetPath;                          // /Game/.../OldName
 			const FString NewPackage = NewPackagePath / Item->SuggestedName;     // /Game/.../NewName
-			FShintRedirectEntry RE;
-			if (Asset->IsA<UBlueprint>())
+			const FString OldBase    = FPaths::GetBaseFilename(OldPackage);
+			const FString NewBase    = Item->SuggestedName;
+
+			// 1) Package path — covers FName package references and soft asset paths.
 			{
-				RE.Key     = TEXT("+ClassRedirects");
-				RE.OldName = OldPackage + TEXT(".") + FPaths::GetBaseFilename(OldPackage) + TEXT("_C");
-				RE.NewName = NewPackage + TEXT(".") + Item->SuggestedName        + TEXT("_C");
-			}
-			else
-			{
+				FShintRedirectEntry RE;
 				RE.Key     = TEXT("+PackageRedirects");
 				RE.OldName = OldPackage;
 				RE.NewName = NewPackage;
+				RedirectEntries.Add(MoveTemp(RE));
 			}
-			RedirectEntries.Add(MoveTemp(RE));
+
+			// 2) Object path — covers UObject references stored as Path.Object.
+			{
+				FShintRedirectEntry RE;
+				RE.Key     = TEXT("+ObjectRedirects");
+				RE.OldName = OldPackage + TEXT(".") + OldBase;
+				RE.NewName = NewPackage + TEXT(".") + NewBase;
+				RedirectEntries.Add(MoveTemp(RE));
+			}
+
+			// 3) Generated class (BP only) — covers parent-class lookup on
+			//    child Blueprints inheriting from this BP.
+			if (Asset->IsA<UBlueprint>())
+			{
+				FShintRedirectEntry RE;
+				RE.Key     = TEXT("+ClassRedirects");
+				RE.OldName = OldPackage + TEXT(".") + OldBase + TEXT("_C");
+				RE.NewName = NewPackage + TEXT(".") + NewBase + TEXT("_C");
+				RedirectEntries.Add(MoveTemp(RE));
+			}
 		}
 
 		FShintAssetIssue I;
@@ -2014,6 +2055,70 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 	}
 
 	if (RenameData.IsEmpty()) return FReply::Handled();
+
+	// ASSET-FIX-2 — Pre-rename: gather every BP whose parent class is in this
+	// rename batch. After the parents rename, RenameAssets/FixupReferencers
+	// updates loaded references but leaves the **in-memory generated class
+	// pointer** on each child BP stale (it still resolves to the old class name
+	// via cached UClass*). Re-compiling each child after the rename forces the
+	// kismet compiler to rebuild the parent pointer through the new class path.
+	TSet<UBlueprint*> DescendantBPsToRecompile;
+	{
+		// Build map of OLD generated-class path -> NEW generated-class path,
+		// extracted from the +ClassRedirects entries we just queued.
+		TMap<FString, FString> OldBPClassToNew;
+		for (const FShintRedirectEntry& RE : RedirectEntries)
+		{
+			if (RE.Key.Equals(TEXT("+ClassRedirects")))
+				OldBPClassToNew.Add(RE.OldName, RE.NewName);
+		}
+
+		if (!OldBPClassToNew.IsEmpty())
+		{
+			FARFilter ChildFilter;
+			ChildFilter.ClassPaths.Add(UBlueprint::StaticClass()->GetClassPathName());
+			ChildFilter.bRecursiveClasses = true;
+			ChildFilter.PackagePaths.Add(TEXT("/Game"));
+			ChildFilter.bRecursivePaths = true;
+
+			TArray<FAssetData> AllBPs;
+			AR.GetAssets(ChildFilter, AllBPs);
+
+			for (const FAssetData& BPData : AllBPs)
+			{
+				FString ParentClassPath;
+				if (!BPData.GetTagValue(FBlueprintTags::ParentClassPath, ParentClassPath))
+					continue;
+
+				// The tag is stored either bare ("/Game/Foo.Foo_C") or wrapped
+				// ("/Script/Engine.Class'/Game/Foo.Foo_C'"); strip the wrapper.
+				if (ParentClassPath.Contains(TEXT("'")))
+				{
+					int32 First = INDEX_NONE, Last = INDEX_NONE;
+					ParentClassPath.FindChar(TEXT('\''), First);
+					Last = ParentClassPath.Find(TEXT("'"),
+						ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+					if (First != INDEX_NONE && Last != INDEX_NONE && Last > First)
+						ParentClassPath = ParentClassPath.Mid(First + 1, Last - First - 1);
+				}
+
+				if (OldBPClassToNew.Contains(ParentClassPath))
+				{
+					// GetAsset() forces a synchronous load — required so the
+					// child is in memory when we recompile it after the rename.
+					if (UBlueprint* Child = Cast<UBlueprint>(BPData.GetAsset()))
+						DescendantBPsToRecompile.Add(Child);
+				}
+			}
+
+			if (!DescendantBPsToRecompile.IsEmpty())
+			{
+				UE_LOG(LogShintTools, Log,
+					TEXT("ShintPanel: %d descendant BP(s) queued for recompile after parent rename"),
+					DescendantBPsToRecompile.Num());
+			}
+		}
+	}
 
 	AssetTools.RenameAssets(RenameData);
 
@@ -2054,9 +2159,45 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 		if (Added > 0)
 		{
 			UE_LOG(LogShintTools, Log,
-				TEXT("ShintPanel: wrote %d new entr(ies) to [CoreRedirects] in DefaultEngine.ini "
-				     "(restart editor for child Blueprint parents to resolve)."),
+				TEXT("ShintPanel: wrote %d new entr(ies) to [CoreRedirects] in DefaultEngine.ini"),
 				Added);
+		}
+	}
+
+	// ASSET-FIX-2 — Recompile every descendant BP we collected before the rename.
+	// Without this, child BPs still resolve their ParentClass through the old
+	// in-memory pointer and report "Class not found" the next time they're
+	// loaded by name (which the user perceives as "the bot broke my parents").
+	if (!DescendantBPsToRecompile.IsEmpty())
+	{
+		int32 Recompiled = 0;
+		for (UBlueprint* Child : DescendantBPsToRecompile)
+		{
+			if (!IsValid(Child)) continue;
+			FKismetEditorUtilities::CompileBlueprint(Child);
+			++Recompiled;
+		}
+		UE_LOG(LogShintTools, Log,
+			TEXT("ShintPanel: recompiled %d descendant BP(s) after parent rename"),
+			Recompiled);
+	}
+
+	// ASSET-FIX-2 — Save renamed packages + their referencers so the rename
+	// (and the .uasset redirector left behind) survives an editor close. With
+	// the redirectors un-saved, closing the editor without saving silently
+	// reverts the rename and the user reports "broken references".
+	{
+		TArray<UPackage*> DirtyPackages;
+		FEditorFileUtils::GetDirtyContentPackages(DirtyPackages);
+		if (!DirtyPackages.IsEmpty())
+		{
+			const bool bSaved = FEditorFileUtils::PromptForCheckoutAndSave(
+				DirtyPackages,
+				/*bCheckDirty=*/true,
+				/*bPromptToSave=*/false) == FEditorFileUtils::EPromptReturnCode::PR_Success;
+			UE_LOG(LogShintTools, Log,
+				TEXT("ShintPanel: auto-saved %d dirty package(s) post-rename (success=%d)"),
+				DirtyPackages.Num(), bSaved ? 1 : 0);
 		}
 	}
 
