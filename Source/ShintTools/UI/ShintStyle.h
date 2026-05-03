@@ -30,6 +30,8 @@
 
 #include "CoreMinimal.h"
 #include "Math/Color.h"
+#include "Misc/Paths.h"
+#include "HAL/FileManager.h"
 #include "Styling/CoreStyle.h"
 #include "Fonts/SlateFontInfo.h"
 
@@ -119,29 +121,56 @@ public:
 	};
 
 	// ── Typography ───────────────────────────────────────────────────────────
-	// Bahnschrift on Windows; fallback to UE's bundled Sans elsewhere. The
-	// font name is the only thing FSlateFontInfo cares about for system fonts.
+	// Bahnschrift on Windows; fallback to UE's bundled Roboto elsewhere. The
+	// font is loaded once from C:/Windows/Fonts/bahnschrift.ttf if present —
+	// it ships with every Windows 10+ system, which is the only platform UE5
+	// editor targets, so the fallback path is for unusual cases (server-class
+	// Win Server SKUs without the Fonts folder, custom UE engine builds with
+	// stripped resources).
+	//
+	// Bahnschrift is technically a variable font; FreeType (Slate's backend)
+	// reads it as the regular axis. For "Bold" we re-use the regular face at
+	// the same size — Slate's text shaper does synthetic emboldening when the
+	// font asset itself doesn't expose a Bold typeface, which is acceptable
+	// for our header sizes (16px+ remains crisp).
 	struct Fonts
 	{
-		// 24px / Bold — section headers, KPI value
-		static FSlateFontInfo H1()      { return Make(TEXT("Bold"),    24); }
-		// 16px / Bold — card titles
-		static FSlateFontInfo H2()      { return Make(TEXT("Bold"),    16); }
-		// 14px / Regular — list-row primary text
-		static FSlateFontInfo Body()    { return Make(TEXT("Regular"), 14); }
-		// 12px / Regular — labels, secondary text
-		static FSlateFontInfo Small()   { return Make(TEXT("Regular"), 12); }
-		// 10px / Regular — captions, badges, footnotes
-		static FSlateFontInfo Caption() { return Make(TEXT("Regular"), 10); }
+		// 24px — section headers, KPI value
+		static FSlateFontInfo H1()      { return Make(24); }
+		// 16px — card titles
+		static FSlateFontInfo H2()      { return Make(16); }
+		// 14px — list-row primary text
+		static FSlateFontInfo Body()    { return Make(14); }
+		// 12px — labels, secondary text
+		static FSlateFontInfo Small()   { return Make(12); }
+		// 10px — captions, badges, footnotes
+		static FSlateFontInfo Caption() { return Make(10); }
 
 	private:
-		// FCoreStyle::GetDefaultFontStyle resolves Engine/Content/Slate/Fonts/
-		// Roboto-{Style}.ttf — guaranteed to exist on every platform.
-		// Bahnschrift can be layered later via FSlateFontInfo(FontFile, ...)
-		// once the .ttf ships in Resources/Fonts/.
-		static FSlateFontInfo Make(const TCHAR* Style, int32 Size)
+		// Resolve Bahnschrift path lazily, once. Returning the cached path lets
+		// every Make() call avoid an FFileManager check after the first hit.
+		static const FString& BahnschriftPath()
 		{
-			return FCoreStyle::GetDefaultFontStyle(Style, Size);
+			static const FString Cached = []()
+			{
+				const FString Path = TEXT("C:/Windows/Fonts/bahnschrift.ttf");
+				return FPaths::FileExists(Path) ? Path : FString();
+			}();
+			return Cached;
+		}
+
+		static FSlateFontInfo Make(int32 Size)
+		{
+			const FString& Path = BahnschriftPath();
+			if (!Path.IsEmpty())
+			{
+				// FSlateFontInfo built from a TTF path is supported by Slate's
+				// FreeType backend without registering a composite font asset.
+				return FSlateFontInfo(Path, Size);
+			}
+			// Fallback — Engine/Content/Slate/Fonts/Roboto-Regular.ttf is
+			// guaranteed to exist on every UE5 install.
+			return FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), Size);
 		}
 	};
 };

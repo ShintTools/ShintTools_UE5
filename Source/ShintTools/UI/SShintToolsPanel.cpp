@@ -9,6 +9,8 @@
 #include "ShintStyle.h"
 #include "SShintCard.h"
 #include "SShintSeverityBadge.h"
+#include "SShintKpiTile.h"
+#include "SShintEmptyState.h"
 
 // Slate windows / dialogs
 #include "Widgets/SWindow.h"
@@ -236,16 +238,22 @@ TSharedRef<SWidget> SShintToolsPanel::Divider()
 
 TSharedRef<SWidget> SShintToolsPanel::BuildSectionTitle(const FText& Title, const FText& Subtitle)
 {
+	// UI-REDESIGN — uses ShintStyle tokens so all section headings render with
+	// the same Bahnschrift typography + spacing as the rest of the dashboard.
+	// Title sits on the H2 scale (16px), subtitle on Caption (10px) with the
+	// muted text color.
 	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 3.f)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S1)
 		[
-			SNew(STextBlock).Text(Title).Font(F_H2())
-			.ColorAndOpacity(FSlateColor(C_White()))
+			SNew(STextBlock).Text(Title)
+			.Font(FShintStyle::Fonts::H2())
+			.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
 		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 16.f)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S4)
 		[
-			SNew(STextBlock).Text(Subtitle).Font(F_Label())
-			.ColorAndOpacity(FSlateColor(C_Gray()))
+			SNew(STextBlock).Text(Subtitle)
+			.Font(FShintStyle::Fonts::Caption())
+			.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
 		];
 }
 
@@ -479,21 +487,41 @@ TSharedRef<SWidget> SShintToolsPanel::BuildStatusBar()
 // Stat badge
 // ─────────────────────────────────────────────────────────────────────────────
 
+// UI-REDESIGN — KPI badge for the metrics row at the top of the Code Validator
+// section. Wrapped in SShintCard so the metrics read as discrete dashboard
+// tiles instead of free-floating numbers, with caption above and the big value
+// below (matches launcher KPI layout).
+//
+// `OutLabel` is captured into a STextBlock that callers continue to update via
+// `OutLabel->SetText("123")` — the surrounding visuals change without breaking
+// the existing controller code that mutates the badge content on scan results.
 static TSharedRef<SWidget> StatBadge(
 	TSharedPtr<STextBlock>& OutLabel, const FText& Caption, const FLinearColor& Clr)
 {
-	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
+	SAssignNew(OutLabel, STextBlock)
+		.Text(FText::FromString(TEXT("—")))
+		.Font(FShintStyle::Fonts::H1())
+		.ColorAndOpacity(FSlateColor(Clr));
+
+	return SNew(SShintCard)
+		.bShowHeader(false)
+		.ContentPadding(FShintStyle::Space::S3)
 		[
-			SAssignNew(OutLabel, STextBlock)
-			.Text(FText::FromString(TEXT("—")))
-			.Font(SShintToolsPanel::F_StatNum())
-			.ColorAndOpacity(FSlateColor(Clr))
-		]
-		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.f,3.f,0.f,0.f)
-		[
-			SNew(STextBlock).Text(Caption).Font(SShintToolsPanel::F_StatCap())
-			.ColorAndOpacity(FSlateColor(SShintToolsPanel::C_DimGray()))
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(FMargin(0.f, 0.f, 0.f, FShintStyle::Space::S1))
+			[
+				SNew(STextBlock)
+				.Text(Caption)
+				.Font(FShintStyle::Fonts::Caption())
+				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
+			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			[
+				OutLabel.ToSharedRef()
+			]
 		];
 }
 
@@ -516,19 +544,21 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 					LOCTEXT("CVSub","Analyse C++ source and Blueprints · review issues · apply fixes · send to dashboard"))
 			]
 
-			// Stats
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,4.f)
+			// Stats — 4-up KPI grid. Each tile is a SShintCard so metrics read
+			// as discrete dashboard surfaces. Slot HAlign is Fill + horizontal
+			// padding for inter-tile gutters; FillWidth(1.f) gives equal width.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,FShintStyle::Space::S2)
 			[
 				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
-				[ StatBadge(CodeFiles_Label,    LOCTEXT("CVF","FILES"),    C_Blue())   ]
-				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
-				[ StatBadge(CodeErrors_Label,   LOCTEXT("CVE","ERRORS"),   C_Red())    ]
-				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
-				[ StatBadge(CodeWarnings_Label, LOCTEXT("CVW","WARNINGS"), C_Yellow()) ]
-				// Slice B — Quality Score overall badge
-				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
-				[ StatBadge(CodeScore_Label,    LOCTEXT("CVQ","QUALITY"),  C_Green())  ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(0.f, 0.f, FShintStyle::Space::S2 * 0.5f, 0.f))
+				[ StatBadge(CodeFiles_Label,    LOCTEXT("CVF","FILES"),    FShintStyle::Colors::TextPrimary())  ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(FShintStyle::Space::S2 * 0.5f, 0.f, FShintStyle::Space::S2 * 0.5f, 0.f))
+				[ StatBadge(CodeErrors_Label,   LOCTEXT("CVE","ERRORS"),   FShintStyle::Colors::SevCritical())  ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(FShintStyle::Space::S2 * 0.5f, 0.f, FShintStyle::Space::S2 * 0.5f, 0.f))
+				[ StatBadge(CodeWarnings_Label, LOCTEXT("CVW","WARNINGS"), FShintStyle::Colors::SevHigh())      ]
+				// Slice B — Quality Score overall tile
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(FShintStyle::Space::S2 * 0.5f, 0.f, 0.f, 0.f))
+				[ StatBadge(CodeScore_Label,    LOCTEXT("CVQ","QUALITY"),  FShintStyle::Colors::SevLow())       ]
 			]
 			// Slice B — sub-score breakdown line (perf / sec / bp / maint / naming)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,16.f).HAlign(HAlign_Center)
@@ -1196,16 +1226,16 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 					LOCTEXT("ANBSub","Scan entire project · detect invalid names · apply UE5 rename (refs preserved) · send to dashboard"))
 			]
 
-			// Stats
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,16.f)
+			// Stats — 3-up KPI grid (asset count / invalid / scan time).
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,FShintStyle::Space::S4)
 			[
 				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
-				[ StatBadge(AssetTotal_Label,   LOCTEXT("ANBT","ASSETS"),   C_Blue())   ]
-				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
-				[ StatBadge(AssetInvalid_Label, LOCTEXT("ANBI","INVALID"),  C_Red())    ]
-				+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Center)
-				[ StatBadge(AssetTime_Label,    LOCTEXT("ANBMS","TIME (s)"), C_Gray()) ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(0.f, 0.f, FShintStyle::Space::S2 * 0.5f, 0.f))
+				[ StatBadge(AssetTotal_Label,   LOCTEXT("ANBT","ASSETS"),   FShintStyle::Colors::TextPrimary()) ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(FShintStyle::Space::S2 * 0.5f, 0.f, FShintStyle::Space::S2 * 0.5f, 0.f))
+				[ StatBadge(AssetInvalid_Label, LOCTEXT("ANBI","INVALID"),  FShintStyle::Colors::SevCritical()) ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(FShintStyle::Space::S2 * 0.5f, 0.f, 0.f, 0.f))
+				[ StatBadge(AssetTime_Label,    LOCTEXT("ANBMS","TIME (s)"), FShintStyle::Colors::TextMuted()) ]
 			]
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,14.f)
