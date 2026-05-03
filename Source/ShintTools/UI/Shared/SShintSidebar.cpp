@@ -56,16 +56,16 @@ void SShintSidebar::Construct(const FArguments& InArgs)
 
 	// Nav buttons
 	Stack->AddSlot().AutoHeight()
-		[ BuildNavButton(EShintDestination::Overview, NSLOCTEXT("Sidebar","Overview","Overview"), TEXT("▢")) ]; // ▢
+		[ BuildNavButton(EShintDestination::Overview, NSLOCTEXT("Sidebar","Overview","Overview"), TEXT("Icons.Info")) ];
 	Stack->AddSlot().AutoHeight()
-		[ BuildNavButton(EShintDestination::Code,     NSLOCTEXT("Sidebar","Code",    "Code"),     TEXT("◧")) ]; // ◧
+		[ BuildNavButton(EShintDestination::Code,     NSLOCTEXT("Sidebar","Code",    "Code"),     TEXT("Icons.Edit")) ]; 
 	Stack->AddSlot().AutoHeight()
-		[ BuildNavButton(EShintDestination::Assets,   NSLOCTEXT("Sidebar","Assets",  "Assets"),   TEXT("◇")) ]; // ◇
+		[ BuildNavButton(EShintDestination::Assets,   NSLOCTEXT("Sidebar","Assets",  "Assets"),   TEXT("Icons.FolderOpen")) ];
 	Stack->AddSlot()
 		.FillHeight(1.f)
 		[ SNew(SSpacer) ];
 	Stack->AddSlot().AutoHeight()
-		[ BuildNavButton(EShintDestination::Settings, NSLOCTEXT("Sidebar","Settings","Settings"), TEXT("⚙")) ]; // ⚙
+		[ BuildNavButton(EShintDestination::Settings, NSLOCTEXT("Sidebar","Settings","Settings"), TEXT("Icons.Settings")) ];
 
 	ChildSlot
 	[
@@ -83,7 +83,7 @@ void SShintSidebar::Construct(const FArguments& InArgs)
 }
 
 TSharedRef<SWidget> SShintSidebar::BuildNavButton(
-	EShintDestination Dest, const FText& Label, const FString& Glyph)
+	EShintDestination Dest, const FText& Label, const FName& Icon)
 {
 	// Visibility of the active-state highlight strip — bound so it updates
 	// instantly when the parent flips destinations.
@@ -123,9 +123,8 @@ TSharedRef<SWidget> SShintSidebar::BuildNavButton(
 				.VAlign(VAlign_Center)
 				.Padding(FMargin(0.f, 0.f, FShintStyle::Space::S3, 0.f))
 				[
-					SNew(STextBlock)
-					.Text(FText::FromString(Glyph))
-					.Font(FShintStyle::Fonts::Body())
+					SNew(SImage)
+					.Image(FAppStyle::Get().GetBrush(Icon))
 					.ColorAndOpacity_Lambda(LabelColor)
 				]
 				+ SHorizontalBox::Slot()

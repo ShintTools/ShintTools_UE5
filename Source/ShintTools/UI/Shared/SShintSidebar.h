@@ -61,5 +61,5 @@ private:
 
 	/** Build a single nav button bound to the given destination. */
 	TSharedRef<SWidget> BuildNavButton(
-		EShintDestination Dest, const FText& Label, const FString& Glyph);
+		EShintDestination Dest, const FText& Label, const FName& Icon);
 };
