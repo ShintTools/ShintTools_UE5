@@ -5,6 +5,11 @@
 #include "ShintCoreClient.h"
 #include "CoreProcessManager.h"
 
+// Shared design-system widgets (UI redesign foundation)
+#include "ShintStyle.h"
+#include "SShintCard.h"
+#include "SShintSeverityBadge.h"
+
 // Slate windows / dialogs
 #include "Widgets/SWindow.h"
 #include "Framework/Application/SlateApplication.h"
@@ -1059,16 +1064,19 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 				[
 					SNew(SVerticalBox)
 
-					// Row 1: severity ● + rule_id + location + preview toggle + AUTO badge
+					// Row 1: severity pill + rule_id + location + preview toggle + AUTO badge
+					// (UI-REDESIGN — the ● dot was replaced by SShintSeverityBadge so
+					//  the severity name is rendered alongside the color, mirroring the
+					//  launcher/web-dashboard look. SevColor stays in scope so older
+					//  call-sites still compile until they migrate.)
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,4.f)
 					[
 						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,5.f,0.f)
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f,0.f,8.f,0.f)
 						[
-							SNew(STextBlock).Text(FText::FromString(TEXT("●"))).Font(F_Small())
-							.ColorAndOpacity(FSlateColor(SevColor))
+							SNew(SShintSeverityBadge).Severity(Item->Severity)
 						]
-						+ SHorizontalBox::Slot().AutoWidth().Padding(0.f,0.f,10.f,0.f)
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f,0.f,10.f,0.f)
 						[
 							SNew(STextBlock).Text(FText::FromString(Item->RuleId)).Font(F_RuleId())
 							.ColorAndOpacity(FSlateColor(C_White()))

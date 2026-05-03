@@ -12,6 +12,7 @@ public class ShintTools : ModuleRules
 		{
 			"ShintTools/Core",
 			"ShintTools/UI",
+			"ShintTools/UI/Shared",
 			"ShintTools/Utils",
 		});
 
