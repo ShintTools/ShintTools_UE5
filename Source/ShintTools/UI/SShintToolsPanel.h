@@ -127,14 +127,13 @@ public:
 
 	// ── Fonts ────────────────────────────────────────────────────────────────
 	static FSlateFontInfo F_Title()   { return FCoreStyle::GetDefaultFontStyle("Bold",    18); }
-	static FSlateFontInfo F_H2()      { return FCoreStyle::GetDefaultFontStyle("Bold",    13); }
 	static FSlateFontInfo F_Body()    { return FCoreStyle::GetDefaultFontStyle("Regular", 12); }
 	static FSlateFontInfo F_Small()   { return FCoreStyle::GetDefaultFontStyle("Regular", 11); }
 	static FSlateFontInfo F_Label()   { return FCoreStyle::GetDefaultFontStyle("Regular", 10); }
 	static FSlateFontInfo F_Mono()    { return FCoreStyle::GetDefaultFontStyle("Mono",    10); }
-	static FSlateFontInfo F_RuleId()  { return FCoreStyle::GetDefaultFontStyle("Bold",    11); }
-	static FSlateFontInfo F_StatNum() { return FCoreStyle::GetDefaultFontStyle("Bold",    24); }
-	static FSlateFontInfo F_StatCap() { return FCoreStyle::GetDefaultFontStyle("Regular", 10); }
+	// CLEANUP — F_StatNum / F_StatCap removed (0 callers after v1.2.14 KPI
+	// rewrite). F_RuleId / F_H2 also dropped — single callers migrated to
+	// FShintStyle::Fonts::Small() / H2() in the .cpp.
 
 private:
 	// ── Widget builders ───────────────────────────────────────────────────────

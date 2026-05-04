@@ -1230,7 +1230,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 						]
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f,0.f,10.f,0.f)
 						[
-							SNew(STextBlock).Text(FText::FromString(Item->RuleId)).Font(F_RuleId())
+							SNew(STextBlock).Text(FText::FromString(Item->RuleId)).Font(FShintStyle::Fonts::Small())
 							.ColorAndOpacity(FSlateColor(C_White()))
 						]
 						+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
@@ -1874,7 +1874,7 @@ void SShintToolsPanel::ShowSafetyWarningDialog(const FShintSafetyCheckResult& Re
 			[
 				SNew(STextBlock)
 				.Text(NSLOCTEXT("ShintTools", "SafetyHeader", "These fixes may affect your code"))
-				.Font(F_H2())
+				.Font(FShintStyle::Fonts::H2())
 				.ColorAndOpacity(C_Yellow())
 			]
 			// Warning list
