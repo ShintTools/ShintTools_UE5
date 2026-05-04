@@ -908,11 +908,9 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 				.Font(FShintStyle::Fonts::Caption())
 				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
 			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
-			[
-				SNew(STextBlock).Text(FText::FromString(TEXT("▾"))) // ▾ unicode chevron
-				.Font(FShintStyle::Fonts::Caption()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
-			]
+			// SComboButton already renders Unreal's native dropdown arrow icon;
+			// the manual unicode ▾ glyph rendered as a missing-glyph box on
+			// Bahnschrift's variable axis. Removed in favor of the engine icon.
 		];
 
 	// Severity dropdown
@@ -931,11 +929,9 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 				.Font(FShintStyle::Fonts::Caption())
 				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
 			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
-			[
-				SNew(STextBlock).Text(FText::FromString(TEXT("▾"))) // ▾ unicode chevron
-				.Font(FShintStyle::Fonts::Caption()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
-			]
+			// SComboButton already renders Unreal's native dropdown arrow icon;
+			// the manual unicode ▾ glyph rendered as a missing-glyph box on
+			// Bahnschrift's variable axis. Removed in favor of the engine icon.
 		];
 
 	// Code type dropdown (C++ / Blueprints / All)
@@ -954,11 +950,9 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 				.Font(FShintStyle::Fonts::Caption())
 				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
 			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
-			[
-				SNew(STextBlock).Text(FText::FromString(TEXT("▾"))) // ▾ unicode chevron
-				.Font(FShintStyle::Fonts::Caption()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
-			]
+			// SComboButton already renders Unreal's native dropdown arrow icon;
+			// the manual unicode ▾ glyph rendered as a missing-glyph box on
+			// Bahnschrift's variable axis. Removed in favor of the engine icon.
 		];
 
 	// Fixable toggle
@@ -1409,11 +1403,9 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 				.Font(FShintStyle::Fonts::Caption())
 				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
 			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
-			[
-				SNew(STextBlock).Text(FText::FromString(TEXT("▾"))) // ▾ unicode chevron
-				.Font(FShintStyle::Fonts::Caption()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
-			]
+			// SComboButton already renders Unreal's native dropdown arrow icon;
+			// the manual unicode ▾ glyph rendered as a missing-glyph box on
+			// Bahnschrift's variable axis. Removed in favor of the engine icon.
 		];
 
 	TSharedRef<SWidget> ListArea =
