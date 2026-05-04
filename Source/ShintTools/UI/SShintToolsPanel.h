@@ -138,6 +138,7 @@ public:
 private:
 	// ── Widget builders ───────────────────────────────────────────────────────
 	TSharedRef<SWidget> BuildHeader();
+	TSharedRef<SWidget> BuildOverviewHero();   // step 8 — KPI hero for Overview destination
 	TSharedRef<SWidget> BuildConfigSection();
 	TSharedRef<SWidget> BuildStatusBar();
 	TSharedRef<SWidget> BuildCodeValidatorSection();
