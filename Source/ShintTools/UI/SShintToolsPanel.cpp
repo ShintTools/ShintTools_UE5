@@ -1079,6 +1079,24 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 					.Font(F_Small()).ColorAndOpacity(FSlateColor(FLinearColor(0.55f, 0.42f, 0.95f)))
 				]
 			]
+			// Sprint C / Fase 4 — Agent Review (SSE). Calls into the stub
+			// RequestAgentReview which short-circuits with a "Coming soon"
+			// toast until the core ships /agent/review. Wiring the button
+			// now means zero panel changes when the endpoint lands.
+			+ SWrapBox::Slot()
+			[
+				SNew(SButton)
+				.ContentPadding(FMargin(14.f,7.f))
+				.ToolTipText(LOCTEXT("AgentReviewTip",
+					"Stream the LLM agent's reasoning over the current scan results. "
+					"Requires Sprint C (Fase 4) on the core engine."))
+				.OnClicked(this, &SShintToolsPanel::OnAgentReviewClicked)
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("AgentReview","🧠  Agent Review"))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(FLinearColor(0.40f, 0.75f, 0.95f)))
+				]
+			]
 		];
 
 	return SNew(SVerticalBox)
@@ -3200,6 +3218,36 @@ TOptional<float> SShintToolsPanel::GetAssetProgress() const
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Sprint C — Agent Review (SSE) — Fase 4 stub
+// ─────────────────────────────────────────────────────────────────────────────
+
+FReply SShintToolsPanel::OnAgentReviewClicked()
+{
+	// Mirror the Auto-Fix Plan precondition: nothing to review without scan
+	// data. Saves a network call when the user clicks blindly.
+	if (LastCodeResult.Issues.IsEmpty())
+	{
+		ShintShowErrorToast(
+			TEXT("Agent Review"),
+			TEXT("Run a code scan first — the agent needs issues to reason over."));
+		return FReply::Handled();
+	}
+
+	// Empty event handler for now: the stub never emits per-event callbacks.
+	// When Genesis's Fase 4 lands, this lambda will receive thinking /
+	// tool_call / tool_result events and the panel can surface them in a
+	// streaming text widget.
+	FOnShintAgentReviewEvent OnEvent =
+		FOnShintAgentReviewEvent::CreateLambda([](const FShintAgentReviewEvent& /*Ev*/) {});
+
+	FOnShintAgentReviewComplete OnDone =
+		FOnShintAgentReviewComplete::CreateSP(this, &SShintToolsPanel::OnAgentReviewComplete);
+
+	CoreClient->RequestAgentReview(LastCodeResult, OnEvent, OnDone);
+	return FReply::Handled();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Agent — Auto-Fix Plan
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -3217,6 +3265,32 @@ FReply SShintToolsPanel::OnAutoFixPlanClicked()
 		LastCodeResult,
 		FOnShintAgentPlanComplete::CreateSP(this, &SShintToolsPanel::OnAgentPlanComplete));
 	return FReply::Handled();
+}
+
+void SShintToolsPanel::OnAgentReviewComplete(const FShintAgentReviewResult& Result)
+{
+	// Stub callback — until Genesis's Fase 4 ships /agent/review, the core
+	// client returns bSuccess=false with an informational ErrorMessage. Show
+	// it as a neutral toast instead of the red Fail toast we'd use for a
+	// real backend error.
+	if (!Result.bSuccess)
+	{
+		FNotificationInfo Info(FText::FromString(TEXT("Agent Review")));
+		Info.SubText = FText::FromString(Result.ErrorMessage);
+		Info.ExpireDuration = 8.0f;
+		Info.bUseLargeFont  = false;
+		FSlateNotificationManager::Get().AddNotification(Info);
+		return;
+	}
+
+	// Future path (post-Fase-4) — Result.FinalAnswer holds the agent's
+	// concluding text. Surface it in a modal similar to the Auto-Fix Plan
+	// dialog. For now the success branch is unreachable but we keep it so
+	// merging Genesis's endpoint requires zero changes here.
+	FNotificationInfo Info(FText::FromString(TEXT("Agent Review · Final Answer")));
+	Info.SubText = FText::FromString(Result.FinalAnswer);
+	Info.ExpireDuration = 12.0f;
+	FSlateNotificationManager::Get().AddNotification(Info);
 }
 
 void SShintToolsPanel::OnAgentPlanComplete(const FShintAgentPlanResult& Result)

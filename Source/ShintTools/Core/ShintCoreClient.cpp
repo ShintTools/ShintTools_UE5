@@ -2108,6 +2108,36 @@ FString FShintCoreClient::SerializeJson(const TSharedRef<FJsonObject>& Obj)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Sprint C / Fase 4 — POST /agent/review (SSE) — stub
+//
+// Endpoint not yet merged to core/main. We short-circuit so the panel can
+// wire the UI today; the body is replaced when Genesis ships Fase 4.
+// ─────────────────────────────────────────────────────────────────────────────
+
+void FShintCoreClient::RequestAgentReview(
+	const FShintValidateResult& /*Source*/,
+	FOnShintAgentReviewEvent    /*OnEvent*/,
+	FOnShintAgentReviewComplete OnDone)
+{
+	// Mark unused parameters explicitly — gcc/clang -Wunused-parameter.
+	// We keep them in the API so the call-site doesn't change post-merge.
+	UE_LOG(LogShintTools, Log,
+		TEXT("RequestAgentReview: stub path — endpoint /agent/review not yet "
+		     "available in this core build. Awaiting Sprint C Fase 4 merge."));
+
+	FShintAgentReviewResult R;
+	R.bSuccess     = false;
+	R.ErrorMessage = TEXT(
+		"Agent Review (SSE) is not yet available in the connected core. "
+		"This feature ships with Sprint C Fase 4 — once your core engine is "
+		"upgraded, this button will stream the agent's reasoning live. "
+		"Auto-Fix Plan (/agent/plan) continues to work normally.");
+
+	if (OnDone.IsBound())
+		OnDone.Execute(R);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Agent — Auto-Fix Plan
 // ─────────────────────────────────────────────────────────────────────────────
 

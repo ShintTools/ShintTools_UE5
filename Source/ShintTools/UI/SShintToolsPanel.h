@@ -166,7 +166,9 @@ private:
 	FReply OnApplySelectedCodeFixesClicked();
 	FReply OnSendCodeToDashboardClicked();
 	FReply OnAutoFixPlanClicked();
+	FReply OnAgentReviewClicked();   // Sprint C / Fase 4 stub
 	void   OnAgentPlanComplete(const FShintAgentPlanResult& Result);
+	void   OnAgentReviewComplete(const FShintAgentReviewResult& Result);  // Sprint C stub
 	void   ShowAgentPlanDialog(const FShintAgentPlanResult& Result);
 	FReply OnScanAssetsClicked();
 	FReply OnApplySingleFix(FShintIssueItemPtr Item);

@@ -241,6 +241,47 @@ DECLARE_DELEGATE_OneParam(FOnShintAgentPlanComplete, const FShintAgentPlanResult
 
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Sprint C — POST /agent/review (SSE streaming, Indie tier)
+//
+// The endpoint isn't merged to core/main yet (lives in Genesis's `develop`
+// branch). This block stays in the public API as a forward-compatible
+// contract so the panel can wire its UI before the core lands. The plugin
+// invokes RequestAgentReview() and gets typed callbacks for each SSE event
+// kind — thinking tokens, tool calls, tool results, final answer.
+//
+// Until the endpoint exists in the deployed core, the implementation
+// short-circuits: it reports a "not available" event via OnDone with
+// bSuccess=false and a hint pointing the user at the next core release.
+// When Genesis merges Fase 4, only the .cpp body changes; the plugin UI is
+// untouched.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One SSE event from /agent/review. Mirrors the documented event kinds:
+ *  - "thinking"     → LLM tokens streamed mid-reasoning
+ *  - "tool_call"    → "I will call analyze_cpp_source(…)"
+ *  - "tool_result"  → result of the tool invocation
+ *  - "done"         → final answer (also emitted on graceful failures)
+ */
+struct FShintAgentReviewEvent
+{
+	FString Kind;        // see comment above
+	FString Payload;     // raw text for "thinking" / "done"; JSON for tools
+	FString ToolName;    // populated when Kind == "tool_call" / "tool_result"
+};
+
+struct FShintAgentReviewResult
+{
+	bool    bSuccess = false;
+	FString ErrorMessage;
+	FString Tier;          // "free" → 403, "indie" → ok
+	FString FinalAnswer;   // == last "done" event payload when bSuccess
+};
+
+DECLARE_DELEGATE_OneParam(FOnShintAgentReviewEvent,    const FShintAgentReviewEvent&);
+DECLARE_DELEGATE_OneParam(FOnShintAgentReviewComplete, const FShintAgentReviewResult&);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Local dashboard report (legacy — keeps local MongoDB sync)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -386,6 +427,21 @@ public:
 	 */
 	void RequestAgentPlan(const FShintValidateResult& Source,
 	                      FOnShintAgentPlanComplete OnComplete);
+
+	/** Sprint C / Fase 4 stub — POST /agent/review (SSE).
+	 *
+	 *  When Genesis merges the SSE endpoint to core/main, this routes through
+	 *  HTTP to /agent/review and demultiplexes the stream into typed events.
+	 *  Until then, the implementation immediately invokes OnDone with
+	 *  bSuccess=false and an informational ErrorMessage so the panel can show
+	 *  a "Coming in next core release" toast without a network round-trip.
+	 *
+	 *  OnEvent fires per SSE message (thinking / tool_call / tool_result).
+	 *  OnDone fires once when the agent finishes, errors out, or falls back.
+	 */
+	void RequestAgentReview(const FShintValidateResult& Source,
+	                        FOnShintAgentReviewEvent    OnEvent,
+	                        FOnShintAgentReviewComplete OnDone);
 
 	// ── Generic ───────────────────────────────────────────────────────────────
 	void SendRequest(const FString& FullUrl, EShintHttpMethod Method,
