@@ -907,13 +907,13 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			[
 				SAssignNew(CategoryFilterLabel, STextBlock)
 				.Text(LOCTEXT("CatAll","All Categories"))
-				.Font(F_Label())
-				.ColorAndOpacity(FSlateColor(C_Gray()))
+				.Font(FShintStyle::Fonts::Caption())
+				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
 			[
-				SNew(STextBlock).Text(FText::FromString(TEXT("v")))
-				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
+				SNew(STextBlock).Text(FText::FromString(TEXT("▾"))) // ▾ unicode chevron
+				.Font(FShintStyle::Fonts::Caption()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
 			]
 		];
 
@@ -930,13 +930,13 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			[
 				SAssignNew(SeverityFilterLabel, STextBlock)
 				.Text(LOCTEXT("SevAll","All Severities"))
-				.Font(F_Label())
-				.ColorAndOpacity(FSlateColor(C_Gray()))
+				.Font(FShintStyle::Fonts::Caption())
+				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
 			[
-				SNew(STextBlock).Text(FText::FromString(TEXT("v")))
-				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
+				SNew(STextBlock).Text(FText::FromString(TEXT("▾"))) // ▾ unicode chevron
+				.Font(FShintStyle::Fonts::Caption()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
 			]
 		];
 
@@ -953,13 +953,13 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			[
 				SAssignNew(CodeTypeFilterLabel, STextBlock)
 				.Text(LOCTEXT("CodeTypeAll","All Types"))
-				.Font(F_Label())
-				.ColorAndOpacity(FSlateColor(C_Gray()))
+				.Font(FShintStyle::Fonts::Caption())
+				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
 			[
-				SNew(STextBlock).Text(FText::FromString(TEXT("v")))
-				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
+				SNew(STextBlock).Text(FText::FromString(TEXT("▾"))) // ▾ unicode chevron
+				.Font(FShintStyle::Fonts::Caption()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
 			]
 		];
 
@@ -1408,13 +1408,13 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 			[
 				SAssignNew(AssetTypeFilterLabel, STextBlock)
 				.Text(LOCTEXT("ATAll","All Types"))
-				.Font(F_Label())
-				.ColorAndOpacity(FSlateColor(C_Gray()))
+				.Font(FShintStyle::Fonts::Caption())
+				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.f,0.f,0.f,0.f)
 			[
-				SNew(STextBlock).Text(FText::FromString(TEXT("v")))
-				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
+				SNew(STextBlock).Text(FText::FromString(TEXT("▾"))) // ▾ unicode chevron
+				.Font(FShintStyle::Fonts::Caption()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
 			]
 		];
 
