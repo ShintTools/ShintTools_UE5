@@ -6,6 +6,7 @@
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
+#include "Misc/EngineVersionComparison.h" // UE_VERSION_OLDER_THAN — gates SSE progress API
 #include "GenericPlatform/GenericPlatformHttp.h"  // FGenericPlatformHttp::UrlEncode
 
 #include "Misc/FileHelper.h"
@@ -2275,20 +2276,31 @@ void FShintCoreClient::RequestAgentReview(
 	Req->SetTimeout(180.f); // long enough for a few iterations of LLM reasoning
 	Req->SetContentAsString(JsonBody);
 
-	// Stream chunks via OnRequestProgress. UE's HTTP backend exposes the
-	// growing response content via GetContentAsString while the request
-	// is still in flight.
+	// Stream chunks while the request is in flight. UE 5.4 deprecated the
+	// int32 OnRequestProgress() in favour of OnRequestProgress64 (uint64
+	// signature). Pick the right delegate at compile time so the plugin
+	// builds against both 5.0–5.3 and 5.4+. UE's HTTP backend exposes the
+	// growing response via GetContentAsString during the request lifetime.
+	auto ProgressLambda = [State](FHttpRequestPtr R)
+	{
+		const FHttpResponsePtr Resp = R->GetResponse();
+		if (!Resp.IsValid()) return;
+		const FString All = Resp->GetContentAsString();
+		if (All.Len() <= State->LastReadBytes) return;
+		State->Buffer += All.Mid(State->LastReadBytes);
+		State->LastReadBytes = All.Len();
+		ShintAgentReviewPrivate::DrainEvents(*State);
+	};
+
+#if !UE_VERSION_OLDER_THAN(5, 4, 0)
+	Req->OnRequestProgress64().BindLambda(
+		[ProgressLambda](FHttpRequestPtr R, uint64 /*Sent*/, uint64 /*Recv*/)
+		{ ProgressLambda(R); });
+#else
 	Req->OnRequestProgress().BindLambda(
-		[State](FHttpRequestPtr R, int32 /*BytesSent*/, int32 /*BytesReceived*/)
-		{
-			const FHttpResponsePtr Resp = R->GetResponse();
-			if (!Resp.IsValid()) return;
-			const FString All = Resp->GetContentAsString();
-			if (All.Len() <= State->LastReadBytes) return;
-			State->Buffer += All.Mid(State->LastReadBytes);
-			State->LastReadBytes = All.Len();
-			ShintAgentReviewPrivate::DrainEvents(*State);
-		});
+		[ProgressLambda](FHttpRequestPtr R, int32 /*Sent*/, int32 /*Recv*/)
+		{ ProgressLambda(R); });
+#endif
 
 	Req->OnProcessRequestComplete().BindLambda(
 		[State](FHttpRequestPtr /*R*/, FHttpResponsePtr Resp, bool bOk)
