@@ -2108,33 +2108,253 @@ FString FShintCoreClient::SerializeJson(const TSharedRef<FJsonObject>& Obj)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sprint C / Fase 4 — POST /agent/review (SSE) — stub
+// Sprint C / Fase 4 — POST /agent/review (SSE streaming)
 //
-// Endpoint not yet merged to core/main. We short-circuit so the panel can
-// wire the UI today; the body is replaced when Genesis ships Fase 4.
+// Server emits Server-Sent Events with one of four kinds:
+//   event: thinking      → LLM tokens streamed mid-reasoning
+//   event: tool_call     → "I will call analyze_cpp_source(…)" + JSON args
+//   event: tool_result   → stringified tool output
+//   event: done          → final answer (also emitted on graceful errors)
+//
+// Wire format (SSE):
+//   event: <kind>\n
+//   data:  <payload>\n
+//   \n                        ← blank line terminates the event
+//
+// We use IHttpRequest::OnRequestProgress to read the response buffer
+// incrementally — UE's HTTP backend exposes accumulated bytes via
+// GetContentAsString while the request is still in flight, so we can
+// dispatch each `\n\n`-delimited event the moment it arrives instead of
+// waiting for the whole stream. The parser is line-oriented and tolerant:
+// unknown / malformed events are skipped, the loop never throws.
 // ─────────────────────────────────────────────────────────────────────────────
 
+namespace ShintAgentReviewPrivate
+{
+	/** Per-request state, lives on the heap and is captured by both
+	 *  OnRequestProgress and OnProcessRequestComplete lambdas. */
+	struct FStreamState
+	{
+		FOnShintAgentReviewEvent    OnEvent;
+		FOnShintAgentReviewComplete OnDone;
+		FString                     Buffer;          // accumulated UTF-8 text
+		int32                       LastReadBytes = 0; // up to which byte of the
+		                                               // response we've consumed
+		FString                     LastFinalAnswer; // captured from "done"
+		bool                        bDoneFired = false;
+	};
+
+	/** Drains as many complete `\n\n`-delimited SSE events as the buffer
+	 *  currently holds. Each one is parsed and fired through OnEvent. */
+	static void DrainEvents(FStreamState& S)
+	{
+		while (true)
+		{
+			const int32 EventEnd = S.Buffer.Find(TEXT("\n\n"));
+			if (EventEnd == INDEX_NONE) break;
+
+			const FString Block = S.Buffer.Left(EventEnd);
+			S.Buffer = S.Buffer.Mid(EventEnd + 2);
+
+			// Parse the block into the event struct. SSE allows multiple
+			// `data:` lines per event; we concatenate them with \n which
+			// is the standard interpretation.
+			FShintAgentReviewEvent Ev;
+			TArray<FString> Lines;
+			Block.ParseIntoArrayLines(Lines, /*CullEmpty=*/false);
+			for (const FString& Raw : Lines)
+			{
+				if (Raw.StartsWith(TEXT("event:")))
+				{
+					Ev.Kind = Raw.Mid(6).TrimStartAndEnd();
+				}
+				else if (Raw.StartsWith(TEXT("data:")))
+				{
+					const FString Piece = Raw.Mid(5).TrimStartAndEnd();
+					if (Ev.Payload.IsEmpty()) Ev.Payload  = Piece;
+					else                      Ev.Payload += TEXT("\n") + Piece;
+				}
+				// `id:` / `retry:` / comments — ignored.
+			}
+
+			if (Ev.Kind.IsEmpty() && Ev.Payload.IsEmpty())
+				continue; // empty / malformed block
+
+			// Tool events ship a JSON object with `tool_name`. Try to
+			// extract it so the panel can render the tool chip without
+			// re-parsing on its side.
+			if (Ev.Kind == TEXT("tool_call") || Ev.Kind == TEXT("tool_result"))
+			{
+				TSharedPtr<FJsonObject> J;
+				const auto Reader = TJsonReaderFactory<>::Create(Ev.Payload);
+				if (FJsonSerializer::Deserialize(Reader, J) && J.IsValid())
+				{
+					J->TryGetStringField(TEXT("tool_name"), Ev.ToolName);
+				}
+			}
+
+			if (Ev.Kind == TEXT("done"))
+			{
+				// Server may send the final answer inside `data:` either as
+				// raw text or as a JSON object with an `answer` field. Try
+				// JSON first, fall back to the raw payload.
+				TSharedPtr<FJsonObject> J;
+				const auto Reader = TJsonReaderFactory<>::Create(Ev.Payload);
+				FString Answer;
+				if (FJsonSerializer::Deserialize(Reader, J) && J.IsValid()
+					&& J->TryGetStringField(TEXT("answer"), Answer)
+					&& !Answer.IsEmpty())
+				{
+					S.LastFinalAnswer = Answer;
+				}
+				else
+				{
+					S.LastFinalAnswer = Ev.Payload;
+				}
+			}
+
+			if (S.OnEvent.IsBound())
+				S.OnEvent.Execute(Ev);
+		}
+	}
+}
+
 void FShintCoreClient::RequestAgentReview(
-	const FShintValidateResult& /*Source*/,
-	FOnShintAgentReviewEvent    /*OnEvent*/,
+	const FShintValidateResult& Source,
+	FOnShintAgentReviewEvent    OnEvent,
 	FOnShintAgentReviewComplete OnDone)
 {
-	// Mark unused parameters explicitly — gcc/clang -Wunused-parameter.
-	// We keep them in the API so the call-site doesn't change post-merge.
+	// Mirror RequestAgentPlan's payload sanitisation so the SSE endpoint
+	// receives the same shape it documents (issues array with rule_id /
+	// severity / line populated).
+	TArray<TSharedPtr<FJsonValue>> IssArr;
+	IssArr.Reserve(Source.Issues.Num());
+	int32 Skipped = 0;
+	for (const FShintCodeIssue& I : Source.Issues)
+	{
+		if (I.RuleId.IsEmpty() || I.Severity.IsEmpty() || I.Line < 0)
+		{
+			++Skipped;
+			continue;
+		}
+		TSharedRef<FJsonObject> J = MakeShared<FJsonObject>();
+		J->SetStringField(TEXT("rule_id"),       I.RuleId);
+		J->SetStringField(TEXT("severity"),      I.Severity);
+		J->SetStringField(TEXT("message"),       I.Message);
+		J->SetStringField(TEXT("file_path"),     I.FilePath);
+		J->SetNumberField(TEXT("line"),          I.Line);
+		J->SetStringField(TEXT("category"),      I.Category);
+		J->SetStringField(TEXT("fix_suggestion"),I.FixSuggestion);
+		J->SetStringField(TEXT("snippet"),       I.Snippet);
+		IssArr.Add(MakeShared<FJsonValueObject>(J));
+	}
+	if (Skipped > 0)
+	{
+		UE_LOG(LogShintTools, Warning,
+			TEXT("RequestAgentReview: dropped %d issue(s) with empty rule_id/severity"),
+			Skipped);
+	}
 	UE_LOG(LogShintTools, Log,
-		TEXT("RequestAgentReview: stub path — endpoint /agent/review not yet "
-		     "available in this core build. Awaiting Sprint C Fase 4 merge."));
+		TEXT("RequestAgentReview: streaming %d issue(s) over /agent/review"),
+		IssArr.Num());
 
-	FShintAgentReviewResult R;
-	R.bSuccess     = false;
-	R.ErrorMessage = TEXT(
-		"Agent Review (SSE) is not yet available in the connected core. "
-		"This feature ships with Sprint C Fase 4 — once your core engine is "
-		"upgraded, this button will stream the agent's reasoning live. "
-		"Auto-Fix Plan (/agent/plan) continues to work normally.");
+	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("api_key"), Config.ApiKey);
+	Body->SetArrayField (TEXT("issues"),  IssArr);
+	const FString JsonBody = SerializeJson(Body);
 
-	if (OnDone.IsBound())
-		OnDone.Execute(R);
+	auto State = MakeShared<ShintAgentReviewPrivate::FStreamState>();
+	State->OnEvent = OnEvent;
+	State->OnDone  = OnDone;
+
+	const TSharedRef<IHttpRequest> Req = FHttpModule::Get().CreateRequest();
+	Req->SetURL(Config.GetBaseUrl() / TEXT("agent/review"));
+	Req->SetVerb(TEXT("POST"));
+	Req->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+	Req->SetHeader(TEXT("Accept"),       TEXT("text/event-stream"));
+	Req->SetTimeout(180.f); // long enough for a few iterations of LLM reasoning
+	Req->SetContentAsString(JsonBody);
+
+	// Stream chunks via OnRequestProgress. UE's HTTP backend exposes the
+	// growing response content via GetContentAsString while the request
+	// is still in flight.
+	Req->OnRequestProgress().BindLambda(
+		[State](FHttpRequestPtr R, int32 /*BytesSent*/, int32 /*BytesReceived*/)
+		{
+			const FHttpResponsePtr Resp = R->GetResponse();
+			if (!Resp.IsValid()) return;
+			const FString All = Resp->GetContentAsString();
+			if (All.Len() <= State->LastReadBytes) return;
+			State->Buffer += All.Mid(State->LastReadBytes);
+			State->LastReadBytes = All.Len();
+			ShintAgentReviewPrivate::DrainEvents(*State);
+		});
+
+	Req->OnProcessRequestComplete().BindLambda(
+		[State](FHttpRequestPtr /*R*/, FHttpResponsePtr Resp, bool bOk)
+		{
+			if (State->bDoneFired) return;
+			State->bDoneFired = true;
+
+			// Drain any remaining events in case the final \n\n landed
+			// in the same TCP packet that closed the connection — without
+			// this the very last "done" can be missed when the stream
+			// ends without firing OnRequestProgress one more time.
+			if (Resp.IsValid())
+			{
+				const FString All = Resp->GetContentAsString();
+				if (All.Len() > State->LastReadBytes)
+				{
+					State->Buffer += All.Mid(State->LastReadBytes);
+					State->LastReadBytes = All.Len();
+				}
+				if (!State->Buffer.EndsWith(TEXT("\n\n"))
+					&& !State->Buffer.IsEmpty())
+				{
+					State->Buffer += TEXT("\n\n"); // flush trailing event
+				}
+				ShintAgentReviewPrivate::DrainEvents(*State);
+			}
+
+			FShintAgentReviewResult R;
+			if (!bOk || !Resp.IsValid())
+			{
+				R.bSuccess     = false;
+				R.ErrorMessage = TEXT("Network error reaching /agent/review.");
+			}
+			else if (Resp->GetResponseCode() == 403)
+			{
+				R.bSuccess     = false;
+				R.Tier         = TEXT("free");
+				R.ErrorMessage = TEXT(
+					"Agent Review requires the Indie tier. The connected "
+					"core resolved your API key as free. Upgrade at "
+					"https://shint.tools to enable streaming reviews.");
+			}
+			else if (Resp->GetResponseCode() == 404)
+			{
+				R.bSuccess     = false;
+				R.ErrorMessage = TEXT(
+					"/agent/review is not yet exposed by this core build. "
+					"Update the core engine to a release that ships Sprint C.");
+			}
+			else if (Resp->GetResponseCode() >= 400)
+			{
+				R.bSuccess     = false;
+				R.ErrorMessage = FString::Printf(
+					TEXT("HTTP %d on /agent/review."), Resp->GetResponseCode());
+			}
+			else
+			{
+				R.bSuccess     = true;
+				R.FinalAnswer  = State->LastFinalAnswer;
+				R.Tier         = TEXT("indie");
+			}
+			if (State->OnDone.IsBound())
+				State->OnDone.Execute(R);
+		});
+
+	Req->ProcessRequest();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

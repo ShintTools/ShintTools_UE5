@@ -168,7 +168,19 @@ private:
 	FReply OnAutoFixPlanClicked();
 	FReply OnAgentReviewClicked();   // Sprint C / Fase 4 stub
 	void   OnAgentPlanComplete(const FShintAgentPlanResult& Result);
-	void   OnAgentReviewComplete(const FShintAgentReviewResult& Result);  // Sprint C stub
+
+	// Sprint C / Fase 4 — streaming Agent Review (SSE).
+	// Dialog construction + per-event update. The window is created on-demand
+	// in OnAgentReviewClicked and torn down by the user via the Close button
+	// or implicitly when they X-out the modal.
+	void   OnAgentReviewEvent(const FShintAgentReviewEvent& Ev);
+	void   OnAgentReviewComplete(const FShintAgentReviewResult& Result);
+	void   AppendReviewLog(const FString& Text);
+	TSharedPtr<class SWindow>                         AgentReviewWindow;
+	TSharedPtr<class SMultiLineEditableTextBox>       AgentReviewLog;
+	TSharedPtr<class STextBlock>                      AgentReviewStatus;
+	TSharedPtr<class SCircularThrobber>               AgentReviewSpinner;
+	FString                                           AgentReviewBuffer;
 	void   ShowAgentPlanDialog(const FShintAgentPlanResult& Result);
 	FReply OnScanAssetsClicked();
 	FReply OnApplySingleFix(FShintIssueItemPtr Item);

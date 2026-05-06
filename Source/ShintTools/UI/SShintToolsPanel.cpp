@@ -18,6 +18,8 @@
 // Slate windows / dialogs
 #include "Widgets/SWindow.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Widgets/Input/SMultiLineEditableTextBox.h"
+#include "Widgets/Images/SThrobber.h"
 
 // Slate layout
 #include "Widgets/Layout/SBorder.h"
@@ -3223,8 +3225,6 @@ TOptional<float> SShintToolsPanel::GetAssetProgress() const
 
 FReply SShintToolsPanel::OnAgentReviewClicked()
 {
-	// Mirror the Auto-Fix Plan precondition: nothing to review without scan
-	// data. Saves a network call when the user clicks blindly.
 	if (LastCodeResult.Issues.IsEmpty())
 	{
 		ShintShowErrorToast(
@@ -3233,18 +3233,150 @@ FReply SShintToolsPanel::OnAgentReviewClicked()
 		return FReply::Handled();
 	}
 
-	// Empty event handler for now: the stub never emits per-event callbacks.
-	// When Genesis's Fase 4 lands, this lambda will receive thinking /
-	// tool_call / tool_result events and the panel can surface them in a
-	// streaming text widget.
-	FOnShintAgentReviewEvent OnEvent =
-		FOnShintAgentReviewEvent::CreateLambda([](const FShintAgentReviewEvent& /*Ev*/) {});
+	// Reset buffer for a fresh review. If a previous window is still open,
+	// close it — only one streaming session at a time.
+	AgentReviewBuffer.Empty();
+	if (AgentReviewWindow.IsValid())
+	{
+		AgentReviewWindow->RequestDestroyWindow();
+		AgentReviewWindow.Reset();
+	}
 
+	// Build a dedicated modal window. Slate widget refs are stored on the
+	// panel so the SSE callbacks (which fire on the game thread post-HTTP)
+	// can append text and toggle the spinner without rebuilding the tree.
+	SAssignNew(AgentReviewWindow, SWindow)
+		.Title(LOCTEXT("AgentReviewTitle", "ShintTools — Agent Review"))
+		.ClientSize(FVector2D(820.f, 540.f))
+		.SizingRule(ESizingRule::UserSized)
+		.SupportsMaximize(false)
+		.SupportsMinimize(false)
+		[
+			SNew(SBorder)
+			.BorderImage(ST4::Solid(C_BG()))
+			.Padding(FMargin(20.f))
+			[
+				SNew(SVerticalBox)
+
+				// Header: spinner + status label
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 12.f)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+					.Padding(0.f, 0.f, 10.f, 0.f)
+					[
+						SAssignNew(AgentReviewSpinner, SCircularThrobber)
+						.Radius(10.f)
+					]
+					+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+					[
+						SAssignNew(AgentReviewStatus, STextBlock)
+						.Text(LOCTEXT("AgentReviewBooting",
+							"Connecting to /agent/review and streaming reasoning…"))
+						.Font(FShintStyle::Fonts::Body())
+						.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
+					]
+				]
+
+				// Streaming log
+				+ SVerticalBox::Slot().FillHeight(1.f)
+				[
+					SAssignNew(AgentReviewLog, SMultiLineEditableTextBox)
+					.IsReadOnly(true)
+					.AlwaysShowScrollbars(true)
+					.Font(FShintStyle::Fonts::Small())
+					.Text(FText::FromString(TEXT("")))
+					.BackgroundColor(FSlateColor(FShintStyle::Colors::BgCard()))
+				]
+
+				// Close button (always available — the user may want to
+				// abort mid-stream; we don't actively cancel the HTTP
+				// request, but the dialog stops being visible).
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 12.f, 0.f, 0.f)
+				.HAlign(HAlign_Right)
+				[
+					SNew(SButton)
+					.ContentPadding(FMargin(20.f, 6.f))
+					.OnClicked_Lambda([this]() -> FReply
+					{
+						if (AgentReviewWindow.IsValid())
+						{
+							AgentReviewWindow->RequestDestroyWindow();
+							AgentReviewWindow.Reset();
+						}
+						return FReply::Handled();
+					})
+					[
+						SNew(STextBlock)
+						.Text(LOCTEXT("Close", "Close"))
+						.Font(FShintStyle::Fonts::Body())
+					]
+				]
+			]
+		];
+
+	FSlateApplication::Get().AddWindow(AgentReviewWindow.ToSharedRef());
+
+	// Fire the request. Both callbacks come back on the game thread (UE's
+	// HTTP module dispatches there for OnRequestProgress + OnComplete) so
+	// we can mutate Slate widgets directly without AsyncTask hops.
+	FOnShintAgentReviewEvent OnEvent =
+		FOnShintAgentReviewEvent::CreateSP(this, &SShintToolsPanel::OnAgentReviewEvent);
 	FOnShintAgentReviewComplete OnDone =
 		FOnShintAgentReviewComplete::CreateSP(this, &SShintToolsPanel::OnAgentReviewComplete);
 
 	CoreClient->RequestAgentReview(LastCodeResult, OnEvent, OnDone);
 	return FReply::Handled();
+}
+
+void SShintToolsPanel::AppendReviewLog(const FString& Text)
+{
+	if (!AgentReviewLog.IsValid()) return;
+	AgentReviewBuffer += Text;
+	AgentReviewLog->SetText(FText::FromString(AgentReviewBuffer));
+	// Auto-scroll: SMultiLineEditableTextBox doesn't expose a direct
+	// scroll-to-end API, but moving the cursor to the buffer end forces
+	// the viewport to follow. Cheap enough to do every event tick.
+	AgentReviewLog->GoTo(ETextLocation::EndOfDocument);
+}
+
+void SShintToolsPanel::OnAgentReviewEvent(const FShintAgentReviewEvent& Ev)
+{
+	// Format each event as one block in the log. Tool events get a
+	// chip-like prefix; thinking tokens stream raw so the user sees
+	// the reasoning flow as continuous text.
+	if (Ev.Kind == TEXT("thinking"))
+	{
+		AppendReviewLog(Ev.Payload);
+	}
+	else if (Ev.Kind == TEXT("tool_call"))
+	{
+		AppendReviewLog(FString::Printf(
+			TEXT("\n[ → %s ]\n"),
+			Ev.ToolName.IsEmpty() ? TEXT("tool") : *Ev.ToolName));
+	}
+	else if (Ev.Kind == TEXT("tool_result"))
+	{
+		AppendReviewLog(FString::Printf(
+			TEXT("\n[ ← %s result ]\n%s\n"),
+			Ev.ToolName.IsEmpty() ? TEXT("tool") : *Ev.ToolName,
+			*Ev.Payload.Left(2000))); // cap noisy tool outputs
+	}
+	else if (Ev.Kind == TEXT("done"))
+	{
+		AppendReviewLog(TEXT("\n\n— done —\n"));
+	}
+	else
+	{
+		AppendReviewLog(FString::Printf(TEXT("\n[%s] %s\n"),
+			*Ev.Kind, *Ev.Payload));
+	}
+
+	if (AgentReviewStatus.IsValid())
+	{
+		AgentReviewStatus->SetText(FText::FromString(
+			FString::Printf(TEXT("Streaming · last event: %s"), *Ev.Kind)));
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3269,28 +3401,42 @@ FReply SShintToolsPanel::OnAutoFixPlanClicked()
 
 void SShintToolsPanel::OnAgentReviewComplete(const FShintAgentReviewResult& Result)
 {
-	// Stub callback — until Genesis's Fase 4 ships /agent/review, the core
-	// client returns bSuccess=false with an informational ErrorMessage. Show
-	// it as a neutral toast instead of the red Fail toast we'd use for a
-	// real backend error.
+	// Hide the spinner — stream finished (success or failure).
+	if (AgentReviewSpinner.IsValid())
+		AgentReviewSpinner->SetVisibility(EVisibility::Collapsed);
+
 	if (!Result.bSuccess)
 	{
-		FNotificationInfo Info(FText::FromString(TEXT("Agent Review")));
-		Info.SubText = FText::FromString(Result.ErrorMessage);
-		Info.ExpireDuration = 8.0f;
-		Info.bUseLargeFont  = false;
-		FSlateNotificationManager::Get().AddNotification(Info);
+		// Surface the error inline in the dialog AND fall back to a toast
+		// in case the user already closed the window.
+		const FString Header = Result.Tier == TEXT("free")
+			? TEXT("\n\n[ Agent Review · Indie tier required ]\n")
+			: TEXT("\n\n[ Agent Review · error ]\n");
+		AppendReviewLog(Header + Result.ErrorMessage + TEXT("\n"));
+		if (AgentReviewStatus.IsValid())
+		{
+			AgentReviewStatus->SetText(FText::FromString(TEXT("Stream ended with error.")));
+		}
+		else
+		{
+			FNotificationInfo Info(FText::FromString(TEXT("Agent Review")));
+			Info.SubText = FText::FromString(Result.ErrorMessage);
+			Info.ExpireDuration = 8.0f;
+			FSlateNotificationManager::Get().AddNotification(Info);
+		}
 		return;
 	}
 
-	// Future path (post-Fase-4) — Result.FinalAnswer holds the agent's
-	// concluding text. Surface it in a modal similar to the Auto-Fix Plan
-	// dialog. For now the success branch is unreachable but we keep it so
-	// merging Genesis's endpoint requires zero changes here.
-	FNotificationInfo Info(FText::FromString(TEXT("Agent Review · Final Answer")));
-	Info.SubText = FText::FromString(Result.FinalAnswer);
-	Info.ExpireDuration = 12.0f;
-	FSlateNotificationManager::Get().AddNotification(Info);
+	// Success — the streaming log already shows the agent's reasoning. Just
+	// mark the status and (re-)write the final answer at the bottom in case
+	// the server didn't send a "done" payload mid-stream.
+	if (AgentReviewStatus.IsValid())
+		AgentReviewStatus->SetText(LOCTEXT("AgentReviewDone", "Stream complete."));
+	if (!Result.FinalAnswer.IsEmpty()
+		&& !AgentReviewBuffer.Contains(Result.FinalAnswer))
+	{
+		AppendReviewLog(TEXT("\n\nFinal answer:\n") + Result.FinalAnswer + TEXT("\n"));
+	}
 }
 
 void SShintToolsPanel::OnAgentPlanComplete(const FShintAgentPlanResult& Result)
