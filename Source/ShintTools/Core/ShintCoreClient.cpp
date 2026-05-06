@@ -72,8 +72,9 @@ bool FShintCoreClient::LoadConfig()
 	if (Json->TryGetStringField(TEXT("core_host"),    S) && !S.IsEmpty()) Config.CoreHost = S;
 	if (Json->TryGetStringField(TEXT("project_name"), S)) Config.ProjectName = S;
 	if (Json->TryGetStringField(TEXT("project_id"),   S)) Config.ProjectId   = S;
-	if (Json->TryGetStringField(TEXT("api_key"),      S)) Config.ApiKeyDashboard      = S;
-	if (Json->TryGetStringField(TEXT("dashboard_url"),S)) Config.DashboardUrl= S;
+	if (Json->TryGetStringField(TEXT("api_key"),       S)) Config.ApiKeyDashboard = S;
+	if (Json->TryGetStringField(TEXT("api_key_mongo"), S)) Config.ApiKeyMongo    = S;
+	if (Json->TryGetStringField(TEXT("dashboard_url"), S)) Config.DashboardUrl   = S;
 
 	UE_LOG(LogShintTools, Verbose,
 		TEXT("ShintCoreClient: Config loaded. Port=%d"), Config.CorePort);
@@ -101,6 +102,7 @@ bool FShintCoreClient::SaveConfig() const
 	Json->SetStringField(TEXT("project_name"),    Config.ProjectName);
 	Json->SetStringField(TEXT("project_id"),      Config.ProjectId);
 	Json->SetStringField(TEXT("api_key"),         Config.ApiKeyDashboard);
+	Json->SetStringField(TEXT("api_key_mongo"),   Config.ApiKeyMongo);
 	Json->SetStringField(TEXT("dashboard_url"),   Config.DashboardUrl);
 
 	const FString Out = SerializeJson(Json.ToSharedRef());
@@ -2255,122 +2257,195 @@ void FShintCoreClient::RequestAgentReview(
 			TEXT("RequestAgentReview: dropped %d issue(s) with empty rule_id/severity"),
 			Skipped);
 	}
+
+	// ── Guard: api_key must be set ───────────────────────────────────────────
+	if (Config.ApiKeyMongo.IsEmpty())
+	{
+		UE_LOG(LogShintTools, Error,
+			TEXT("RequestAgentReview: api_key_mongo is empty — set it in shinttools.config.json. "
+			     "The server resolves an empty key as 'free' tier and blocks /agent/review."));
+		FShintAgentReviewResult EarlyErr;
+		EarlyErr.bSuccess     = false;
+		EarlyErr.ErrorMessage = TEXT(
+			"api_key_mongo not set up. Open shinttools.config.json and add your Indie key "
+			"under the \"api_key\" field, then restart the editor.");
+		OnDone.ExecuteIfBound(EarlyErr);
+		return;
+	}
+
+	// ── Guard: need at least one valid issue to pick a file ──────────────────
+	if (IssArr.IsEmpty())
+	{
+		UE_LOG(LogShintTools, Warning,
+			TEXT("RequestAgentReview: no valid issues to send — aborting."));
+		FShintAgentReviewResult EarlyErr;
+		EarlyErr.bSuccess     = false;
+		EarlyErr.ErrorMessage = TEXT("No valid issues found in the last scan result.");
+		OnDone.ExecuteIfBound(EarlyErr);
+		return;
+	}
+
 	UE_LOG(LogShintTools, Log,
 		TEXT("RequestAgentReview: streaming %d issue(s) over /agent/review"),
 		IssArr.Num());
 
-	const TArray<FShintCodeIssue>::ElementType I = Source.Issues[0];	
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("api_key"), Config.ApiKeyDashboard);
-	Body->SetArrayField (TEXT("issues"),  IssArr);
-    Body->SetStringField(TEXT("file_path"),     I.FilePath);  
-    Body->SetStringField(TEXT("file_content"),  I.FileContent); 
-    Body->SetNumberField(TEXT("max_iterations"), 8); 
-	const FString JsonBody = SerializeJson(Body);
-
-	auto State = MakeShared<ShintAgentReviewPrivate::FStreamState>();
-	State->OnEvent = OnEvent;
-	State->OnDone  = OnDone;
-
-	const TSharedRef<IHttpRequest> Req = FHttpModule::Get().CreateRequest();
-	Req->SetURL(Config.GetBaseUrl() / TEXT("agent/review"));
-	Req->SetVerb(TEXT("POST"));
-	Req->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
-	Req->SetHeader(TEXT("Accept"),       TEXT("text/event-stream"));
-	Req->SetTimeout(180.f); // long enough for a few iterations of LLM reasoning
-	Req->SetContentAsString(JsonBody);
-
-	// Stream chunks while the request is in flight. UE 5.4 deprecated the
-	// int32 OnRequestProgress() in favour of OnRequestProgress64 (uint64
-	// signature). Pick the right delegate at compile time so the plugin
-	// builds against both 5.0–5.3 and 5.4+. UE's HTTP backend exposes the
-	// growing response via GetContentAsString during the request lifetime.
-	auto ProgressLambda = [State](FHttpRequestPtr R)
+	// ── Pick the C++ file with the most issues (best context for the agent) ──
+	// Blueprint paths start with /Game/ — they have no readable file_content,
+	// so we prefer C++ files. Fall back to the first non-empty path if every
+	// issue is a Blueprint issue.
 	{
-		const FHttpResponsePtr Resp = R->GetResponse();
-		if (!Resp.IsValid()) return;
-		const FString All = Resp->GetContentAsString();
-		if (All.Len() <= State->LastReadBytes) return;
-		State->Buffer += All.Mid(State->LastReadBytes);
-		State->LastReadBytes = All.Len();
-		ShintAgentReviewPrivate::DrainEvents(*State);
-	};
+		TMap<FString, int32> FileCounts;
+		for (const FShintCodeIssue& Iss : Source.Issues)
+		{
+			if (!Iss.FilePath.IsEmpty()
+				&& !Iss.FilePath.StartsWith(TEXT("/Game/"))
+				&& !Iss.FilePath.StartsWith(TEXT("/Engine/")))
+			{
+				FileCounts.FindOrAdd(Iss.FilePath)++;
+			}
+		}
+
+		FString ReviewFilePath;
+		FString ReviewFileContent;
+
+		if (!FileCounts.IsEmpty())
+		{
+			// Sort by count descending — pick the file with the most hits
+			FileCounts.ValueSort([](int32 A, int32 B){ return A > B; });
+			ReviewFilePath = FileCounts.begin()->Key;
+			// Prefer the cached content from the issue; fall back to reading disk
+			for (const FShintCodeIssue& Iss : Source.Issues)
+			{
+				if (Iss.FilePath == ReviewFilePath && !Iss.FileContent.IsEmpty())
+				{
+					ReviewFileContent = Iss.FileContent;
+					break;
+				}
+			}
+			if (ReviewFileContent.IsEmpty())
+			{
+				FFileHelper::LoadFileToString(ReviewFileContent, *ReviewFilePath);
+			}
+		}
+		else
+		{
+			// All issues are BP — use whatever path/content the first one has
+			ReviewFilePath    = Source.Issues[0].FilePath;
+			ReviewFileContent = Source.Issues[0].FileContent;
+		}
+
+		UE_LOG(LogShintTools, Log,
+			TEXT("RequestAgentReview: review target = '%s' (%d chars)"),
+			*ReviewFilePath, ReviewFileContent.Len());
+
+		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+		Body->SetStringField(TEXT("api_key"),        Config.ApiKeyMongo);
+		Body->SetStringField(TEXT("file_path"),      ReviewFilePath);
+		Body->SetStringField(TEXT("file_content"),   ReviewFileContent);
+		Body->SetArrayField (TEXT("issues"),         IssArr);
+		Body->SetNumberField(TEXT("max_iterations"), 8);
+		const FString JsonBody = SerializeJson(Body);
+
+		auto State = MakeShared<ShintAgentReviewPrivate::FStreamState>();
+		State->OnEvent = OnEvent;
+		State->OnDone  = OnDone;
+
+		const TSharedRef<IHttpRequest> Req = FHttpModule::Get().CreateRequest();
+		Req->SetURL(Config.GetBaseUrl() / TEXT("agent/review"));
+		Req->SetVerb(TEXT("POST"));
+		Req->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+		Req->SetHeader(TEXT("Accept"),       TEXT("text/event-stream"));
+		Req->SetTimeout(180.f);
+		Req->SetContentAsString(JsonBody);
+
+		// Stream chunks while the request is in flight. UE 5.4 deprecated the
+		// int32 OnRequestProgress() in favour of OnRequestProgress64 (uint64
+		// signature). Pick the right delegate at compile time so the plugin
+		// builds against both 5.0–5.3 and 5.4+.
+		auto ProgressLambda = [State](FHttpRequestPtr R)
+		{
+			const FHttpResponsePtr Resp = R->GetResponse();
+			if (!Resp.IsValid()) return;
+			const FString All = Resp->GetContentAsString();
+			if (All.Len() <= State->LastReadBytes) return;
+			State->Buffer += All.Mid(State->LastReadBytes);
+			State->LastReadBytes = All.Len();
+			ShintAgentReviewPrivate::DrainEvents(*State);
+		};
 
 #if !UE_VERSION_OLDER_THAN(5, 4, 0)
-	Req->OnRequestProgress64().BindLambda(
-		[ProgressLambda](FHttpRequestPtr R, uint64 /*Sent*/, uint64 /*Recv*/)
-		{ ProgressLambda(R); });
+		Req->OnRequestProgress64().BindLambda(
+			[ProgressLambda](FHttpRequestPtr R, uint64 /*Sent*/, uint64 /*Recv*/)
+			{ ProgressLambda(R); });
 #else
-	Req->OnRequestProgress().BindLambda(
-		[ProgressLambda](FHttpRequestPtr R, int32 /*Sent*/, int32 /*Recv*/)
-		{ ProgressLambda(R); });
+		Req->OnRequestProgress().BindLambda(
+			[ProgressLambda](FHttpRequestPtr R, int32 /*Sent*/, int32 /*Recv*/)
+			{ ProgressLambda(R); });
 #endif
 
-	Req->OnProcessRequestComplete().BindLambda(
-		[State](FHttpRequestPtr /*R*/, FHttpResponsePtr Resp, bool bOk)
-		{
-			if (State->bDoneFired) return;
-			State->bDoneFired = true;
-
-			// Drain any remaining events in case the final \n\n landed
-			// in the same TCP packet that closed the connection — without
-			// this the very last "done" can be missed when the stream
-			// ends without firing OnRequestProgress one more time.
-			if (Resp.IsValid())
+		Req->OnProcessRequestComplete().BindLambda(
+			[State](FHttpRequestPtr /*R*/, FHttpResponsePtr Resp, bool bOk)
 			{
-				const FString All = Resp->GetContentAsString();
-				if (All.Len() > State->LastReadBytes)
+				if (State->bDoneFired) return;
+				State->bDoneFired = true;
+
+				// Drain any remaining events in case the final \n\n landed
+				// in the same TCP packet that closed the connection.
+				if (Resp.IsValid())
 				{
-					State->Buffer += All.Mid(State->LastReadBytes);
-					State->LastReadBytes = All.Len();
+					const FString All = Resp->GetContentAsString();
+					if (All.Len() > State->LastReadBytes)
+					{
+						State->Buffer += All.Mid(State->LastReadBytes);
+						State->LastReadBytes = All.Len();
+					}
+					if (!State->Buffer.EndsWith(TEXT("\n\n")) && !State->Buffer.IsEmpty())
+						State->Buffer += TEXT("\n\n");
+					ShintAgentReviewPrivate::DrainEvents(*State);
 				}
-				if (!State->Buffer.EndsWith(TEXT("\n\n"))
-					&& !State->Buffer.IsEmpty())
+
+				FShintAgentReviewResult R;
+				if (!bOk || !Resp.IsValid())
 				{
-					State->Buffer += TEXT("\n\n"); // flush trailing event
+					R.bSuccess     = false;
+					R.ErrorMessage = TEXT("Network error reaching /agent/review.");
 				}
-				ShintAgentReviewPrivate::DrainEvents(*State);
-			}
+				else if (Resp->GetResponseCode() == 403)
+				{
+					R.bSuccess     = false;
+					R.Tier         = TEXT("free");
+					R.ErrorMessage = TEXT(
+						"Agent Review requires tier Indie. "
+						"Core engine resolved your api_key as 'free' — verify :\n"
+						"  1) api_key is defined on shinttools.config.json\n"
+						"  2) There is a document {api_key, tier:'indie', active:true} "
+						"on MongoDB collection licenses.");
+				}
+				else if (Resp->GetResponseCode() == 404)
+				{
+					R.bSuccess     = false;
+					R.ErrorMessage = TEXT(
+						"/agent/review is not exposed on this core build. "
+						"Update core engine to a build that includes Sprint C.");
+				}
+				else if (Resp->GetResponseCode() >= 400)
+				{
+					R.bSuccess     = false;
+					R.ErrorMessage = FString::Printf(
+						TEXT("HTTP %d en /agent/review."), Resp->GetResponseCode());
+				}
+				else
+				{
+					R.bSuccess    = true;
+					R.FinalAnswer = State->LastFinalAnswer;
+					R.Tier        = TEXT("indie");
+				}
+				if (State->OnDone.IsBound())
+					State->OnDone.Execute(R);
+			});
 
-			FShintAgentReviewResult R;
-			if (!bOk || !Resp.IsValid())
-			{
-				R.bSuccess     = false;
-				R.ErrorMessage = TEXT("Network error reaching /agent/review.");
-			}
-			else if (Resp->GetResponseCode() == 403)
-			{
-				R.bSuccess     = false;
-				R.Tier         = TEXT("free");
-				R.ErrorMessage = TEXT(
-					"Agent Review requires the Indie tier. The connected "
-					"core resolved your API key as free. Upgrade at "
-					"https://shint.tools to enable streaming reviews.");
-			}
-			else if (Resp->GetResponseCode() == 404)
-			{
-				R.bSuccess     = false;
-				R.ErrorMessage = TEXT(
-					"/agent/review is not yet exposed by this core build. "
-					"Update the core engine to a release that ships Sprint C.");
-			}
-			else if (Resp->GetResponseCode() >= 400)
-			{
-				R.bSuccess     = false;
-				R.ErrorMessage = FString::Printf(
-					TEXT("HTTP %d on /agent/review."), Resp->GetResponseCode());
-			}
-			else
-			{
-				R.bSuccess     = true;
-				R.FinalAnswer  = State->LastFinalAnswer;
-				R.Tier         = TEXT("indie");
-			}
-			if (State->OnDone.IsBound())
-				State->OnDone.Execute(R);
-		});
-
-	Req->ProcessRequest();
+		Req->ProcessRequest();
+	} // end file-picker block
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2420,8 +2495,23 @@ void FShintCoreClient::RequestAgentPlan(
 	UE_LOG(LogShintTools, Log,
 		TEXT("RequestAgentPlan: sending %d issue(s) to /agent/plan"), IssArr.Num());
 
+	// ── Guard: api_key must be set ───────────────────────────────────────────
+	if (Config.ApiKeyMongo.IsEmpty())
+	{
+		UE_LOG(LogShintTools, Error,
+			TEXT("RequestAgentPlan: api_key is empty in shinttools.config.json — "
+			     "the server will resolve an empty key as 'free' tier and return 403."));
+		FShintAgentPlanResult EarlyErr;
+		EarlyErr.bSuccess     = false;
+		EarlyErr.ErrorMessage = TEXT(
+			"api_key is not set up. Add it on shinttools.config.json under label "
+			"\"api_key\" and restart editor.");
+		OnComplete.ExecuteIfBound(EarlyErr);
+		return;
+	}
+
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("api_key"), Config.ApiKeyDashboard);
+	Body->SetStringField(TEXT("api_key"), Config.ApiKeyMongo);
 	Body->SetArrayField (TEXT("issues"),  IssArr);
 
 	const FString Url = Config.GetBaseUrl() / TEXT("agent/plan");
@@ -2454,8 +2544,13 @@ FShintAgentPlanResult FShintCoreClient::ParseAgentPlanResponse(
 		else if (Raw.StatusCode == 403)
 		{
 			R.ErrorMessage = TEXT(
-				"Auto-Fix Plan is an Indie-tier feature. "
-				"Your API key resolved to the free tier on this core engine.");
+				"Auto-Fix Plan is an indie feature. "
+				"Core engine resolved your api_key as tier 'free'. Verify:\n"
+				"  1) api_key is defined on shinttools.config.json\n"
+				"  2) MongoDB is running \n"
+				"  3) There is a document {\"api_key\":\"<tu-key>\",\"tier\":\"indie\","
+				"\"active\":true} on Mongo DB collection licenses\n"
+				"  Run: python core/scripts/seed_license.py --key <your-key> to make a new one.");
 		}
 		else
 		{
