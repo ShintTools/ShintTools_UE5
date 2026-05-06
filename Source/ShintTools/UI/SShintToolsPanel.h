@@ -324,7 +324,8 @@ private:
 
 	// Config field widgets
 	TSharedPtr<SEditableTextBox> ProjectIdField;
-	TSharedPtr<SEditableTextBox> ApiKeyField;
+	TSharedPtr<SEditableTextBox> ApiKeyDashboardField;
+	TSharedPtr<SEditableTextBox> ApiKeyMongoField;
 	TSharedPtr<SEditableTextBox> DashboardUrlField;
 
 	// ── UI-REDESIGN: navigation state ────────────────────────────────────────

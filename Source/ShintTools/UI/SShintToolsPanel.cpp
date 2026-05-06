@@ -534,13 +534,18 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,6.f)
 			[
-				ConfigRow(LOCTEXT("CfgApiKey","API Key"), ApiKeyField,
-					Cfg.ApiKey, LOCTEXT("CfgApiKeyHint","shint_..."))
+				ConfigRow(LOCTEXT("CfgApiKeyMongo","API Key Mongo"), ApiKeyMongoField,
+					Cfg.ApiKeyMongo, LOCTEXT("CfgApiKeyHint","sk...."))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,6.f)
+			[
+				ConfigRow(LOCTEXT("CfgApiKeyDashboard","API Key Dashboard"), ApiKeyDashboardField,
+					Cfg.ApiKeyDashboard, LOCTEXT("CfgApiKeyHint","shint_..."))
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				ConfigRow(LOCTEXT("CfgDashUrl","Dashboard URL"), DashboardUrlField,
-					Cfg.DashboardUrl, LOCTEXT("CfgDashUrlHint","https://shint.tools"))
+					Cfg.DashboardUrl, LOCTEXT("CfgDashUrlHint","https://shint.tools/dashboard"))
 			]
 		];
 }
@@ -552,7 +557,7 @@ void SShintToolsPanel::SaveConfigOverrides()
 	FShintCoreConfig& Cfg = CoreClient->GetConfigMutable();
 
 	if (ProjectIdField.IsValid())    Cfg.ProjectId    = ProjectIdField->GetText().ToString();
-	if (ApiKeyField.IsValid())       Cfg.ApiKey       = ApiKeyField->GetText().ToString();
+	if (ApiKeyDashboardField.IsValid())       Cfg.ApiKeyDashboard       = ApiKeyDashboardField->GetText().ToString();
 	if (DashboardUrlField.IsValid()) Cfg.DashboardUrl = DashboardUrlField->GetText().ToString();
 
 	CoreClient->SaveConfig();

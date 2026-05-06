@@ -72,7 +72,7 @@ bool FShintCoreClient::LoadConfig()
 	if (Json->TryGetStringField(TEXT("core_host"),    S) && !S.IsEmpty()) Config.CoreHost = S;
 	if (Json->TryGetStringField(TEXT("project_name"), S)) Config.ProjectName = S;
 	if (Json->TryGetStringField(TEXT("project_id"),   S)) Config.ProjectId   = S;
-	if (Json->TryGetStringField(TEXT("api_key"),      S)) Config.ApiKey      = S;
+	if (Json->TryGetStringField(TEXT("api_key"),      S)) Config.ApiKeyDashboard      = S;
 	if (Json->TryGetStringField(TEXT("dashboard_url"),S)) Config.DashboardUrl= S;
 
 	UE_LOG(LogShintTools, Verbose,
@@ -100,7 +100,7 @@ bool FShintCoreClient::SaveConfig() const
 	Json->SetBoolField(TEXT("auto_start_core"),   Config.bAutoStartCore);
 	Json->SetStringField(TEXT("project_name"),    Config.ProjectName);
 	Json->SetStringField(TEXT("project_id"),      Config.ProjectId);
-	Json->SetStringField(TEXT("api_key"),         Config.ApiKey);
+	Json->SetStringField(TEXT("api_key"),         Config.ApiKeyDashboard);
 	Json->SetStringField(TEXT("dashboard_url"),   Config.DashboardUrl);
 
 	const FString Out = SerializeJson(Json.ToSharedRef());
@@ -1395,7 +1395,7 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetStringField(TEXT("project_id"),   Config.ProjectId);
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
-	Body->SetStringField(TEXT("api_key"),      Config.ApiKey);
+	Body->SetStringField(TEXT("api_key"),      Config.ApiKeyDashboard);
 	Body->SetArrayField (TEXT("files"),        FilesArr);
 
 	const FString Url = Config.DashboardUrl / TEXT("api/code-validator/analyze");
@@ -1718,7 +1718,7 @@ void FShintCoreClient::SendAssetNamingToDashboard(
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetStringField(TEXT("project_id"),   Config.ProjectId);
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
-	Body->SetStringField(TEXT("api_key"),      Config.ApiKey);
+	Body->SetStringField(TEXT("api_key"),      Config.ApiKeyDashboard);
 	Body->SetArrayField (TEXT("items"),        ItemsArr);
 
 	const FString Url = Config.DashboardUrl / TEXT("api/naming-bot/analyze");
@@ -2259,9 +2259,13 @@ void FShintCoreClient::RequestAgentReview(
 		TEXT("RequestAgentReview: streaming %d issue(s) over /agent/review"),
 		IssArr.Num());
 
+	const TArray<FShintCodeIssue>::ElementType I = Source.Issues[0];	
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("api_key"), Config.ApiKey);
+	Body->SetStringField(TEXT("api_key"), Config.ApiKeyDashboard);
 	Body->SetArrayField (TEXT("issues"),  IssArr);
+    Body->SetStringField(TEXT("file_path"),     I.FilePath);  
+    Body->SetStringField(TEXT("file_content"),  I.FileContent); 
+    Body->SetNumberField(TEXT("max_iterations"), 8); 
 	const FString JsonBody = SerializeJson(Body);
 
 	auto State = MakeShared<ShintAgentReviewPrivate::FStreamState>();
@@ -2417,7 +2421,7 @@ void FShintCoreClient::RequestAgentPlan(
 		TEXT("RequestAgentPlan: sending %d issue(s) to /agent/plan"), IssArr.Num());
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("api_key"), Config.ApiKey);
+	Body->SetStringField(TEXT("api_key"), Config.ApiKeyDashboard);
 	Body->SetArrayField (TEXT("issues"),  IssArr);
 
 	const FString Url = Config.GetBaseUrl() / TEXT("agent/plan");

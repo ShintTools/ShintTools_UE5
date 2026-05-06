@@ -321,7 +321,8 @@ struct FShintCoreConfig
 	FString ProjectId       = TEXT("");
 
 	// External web dashboard (app.shinttools.io or emergent)
-	FString ApiKey          = TEXT("");
+	FString ApiKeyDashboard          = TEXT("");
+	FString ApiKeyMongo    = TEXT("");
 	FString DashboardUrl    = TEXT("https://app.shinttools.io");
 
 	FString GetBaseUrl() const
@@ -341,7 +342,7 @@ struct FShintCoreConfig
 
 	bool HasExternalDashboard() const
 	{
-		return !ApiKey.IsEmpty() && !DashboardUrl.IsEmpty() && !ProjectId.IsEmpty();
+		return !ApiKeyDashboard.IsEmpty() && !ApiKeyMongo.IsEmpty() && !DashboardUrl.IsEmpty() && !ProjectId.IsEmpty();
 	}
 };
 
