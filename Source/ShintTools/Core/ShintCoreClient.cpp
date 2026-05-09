@@ -2157,7 +2157,9 @@ void FShintCoreClient::RequestExplainIssue(
 	IssueJson->SetBoolField  (TEXT("is_auto_fixable"),  Issue.bIsAutoFixable);
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("api_key"), Config.ApiKey);
+	// /agent/explain (Indie tier) routes through the MongoDB-backed license
+	// check, same as /agent/plan — use ApiKeyMongo, not the dashboard key.
+	Body->SetStringField(TEXT("api_key"), Config.ApiKeyMongo);
 	Body->SetObjectField(TEXT("issue"),   IssueJson);
 
 	const FString Url = Config.GetBaseUrl() / TEXT("agent/explain");
@@ -2206,7 +2208,7 @@ void FShintCoreClient::RequestExplainIssue(
 			// success=false with a populated error_message (e.g. LLM not
 			// loaded yet); forward it verbatim instead of translating.
 			TSharedPtr<FJsonObject> Root;
-			const auto Reader = TJsonReaderFactory<>::Create(Raw.Body);
+			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Raw.ResponseBody);
 			if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
 			{
 				R.bSuccess     = false;
