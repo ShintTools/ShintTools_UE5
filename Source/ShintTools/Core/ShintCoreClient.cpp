@@ -6,7 +6,9 @@
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
-#include "Misc/EngineVersionComparison.h" // UE_VERSION_OLDER_THAN — gates SSE progress API
+// (EngineVersionComparison no longer needed — the SSE OnRequestProgress64
+//  switch was removed when /agent/review was retired. /agent/explain uses
+//  the standard request/response helpers.)
 #include "GenericPlatform/GenericPlatformHttp.h"  // FGenericPlatformHttp::UrlEncode
 
 #include "Misc/FileHelper.h"
@@ -72,8 +74,9 @@ bool FShintCoreClient::LoadConfig()
 	if (Json->TryGetStringField(TEXT("core_host"),    S) && !S.IsEmpty()) Config.CoreHost = S;
 	if (Json->TryGetStringField(TEXT("project_name"), S)) Config.ProjectName = S;
 	if (Json->TryGetStringField(TEXT("project_id"),   S)) Config.ProjectId   = S;
-	if (Json->TryGetStringField(TEXT("api_key"),      S)) Config.ApiKey      = S;
-	if (Json->TryGetStringField(TEXT("dashboard_url"),S)) Config.DashboardUrl= S;
+	if (Json->TryGetStringField(TEXT("api_key"),       S)) Config.ApiKeyDashboard = S;
+	if (Json->TryGetStringField(TEXT("api_key_mongo"), S)) Config.ApiKeyMongo    = S;
+	if (Json->TryGetStringField(TEXT("dashboard_url"), S)) Config.DashboardUrl   = S;
 
 	UE_LOG(LogShintTools, Verbose,
 		TEXT("ShintCoreClient: Config loaded. Port=%d"), Config.CorePort);
@@ -100,7 +103,8 @@ bool FShintCoreClient::SaveConfig() const
 	Json->SetBoolField(TEXT("auto_start_core"),   Config.bAutoStartCore);
 	Json->SetStringField(TEXT("project_name"),    Config.ProjectName);
 	Json->SetStringField(TEXT("project_id"),      Config.ProjectId);
-	Json->SetStringField(TEXT("api_key"),         Config.ApiKey);
+	Json->SetStringField(TEXT("api_key"),         Config.ApiKeyDashboard);
+	Json->SetStringField(TEXT("api_key_mongo"),   Config.ApiKeyMongo);
 	Json->SetStringField(TEXT("dashboard_url"),   Config.DashboardUrl);
 
 	const FString Out = SerializeJson(Json.ToSharedRef());
@@ -1395,7 +1399,7 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetStringField(TEXT("project_id"),   Config.ProjectId);
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
-	Body->SetStringField(TEXT("api_key"),      Config.ApiKey);
+	Body->SetStringField(TEXT("api_key"),      Config.ApiKeyDashboard);
 	Body->SetArrayField (TEXT("files"),        FilesArr);
 
 	const FString Url = Config.DashboardUrl / TEXT("api/code-validator/analyze");
@@ -1718,7 +1722,7 @@ void FShintCoreClient::SendAssetNamingToDashboard(
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetStringField(TEXT("project_id"),   Config.ProjectId);
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
-	Body->SetStringField(TEXT("api_key"),      Config.ApiKey);
+	Body->SetStringField(TEXT("api_key"),      Config.ApiKeyDashboard);
 	Body->SetArrayField (TEXT("items"),        ItemsArr);
 
 	const FString Url = Config.DashboardUrl / TEXT("api/naming-bot/analyze");
@@ -1891,6 +1895,13 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 			if (!V->TryGetObject(O) || !O || !O->IsValid()) continue;
 			FShintCodeIssue Issue;
 			(*O)->TryGetStringField(TEXT("rule_id"),        Issue.RuleId);
+			// LLM pivot — server's enrich_issue() pre-populates these so the
+			// panel can show a humanised label and forward the explanation
+			// docstring straight to /agent/explain. Optional — older cores
+			// without enrichment leave them empty and the panel falls back
+			// to RuleId rendering.
+			(*O)->TryGetStringField(TEXT("rule_name"),        Issue.RuleName);
+			(*O)->TryGetStringField(TEXT("rule_explanation"), Issue.RuleExplanation);
 			(*O)->TryGetStringField(TEXT("severity"),       Issue.Severity);
 			(*O)->TryGetStringField(TEXT("message"),        Issue.Message);
 			// Server may return "asset_path" (blueprints) or "file_path" (C++)
@@ -2109,265 +2120,113 @@ FString FShintCoreClient::SerializeJson(const TSharedRef<FJsonObject>& Obj)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sprint C / Fase 4 — POST /agent/review (SSE streaming)
+// LLM pivot — POST /agent/explain
 //
-// Server emits Server-Sent Events with one of four kinds:
-//   event: thinking      → LLM tokens streamed mid-reasoning
-//   event: tool_call     → "I will call analyze_cpp_source(…)" + JSON args
-//   event: tool_result   → stringified tool output
-//   event: done          → final answer (also emitted on graceful errors)
+// One issue in, one explanation out. The SSE streaming path was removed
+// because the 1.3B model could not reliably emit the JSON tool-call
+// protocol it required. The wait is now a single 30-45s spinner on the
+// panel side; latency lives entirely on the server.
 //
-// Wire format (SSE):
-//   event: <kind>\n
-//   data:  <payload>\n
-//   \n                        ← blank line terminates the event
-//
-// We use IHttpRequest::OnRequestProgress to read the response buffer
-// incrementally — UE's HTTP backend exposes accumulated bytes via
-// GetContentAsString while the request is still in flight, so we can
-// dispatch each `\n\n`-delimited event the moment it arrives instead of
-// waiting for the whole stream. The parser is line-oriented and tolerant:
-// unknown / malformed events are skipped, the loop never throws.
+// The Issue we forward is the SAME object the panel received from
+// /validate/* — server-enriched with rule_name + rule_explanation. We do
+// not synthesise either field on the client; if the deployed core is
+// older and did not enrich, the LLM falls back to whatever fields are
+// present (RuleId, Message, Snippet) and the explanation quality drops
+// gracefully.
 // ─────────────────────────────────────────────────────────────────────────────
 
-namespace ShintAgentReviewPrivate
+void FShintCoreClient::RequestExplainIssue(
+	const FShintCodeIssue&       Issue,
+	FOnShintAgentExplainComplete OnComplete)
 {
-	/** Per-request state, lives on the heap and is captured by both
-	 *  OnRequestProgress and OnProcessRequestComplete lambdas. */
-	struct FStreamState
-	{
-		FOnShintAgentReviewEvent    OnEvent;
-		FOnShintAgentReviewComplete OnDone;
-		FString                     Buffer;          // accumulated UTF-8 text
-		int32                       LastReadBytes = 0; // up to which byte of the
-		                                               // response we've consumed
-		FString                     LastFinalAnswer; // captured from "done"
-		bool                        bDoneFired = false;
-	};
-
-	/** Drains as many complete `\n\n`-delimited SSE events as the buffer
-	 *  currently holds. Each one is parsed and fired through OnEvent. */
-	static void DrainEvents(FStreamState& S)
-	{
-		while (true)
-		{
-			const int32 EventEnd = S.Buffer.Find(TEXT("\n\n"));
-			if (EventEnd == INDEX_NONE) break;
-
-			const FString Block = S.Buffer.Left(EventEnd);
-			S.Buffer = S.Buffer.Mid(EventEnd + 2);
-
-			// Parse the block into the event struct. SSE allows multiple
-			// `data:` lines per event; we concatenate them with \n which
-			// is the standard interpretation.
-			FShintAgentReviewEvent Ev;
-			TArray<FString> Lines;
-			Block.ParseIntoArrayLines(Lines, /*CullEmpty=*/false);
-			for (const FString& Raw : Lines)
-			{
-				if (Raw.StartsWith(TEXT("event:")))
-				{
-					Ev.Kind = Raw.Mid(6).TrimStartAndEnd();
-				}
-				else if (Raw.StartsWith(TEXT("data:")))
-				{
-					const FString Piece = Raw.Mid(5).TrimStartAndEnd();
-					if (Ev.Payload.IsEmpty()) Ev.Payload  = Piece;
-					else                      Ev.Payload += TEXT("\n") + Piece;
-				}
-				// `id:` / `retry:` / comments — ignored.
-			}
-
-			if (Ev.Kind.IsEmpty() && Ev.Payload.IsEmpty())
-				continue; // empty / malformed block
-
-			// Tool events ship a JSON object with `tool_name`. Try to
-			// extract it so the panel can render the tool chip without
-			// re-parsing on its side.
-			if (Ev.Kind == TEXT("tool_call") || Ev.Kind == TEXT("tool_result"))
-			{
-				TSharedPtr<FJsonObject> J;
-				const auto Reader = TJsonReaderFactory<>::Create(Ev.Payload);
-				if (FJsonSerializer::Deserialize(Reader, J) && J.IsValid())
-				{
-					J->TryGetStringField(TEXT("tool_name"), Ev.ToolName);
-				}
-			}
-
-			if (Ev.Kind == TEXT("done"))
-			{
-				// Server may send the final answer inside `data:` either as
-				// raw text or as a JSON object with an `answer` field. Try
-				// JSON first, fall back to the raw payload.
-				TSharedPtr<FJsonObject> J;
-				const auto Reader = TJsonReaderFactory<>::Create(Ev.Payload);
-				FString Answer;
-				if (FJsonSerializer::Deserialize(Reader, J) && J.IsValid()
-					&& J->TryGetStringField(TEXT("answer"), Answer)
-					&& !Answer.IsEmpty())
-				{
-					S.LastFinalAnswer = Answer;
-				}
-				else
-				{
-					S.LastFinalAnswer = Ev.Payload;
-				}
-			}
-
-			if (S.OnEvent.IsBound())
-				S.OnEvent.Execute(Ev);
-		}
-	}
-}
-
-void FShintCoreClient::RequestAgentReview(
-	const FShintValidateResult& Source,
-	FOnShintAgentReviewEvent    OnEvent,
-	FOnShintAgentReviewComplete OnDone)
-{
-	// Mirror RequestAgentPlan's payload sanitisation so the SSE endpoint
-	// receives the same shape it documents (issues array with rule_id /
-	// severity / line populated).
-	TArray<TSharedPtr<FJsonValue>> IssArr;
-	IssArr.Reserve(Source.Issues.Num());
-	int32 Skipped = 0;
-	for (const FShintCodeIssue& I : Source.Issues)
-	{
-		if (I.RuleId.IsEmpty() || I.Severity.IsEmpty() || I.Line < 0)
-		{
-			++Skipped;
-			continue;
-		}
-		TSharedRef<FJsonObject> J = MakeShared<FJsonObject>();
-		J->SetStringField(TEXT("rule_id"),       I.RuleId);
-		J->SetStringField(TEXT("severity"),      I.Severity);
-		J->SetStringField(TEXT("message"),       I.Message);
-		J->SetStringField(TEXT("file_path"),     I.FilePath);
-		J->SetNumberField(TEXT("line"),          I.Line);
-		J->SetStringField(TEXT("category"),      I.Category);
-		J->SetStringField(TEXT("fix_suggestion"),I.FixSuggestion);
-		J->SetStringField(TEXT("snippet"),       I.Snippet);
-		IssArr.Add(MakeShared<FJsonValueObject>(J));
-	}
-	if (Skipped > 0)
-	{
-		UE_LOG(LogShintTools, Warning,
-			TEXT("RequestAgentReview: dropped %d issue(s) with empty rule_id/severity"),
-			Skipped);
-	}
-	UE_LOG(LogShintTools, Log,
-		TEXT("RequestAgentReview: streaming %d issue(s) over /agent/review"),
-		IssArr.Num());
+	// Build the issue payload mirroring the Pydantic schema documented in
+	// the pivot brief: every customer-facing field plus the enrichment
+	// pair. Empty strings are fine; the server treats absent fields as
+	// "no extra grounding".
+	TSharedRef<FJsonObject> IssueJson = MakeShared<FJsonObject>();
+	IssueJson->SetStringField(TEXT("rule_id"),          Issue.RuleId);
+	IssueJson->SetStringField(TEXT("rule_name"),        Issue.RuleName);
+	IssueJson->SetStringField(TEXT("rule_explanation"), Issue.RuleExplanation);
+	IssueJson->SetStringField(TEXT("severity"),         Issue.Severity);
+	IssueJson->SetStringField(TEXT("category"),         Issue.Category);
+	IssueJson->SetStringField(TEXT("file_path"),        Issue.FilePath);
+	IssueJson->SetNumberField(TEXT("line"),             Issue.Line);
+	IssueJson->SetStringField(TEXT("message"),          Issue.Message);
+	IssueJson->SetStringField(TEXT("fix_suggestion"),   Issue.FixSuggestion);
+	IssueJson->SetStringField(TEXT("snippet"),          Issue.Snippet);
+	IssueJson->SetBoolField  (TEXT("is_auto_fixable"),  Issue.bIsAutoFixable);
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetStringField(TEXT("api_key"), Config.ApiKey);
-	Body->SetArrayField (TEXT("issues"),  IssArr);
-	const FString JsonBody = SerializeJson(Body);
+	Body->SetObjectField(TEXT("issue"),   IssueJson);
 
-	auto State = MakeShared<ShintAgentReviewPrivate::FStreamState>();
-	State->OnEvent = OnEvent;
-	State->OnDone  = OnDone;
+	const FString Url = Config.GetBaseUrl() / TEXT("agent/explain");
 
-	const TSharedRef<IHttpRequest> Req = FHttpModule::Get().CreateRequest();
-	Req->SetURL(Config.GetBaseUrl() / TEXT("agent/review"));
-	Req->SetVerb(TEXT("POST"));
-	Req->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
-	Req->SetHeader(TEXT("Accept"),       TEXT("text/event-stream"));
-	Req->SetTimeout(180.f); // long enough for a few iterations of LLM reasoning
-	Req->SetContentAsString(JsonBody);
+	UE_LOG(LogShintTools, Log,
+		TEXT("RequestExplainIssue: POST /agent/explain rule=%s line=%d"),
+		*Issue.RuleId, Issue.Line);
 
-	// Stream chunks while the request is in flight. UE 5.4 deprecated the
-	// int32 OnRequestProgress() in favour of OnRequestProgress64 (uint64
-	// signature). Pick the right delegate at compile time so the plugin
-	// builds against both 5.0–5.3 and 5.4+. UE's HTTP backend exposes the
-	// growing response via GetContentAsString during the request lifetime.
-	auto ProgressLambda = [State](FHttpRequestPtr R)
-	{
-		const FHttpResponsePtr Resp = R->GetResponse();
-		if (!Resp.IsValid()) return;
-		const FString All = Resp->GetContentAsString();
-		if (All.Len() <= State->LastReadBytes) return;
-		State->Buffer += All.Mid(State->LastReadBytes);
-		State->LastReadBytes = All.Len();
-		ShintAgentReviewPrivate::DrainEvents(*State);
-	};
-
-#if !UE_VERSION_OLDER_THAN(5, 4, 0)
-	Req->OnRequestProgress64().BindLambda(
-		[ProgressLambda](FHttpRequestPtr R, uint64 /*Sent*/, uint64 /*Recv*/)
-		{ ProgressLambda(R); });
-#else
-	Req->OnRequestProgress().BindLambda(
-		[ProgressLambda](FHttpRequestPtr R, int32 /*Sent*/, int32 /*Recv*/)
-		{ ProgressLambda(R); });
-#endif
-
-	Req->OnProcessRequestComplete().BindLambda(
-		[State](FHttpRequestPtr /*R*/, FHttpResponsePtr Resp, bool bOk)
+	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Body),
+		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw)
 		{
-			if (State->bDoneFired) return;
-			State->bDoneFired = true;
+			FShintAgentExplainResponse R;
 
-			// Drain any remaining events in case the final \n\n landed
-			// in the same TCP packet that closed the connection — without
-			// this the very last "done" can be missed when the stream
-			// ends without firing OnRequestProgress one more time.
-			if (Resp.IsValid())
+			// HTTP-level failures map to typed errors before we try to parse.
+			if (!Raw.bSuccess)
 			{
-				const FString All = Resp->GetContentAsString();
-				if (All.Len() > State->LastReadBytes)
+				R.bSuccess = false;
+				if (Raw.StatusCode == 403)
 				{
-					State->Buffer += All.Mid(State->LastReadBytes);
-					State->LastReadBytes = All.Len();
+					R.Tier         = TEXT("free");
+					R.ErrorMessage = TEXT(
+						"Issue Explain requires the Indie tier. The connected core "
+						"resolved your api_key as 'free'. Upgrade your subscription "
+						"at https://shint.tools to enable LLM explanations.");
 				}
-				if (!State->Buffer.EndsWith(TEXT("\n\n"))
-					&& !State->Buffer.IsEmpty())
+				else if (Raw.StatusCode == 404)
 				{
-					State->Buffer += TEXT("\n\n"); // flush trailing event
+					R.ErrorMessage = TEXT(
+						"/agent/explain is not exposed by this core build. Update the "
+						"core engine to a release that ships the LLM explainer.");
 				}
-				ShintAgentReviewPrivate::DrainEvents(*State);
+				else if (Raw.StatusCode > 0)
+				{
+					R.ErrorMessage = FString::Printf(
+						TEXT("HTTP %d on /agent/explain."), Raw.StatusCode);
+				}
+				else
+				{
+					R.ErrorMessage = TEXT("Network error reaching /agent/explain.");
+				}
+				if (OnComplete.IsBound()) OnComplete.Execute(R);
+				return;
 			}
 
-			FShintAgentReviewResult R;
-			if (!bOk || !Resp.IsValid())
+			// Parse the JSON envelope. The server may legitimately return
+			// success=false with a populated error_message (e.g. LLM not
+			// loaded yet); forward it verbatim instead of translating.
+			TSharedPtr<FJsonObject> Root;
+			const auto Reader = TJsonReaderFactory<>::Create(Raw.Body);
+			if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
 			{
 				R.bSuccess     = false;
-				R.ErrorMessage = TEXT("Network error reaching /agent/review.");
+				R.ErrorMessage = TEXT("Could not parse the response from /agent/explain.");
+				if (OnComplete.IsBound()) OnComplete.Execute(R);
+				return;
 			}
-			else if (Resp->GetResponseCode() == 403)
-			{
-				R.bSuccess     = false;
-				R.Tier         = TEXT("free");
-				R.ErrorMessage = TEXT(
-					"Agent Review requires the Indie tier. The connected "
-					"core resolved your API key as free. Upgrade at "
-					"https://shint.tools to enable streaming reviews.");
-			}
-			else if (Resp->GetResponseCode() == 404)
-			{
-				R.bSuccess     = false;
-				R.ErrorMessage = TEXT(
-					"/agent/review is not yet exposed by this core build. "
-					"Update the core engine to a release that ships Sprint C.");
-			}
-			else if (Resp->GetResponseCode() >= 400)
-			{
-				R.bSuccess     = false;
-				R.ErrorMessage = FString::Printf(
-					TEXT("HTTP %d on /agent/review."), Resp->GetResponseCode());
-			}
-			else
-			{
-				R.bSuccess     = true;
-				R.FinalAnswer  = State->LastFinalAnswer;
-				R.Tier         = TEXT("indie");
-			}
-			if (State->OnDone.IsBound())
-				State->OnDone.Execute(R);
-		});
 
-	Req->ProcessRequest();
+			Root->TryGetBoolField  (TEXT("success"),            R.bSuccess);
+			Root->TryGetStringField(TEXT("explanation"),        R.Explanation);
+			double Gen = 0.0;
+			if (Root->TryGetNumberField(TEXT("generation_seconds"), Gen))
+				R.GenerationSeconds = static_cast<float>(Gen);
+			Root->TryGetStringField(TEXT("tier"),               R.Tier);
+			Root->TryGetStringField(TEXT("error_message"),      R.ErrorMessage);
+
+			if (OnComplete.IsBound()) OnComplete.Execute(R);
+		}));
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent — Auto-Fix Plan
@@ -2416,8 +2275,23 @@ void FShintCoreClient::RequestAgentPlan(
 	UE_LOG(LogShintTools, Log,
 		TEXT("RequestAgentPlan: sending %d issue(s) to /agent/plan"), IssArr.Num());
 
+	// ── Guard: api_key must be set ───────────────────────────────────────────
+	if (Config.ApiKeyMongo.IsEmpty())
+	{
+		UE_LOG(LogShintTools, Error,
+			TEXT("RequestAgentPlan: api_key is empty in shinttools.config.json — "
+			     "the server will resolve an empty key as 'free' tier and return 403."));
+		FShintAgentPlanResult EarlyErr;
+		EarlyErr.bSuccess     = false;
+		EarlyErr.ErrorMessage = TEXT(
+			"api_key is not set up. Add it on shinttools.config.json under label "
+			"\"api_key\" and restart editor.");
+		OnComplete.ExecuteIfBound(EarlyErr);
+		return;
+	}
+
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("api_key"), Config.ApiKey);
+	Body->SetStringField(TEXT("api_key"), Config.ApiKeyMongo);
 	Body->SetArrayField (TEXT("issues"),  IssArr);
 
 	const FString Url = Config.GetBaseUrl() / TEXT("agent/plan");
@@ -2450,8 +2324,13 @@ FShintAgentPlanResult FShintCoreClient::ParseAgentPlanResponse(
 		else if (Raw.StatusCode == 403)
 		{
 			R.ErrorMessage = TEXT(
-				"Auto-Fix Plan is an Indie-tier feature. "
-				"Your API key resolved to the free tier on this core engine.");
+				"Auto-Fix Plan is an indie feature. "
+				"Core engine resolved your api_key as tier 'free'. Verify:\n"
+				"  1) api_key is defined on shinttools.config.json\n"
+				"  2) MongoDB is running \n"
+				"  3) There is a document {\"api_key\":\"<tu-key>\",\"tier\":\"indie\","
+				"\"active\":true} on Mongo DB collection licenses\n"
+				"  Run: python core/scripts/seed_license.py --key <your-key> to make a new one.");
 		}
 		else
 		{

@@ -10,6 +10,7 @@
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Views/SListView.h"
 #include "Widgets/Views/STableRow.h"
+#include "Containers/Ticker.h"          // FTSTicker — drives Explain modal status rotation
 
 class FCoreProcessManager;
 
@@ -67,6 +68,11 @@ struct FShintIssueItem
 	FString Class;
 	FString Category;
 	FString Graph;
+
+	// LLM pivot — humanised label + docstring rationale. Forwarded as-is to
+	// /agent/explain when the user clicks the per-row "Explain" button.
+	FString RuleName;
+	FString RuleExplanation;
 
 	// Full source file content (from server) — for tree-sitter AST fix validation
 	FString FileContent;
@@ -166,21 +172,22 @@ private:
 	FReply OnApplySelectedCodeFixesClicked();
 	FReply OnSendCodeToDashboardClicked();
 	FReply OnAutoFixPlanClicked();
-	FReply OnAgentReviewClicked();   // Sprint C / Fase 4 stub
 	void   OnAgentPlanComplete(const FShintAgentPlanResult& Result);
 
-	// Sprint C / Fase 4 — streaming Agent Review (SSE).
-	// Dialog construction + per-event update. The window is created on-demand
-	// in OnAgentReviewClicked and torn down by the user via the Close button
-	// or implicitly when they X-out the modal.
-	void   OnAgentReviewEvent(const FShintAgentReviewEvent& Ev);
-	void   OnAgentReviewComplete(const FShintAgentReviewResult& Result);
-	void   AppendReviewLog(const FString& Text);
-	TSharedPtr<class SWindow>                         AgentReviewWindow;
-	TSharedPtr<class SMultiLineEditableTextBox>       AgentReviewLog;
-	TSharedPtr<class STextBlock>                      AgentReviewStatus;
-	TSharedPtr<class SCircularThrobber>               AgentReviewSpinner;
-	FString                                           AgentReviewBuffer;
+	// LLM pivot — single-shot /agent/explain modal.
+	// One per-issue "Explain" button on each row; click opens the modal,
+	// the request fires, the server takes 30-45s on CPU and the modal shows
+	// a spinner with rotating status text until the response arrives.
+	FReply OnExplainIssueClicked(FShintIssueItemPtr Item);
+	void   OnExplainComplete(const FShintAgentExplainResponse& Result,
+	                         FShintIssueItemPtr                Item);
+	bool   TickExplainStatus(float DeltaTime); // rotates ExplainStatusIndex
+	TSharedPtr<class SWindow>                         ExplainWindow;
+	TSharedPtr<class SMultiLineEditableTextBox>       ExplainResultBox;
+	TSharedPtr<class SCircularThrobber>               ExplainSpinner;
+	TSharedPtr<class STextBlock>                      ExplainStatusLine;
+	int32                                             ExplainStatusIndex = 0;
+	FTSTicker::FDelegateHandle                        ExplainTickerHandle;
 	void   ShowAgentPlanDialog(const FShintAgentPlanResult& Result);
 	FReply OnScanAssetsClicked();
 	FReply OnApplySingleFix(FShintIssueItemPtr Item);
@@ -324,7 +331,8 @@ private:
 
 	// Config field widgets
 	TSharedPtr<SEditableTextBox> ProjectIdField;
-	TSharedPtr<SEditableTextBox> ApiKeyField;
+	TSharedPtr<SEditableTextBox> ApiKeyDashboardField;
+	TSharedPtr<SEditableTextBox> ApiKeyMongoField;
 	TSharedPtr<SEditableTextBox> DashboardUrlField;
 
 	// ── UI-REDESIGN: navigation state ────────────────────────────────────────

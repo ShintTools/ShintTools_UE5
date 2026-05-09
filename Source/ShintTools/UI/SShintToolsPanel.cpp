@@ -534,13 +534,18 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,6.f)
 			[
-				ConfigRow(LOCTEXT("CfgApiKey","API Key"), ApiKeyField,
-					Cfg.ApiKey, LOCTEXT("CfgApiKeyHint","shint_..."))
+				ConfigRow(LOCTEXT("CfgApiKeyMongo","API Key Mongo"), ApiKeyMongoField,
+					Cfg.ApiKeyMongo, LOCTEXT("CfgApiKeyHint","sk...."))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,6.f)
+			[
+				ConfigRow(LOCTEXT("CfgApiKeyDashboard","API Key Dashboard"), ApiKeyDashboardField,
+					Cfg.ApiKeyDashboard, LOCTEXT("CfgApiKeyHint","shint_..."))
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				ConfigRow(LOCTEXT("CfgDashUrl","Dashboard URL"), DashboardUrlField,
-					Cfg.DashboardUrl, LOCTEXT("CfgDashUrlHint","https://shint.tools"))
+					Cfg.DashboardUrl, LOCTEXT("CfgDashUrlHint","https://shint.tools/dashboard"))
 			]
 		];
 }
@@ -552,7 +557,7 @@ void SShintToolsPanel::SaveConfigOverrides()
 	FShintCoreConfig& Cfg = CoreClient->GetConfigMutable();
 
 	if (ProjectIdField.IsValid())    Cfg.ProjectId    = ProjectIdField->GetText().ToString();
-	if (ApiKeyField.IsValid())       Cfg.ApiKey       = ApiKeyField->GetText().ToString();
+	if (ApiKeyDashboardField.IsValid())       Cfg.ApiKeyDashboard       = ApiKeyDashboardField->GetText().ToString();
 	if (DashboardUrlField.IsValid()) Cfg.DashboardUrl = DashboardUrlField->GetText().ToString();
 
 	CoreClient->SaveConfig();
@@ -1081,24 +1086,9 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 					.Font(F_Small()).ColorAndOpacity(FSlateColor(FLinearColor(0.55f, 0.42f, 0.95f)))
 				]
 			]
-			// Sprint C / Fase 4 — Agent Review (SSE). Calls into the stub
-			// RequestAgentReview which short-circuits with a "Coming soon"
-			// toast until the core ships /agent/review. Wiring the button
-			// now means zero panel changes when the endpoint lands.
-			+ SWrapBox::Slot()
-			[
-				SNew(SButton)
-				.ContentPadding(FMargin(14.f,7.f))
-				.ToolTipText(LOCTEXT("AgentReviewTip",
-					"Stream the LLM agent's reasoning over the current scan results. "
-					"Requires Sprint C (Fase 4) on the core engine."))
-				.OnClicked(this, &SShintToolsPanel::OnAgentReviewClicked)
-				[
-					SNew(STextBlock)
-					.Text(LOCTEXT("AgentReview","🧠  Agent Review"))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(FLinearColor(0.40f, 0.75f, 0.95f)))
-				]
-			]
+			// LLM pivot — the global "Agent Review" button was retired.
+			// /agent/explain runs per-issue, so the entry point lives on
+			// each row of the issue list (see GenerateCodeIssueRow).
 		];
 
 	return SNew(SVerticalBox)
@@ -1242,7 +1232,13 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 						]
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f,0.f,10.f,0.f)
 						[
-							SNew(STextBlock).Text(FText::FromString(Item->RuleId)).Font(FShintStyle::Fonts::Small())
+							// LLM pivot — show the human label (RuleName from server-side
+							// enrich_issue) instead of the rule_id. Fallback to the id
+							// when an older core didn\'t enrich.
+							SNew(STextBlock)
+							.Text(FText::FromString(
+								Item->RuleName.IsEmpty() ? Item->RuleId : Item->RuleName))
+							.Font(FShintStyle::Fonts::Small())
 							.ColorAndOpacity(FSlateColor(C_White()))
 						]
 						+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
@@ -1280,6 +1276,32 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 											? TEXT("\u25BC Preview") : TEXT("\u25B6 Preview"));
 									})
 									.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Blue()))
+								]
+							]
+						]
+						// LLM pivot — per-issue "Explain" button. Hidden on Free
+						// tier so the user never gets a 403 mid-click; Tier comes
+						// from the validate response's top-level summary.tier.
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f,0.f,6.f,0.f)
+						[
+							SNew(SBox)
+							.Visibility(LastCodeResult.Tier == TEXT("free")
+								? EVisibility::Collapsed : EVisibility::Visible)
+							[
+								SNew(SButton)
+								.ContentPadding(FMargin(6.f, 2.f))
+								.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+								.ToolTipText(LOCTEXT("ExplainTip",
+									"Ask the local LLM agent to explain this issue in plain language."))
+								.OnClicked_Lambda([this, Item]() -> FReply
+								{
+									return OnExplainIssueClicked(Item);
+								})
+								[
+									SNew(STextBlock)
+									.Text(LOCTEXT("ExplainBtn", "✎  Explain"))
+									.Font(F_Label())
+									.ColorAndOpacity(FSlateColor(FLinearColor(0.40f, 0.75f, 0.95f)))
 								]
 							]
 						]
@@ -2831,6 +2853,10 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result,
 
 		FShintIssueItemPtr Item = MakeShared<FShintIssueItem>();
 		Item->RuleId         = Src.RuleId;
+		// LLM pivot — server-enriched fields propagate into the row item
+		// so the per-issue "Explain" handler can forward them as-is.
+		Item->RuleName        = Src.RuleName;
+		Item->RuleExplanation = Src.RuleExplanation;
 		Item->Severity       = Src.Severity;
 		Item->Message        = Src.Message;
 		Item->FilePath       = Src.FilePath;
@@ -3220,34 +3246,65 @@ TOptional<float> SShintToolsPanel::GetAssetProgress() const
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sprint C — Agent Review (SSE) — Fase 4 stub
+// LLM pivot — POST /agent/explain modal
+//
+// Per-issue button click → modal SWindow with spinner + rotating status text
+// → core client fires the request → 30-45s later the response lands in
+// OnExplainComplete. The status text rotates every ~8s through three labels
+// so the user knows the dialog isn\'t frozen.
 // ─────────────────────────────────────────────────────────────────────────────
 
-FReply SShintToolsPanel::OnAgentReviewClicked()
+bool SShintToolsPanel::TickExplainStatus(float /*DeltaTime*/)
 {
-	if (LastCodeResult.Issues.IsEmpty())
+	if (!ExplainStatusLine.IsValid()) return false;
+	static const TCHAR* Labels[] = {
+		TEXT("Analyzing code…"),
+		TEXT("Consulting rules…"),
+		TEXT("Drafting explanation…"),
+	};
+	ExplainStatusIndex = (ExplainStatusIndex + 1) % UE_ARRAY_COUNT(Labels);
+	ExplainStatusLine->SetText(FText::FromString(Labels[ExplainStatusIndex]));
+	return true; // keep ticking until the response arrives
+}
+
+FReply SShintToolsPanel::OnExplainIssueClicked(FShintIssueItemPtr Item)
+{
+	if (!Item.IsValid()) return FReply::Handled();
+
+	// Map the listview item back into a transport-ready FShintCodeIssue.
+	// The listview row carries every field we need; the client side does
+	// not synthesise rule_name / rule_explanation — those come from the
+	// validate response and we forward them verbatim.
+	FShintCodeIssue Issue;
+	Issue.RuleId          = Item->RuleId;
+	Issue.RuleName        = Item->RuleName;
+	Issue.RuleExplanation = Item->RuleExplanation;
+	Issue.Severity        = Item->Severity;
+	Issue.Category        = Item->Category;
+	Issue.Message         = Item->Message;
+	Issue.FilePath        = Item->FilePath;
+	Issue.Line            = Item->Line;
+	Issue.Snippet         = Item->Snippet;
+	Issue.FixSuggestion   = Item->FixSuggestion;
+	Issue.bIsAutoFixable  = Item->bIsAutoFixable;
+
+	// Tear down any previous modal — only one explain in flight at a time.
+	if (ExplainWindow.IsValid())
 	{
-		ShintShowErrorToast(
-			TEXT("Agent Review"),
-			TEXT("Run a code scan first — the agent needs issues to reason over."));
-		return FReply::Handled();
+		if (ExplainTickerHandle.IsValid())
+		{
+			FTSTicker::GetCoreTicker().RemoveTicker(ExplainTickerHandle);
+			ExplainTickerHandle.Reset();
+		}
+		ExplainWindow->RequestDestroyWindow();
+		ExplainWindow.Reset();
 	}
 
-	// Reset buffer for a fresh review. If a previous window is still open,
-	// close it — only one streaming session at a time.
-	AgentReviewBuffer.Empty();
-	if (AgentReviewWindow.IsValid())
-	{
-		AgentReviewWindow->RequestDestroyWindow();
-		AgentReviewWindow.Reset();
-	}
+	ExplainStatusIndex = 0;
 
-	// Build a dedicated modal window. Slate widget refs are stored on the
-	// panel so the SSE callbacks (which fire on the game thread post-HTTP)
-	// can append text and toggle the spinner without rebuilding the tree.
-	SAssignNew(AgentReviewWindow, SWindow)
-		.Title(LOCTEXT("AgentReviewTitle", "ShintTools — Agent Review"))
-		.ClientSize(FVector2D(820.f, 540.f))
+	SAssignNew(ExplainWindow, SWindow)
+		.Title(LOCTEXT("ExplainTitle", "Issue Explanation — ShintTools"))
+		.ClientSize(FVector2D(680.f, 460.f))
 		.SizingRule(ESizingRule::UserSized)
 		.SupportsMaximize(false)
 		.SupportsMinimize(false)
@@ -3258,30 +3315,41 @@ FReply SShintToolsPanel::OnAgentReviewClicked()
 			[
 				SNew(SVerticalBox)
 
-				// Header: spinner + status label
+				// Header — rule name + severity badge so the customer sees a
+				// human label instead of "CS001".
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString(
+						Item->RuleName.IsEmpty() ? Item->RuleId : Item->RuleName))
+					.Font(FShintStyle::Fonts::H2())
+					.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
+				]
+
+				// Spinner + rotating status text
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 12.f)
 				[
 					SNew(SHorizontalBox)
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 					.Padding(0.f, 0.f, 10.f, 0.f)
 					[
-						SAssignNew(AgentReviewSpinner, SCircularThrobber)
+						SAssignNew(ExplainSpinner, SCircularThrobber)
 						.Radius(10.f)
 					]
 					+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 					[
-						SAssignNew(AgentReviewStatus, STextBlock)
-						.Text(LOCTEXT("AgentReviewBooting",
-							"Connecting to /agent/review and streaming reasoning…"))
+						SAssignNew(ExplainStatusLine, STextBlock)
+						.Text(LOCTEXT("ExplainStatusBoot", "Analyzing code…"))
 						.Font(FShintStyle::Fonts::Body())
-						.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
+						.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
 					]
 				]
 
-				// Streaming log
+				// Result textbox — read-only, becomes the LLM\'s answer or
+				// the deterministic fallback (message + fix_suggestion).
 				+ SVerticalBox::Slot().FillHeight(1.f)
 				[
-					SAssignNew(AgentReviewLog, SMultiLineEditableTextBox)
+					SAssignNew(ExplainResultBox, SMultiLineEditableTextBox)
 					.IsReadOnly(true)
 					.AlwaysShowScrollbars(true)
 					.Font(FShintStyle::Fonts::Small())
@@ -3289,9 +3357,7 @@ FReply SShintToolsPanel::OnAgentReviewClicked()
 					.BackgroundColor(FSlateColor(FShintStyle::Colors::BgCard()))
 				]
 
-				// Close button (always available — the user may want to
-				// abort mid-stream; we don't actively cancel the HTTP
-				// request, but the dialog stops being visible).
+				// Close button
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 12.f, 0.f, 0.f)
 				.HAlign(HAlign_Right)
 				[
@@ -3299,10 +3365,15 @@ FReply SShintToolsPanel::OnAgentReviewClicked()
 					.ContentPadding(FMargin(20.f, 6.f))
 					.OnClicked_Lambda([this]() -> FReply
 					{
-						if (AgentReviewWindow.IsValid())
+						if (ExplainTickerHandle.IsValid())
 						{
-							AgentReviewWindow->RequestDestroyWindow();
-							AgentReviewWindow.Reset();
+							FTSTicker::GetCoreTicker().RemoveTicker(ExplainTickerHandle);
+							ExplainTickerHandle.Reset();
+						}
+						if (ExplainWindow.IsValid())
+						{
+							ExplainWindow->RequestDestroyWindow();
+							ExplainWindow.Reset();
 						}
 						return FReply::Handled();
 					})
@@ -3315,69 +3386,89 @@ FReply SShintToolsPanel::OnAgentReviewClicked()
 			]
 		];
 
-	FSlateApplication::Get().AddWindow(AgentReviewWindow.ToSharedRef());
+	FSlateApplication::Get().AddWindow(ExplainWindow.ToSharedRef());
 
-	// Fire the request. Both callbacks come back on the game thread (UE's
-	// HTTP module dispatches there for OnRequestProgress + OnComplete) so
-	// we can mutate Slate widgets directly without AsyncTask hops.
-	FOnShintAgentReviewEvent OnEvent =
-		FOnShintAgentReviewEvent::CreateSP(this, &SShintToolsPanel::OnAgentReviewEvent);
-	FOnShintAgentReviewComplete OnDone =
-		FOnShintAgentReviewComplete::CreateSP(this, &SShintToolsPanel::OnAgentReviewComplete);
+	// Rotate the status text every 8 seconds while the request is in flight.
+	ExplainTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateSP(this, &SShintToolsPanel::TickExplainStatus),
+		8.0f);
 
-	CoreClient->RequestAgentReview(LastCodeResult, OnEvent, OnDone);
+	// Fire the request — completion routes through OnExplainComplete on the
+	// game thread (UE\'s HTTP module dispatches there).
+	FOnShintAgentExplainComplete OnDone =
+		FOnShintAgentExplainComplete::CreateLambda(
+			[WeakThis = TWeakPtr<SShintToolsPanel>(SharedThis(this)), Item]
+			(const FShintAgentExplainResponse& Resp)
+			{
+				if (TSharedPtr<SShintToolsPanel> Pinned = WeakThis.Pin())
+					Pinned->OnExplainComplete(Resp, Item);
+			});
+
+	CoreClient->RequestExplainIssue(Issue, OnDone);
 	return FReply::Handled();
 }
 
-void SShintToolsPanel::AppendReviewLog(const FString& Text)
+void SShintToolsPanel::OnExplainComplete(
+	const FShintAgentExplainResponse& Result,
+	FShintIssueItemPtr                Item)
 {
-	if (!AgentReviewLog.IsValid()) return;
-	AgentReviewBuffer += Text;
-	AgentReviewLog->SetText(FText::FromString(AgentReviewBuffer));
-	// Auto-scroll: SMultiLineEditableTextBox doesn't expose a direct
-	// scroll-to-end API, but moving the cursor to the buffer end forces
-	// the viewport to follow. Cheap enough to do every event tick.
-	AgentReviewLog->GoTo(ETextLocation::EndOfDocument);
-}
+	// Stop the rotating ticker and hide the spinner; the wait is over.
+	if (ExplainTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(ExplainTickerHandle);
+		ExplainTickerHandle.Reset();
+	}
+	if (ExplainSpinner.IsValid())
+		ExplainSpinner->SetVisibility(EVisibility::Collapsed);
 
-void SShintToolsPanel::OnAgentReviewEvent(const FShintAgentReviewEvent& Ev)
-{
-	// Format each event as one block in the log. Tool events get a
-	// chip-like prefix; thinking tokens stream raw so the user sees
-	// the reasoning flow as continuous text.
-	if (Ev.Kind == TEXT("thinking"))
+	FString FinalText;
+	FString StatusText;
+
+	if (Result.bSuccess && !Result.Explanation.IsEmpty())
 	{
-		AppendReviewLog(Ev.Payload);
-	}
-	else if (Ev.Kind == TEXT("tool_call"))
-	{
-		AppendReviewLog(FString::Printf(
-			TEXT("\n[ → %s ]\n"),
-			Ev.ToolName.IsEmpty() ? TEXT("tool") : *Ev.ToolName));
-	}
-	else if (Ev.Kind == TEXT("tool_result"))
-	{
-		AppendReviewLog(FString::Printf(
-			TEXT("\n[ ← %s result ]\n%s\n"),
-			Ev.ToolName.IsEmpty() ? TEXT("tool") : *Ev.ToolName,
-			*Ev.Payload.Left(2000))); // cap noisy tool outputs
-	}
-	else if (Ev.Kind == TEXT("done"))
-	{
-		AppendReviewLog(TEXT("\n\n— done —\n"));
+		FinalText  = Result.Explanation;
+		StatusText = FString::Printf(
+			TEXT("Generated in %.1fs"), Result.GenerationSeconds);
 	}
 	else
 	{
-		AppendReviewLog(FString::Printf(TEXT("\n[%s] %s\n"),
-			*Ev.Kind, *Ev.Payload));
+		// Fallback path — show the deterministic message + fix_suggestion
+		// from the issue itself (already human-readable text). Customer
+		// never sees a raw "Error: LLM unavailable" screen.
+		FString Header;
+		if (Result.Tier == TEXT("free"))
+		{
+			Header = TEXT(
+				"Issue Explain requires the Indie tier. Showing the "
+				"deterministic suggestion instead:\n\n");
+		}
+		else if (!Result.ErrorMessage.IsEmpty())
+		{
+			Header = TEXT(
+				"Could not reach the LLM. Showing the deterministic suggestion "
+				"instead:\n\n");
+		}
+
+		const FString MsgBody =
+			(Item.IsValid() ? Item->Message : FString());
+		const FString FixBody =
+			(Item.IsValid() ? Item->FixSuggestion : FString());
+
+		FinalText = Header + MsgBody;
+		if (!FixBody.IsEmpty())
+			FinalText += TEXT("\n\n") + FixBody;
+
+		StatusText = Result.ErrorMessage.IsEmpty()
+			? FString(TEXT("Stream ended with error."))
+			: Result.ErrorMessage;
 	}
 
-	if (AgentReviewStatus.IsValid())
-	{
-		AgentReviewStatus->SetText(FText::FromString(
-			FString::Printf(TEXT("Streaming · last event: %s"), *Ev.Kind)));
-	}
+	if (ExplainResultBox.IsValid())
+		ExplainResultBox->SetText(FText::FromString(FinalText));
+	if (ExplainStatusLine.IsValid())
+		ExplainStatusLine->SetText(FText::FromString(StatusText));
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent — Auto-Fix Plan
@@ -3399,45 +3490,6 @@ FReply SShintToolsPanel::OnAutoFixPlanClicked()
 	return FReply::Handled();
 }
 
-void SShintToolsPanel::OnAgentReviewComplete(const FShintAgentReviewResult& Result)
-{
-	// Hide the spinner — stream finished (success or failure).
-	if (AgentReviewSpinner.IsValid())
-		AgentReviewSpinner->SetVisibility(EVisibility::Collapsed);
-
-	if (!Result.bSuccess)
-	{
-		// Surface the error inline in the dialog AND fall back to a toast
-		// in case the user already closed the window.
-		const FString Header = Result.Tier == TEXT("free")
-			? TEXT("\n\n[ Agent Review · Indie tier required ]\n")
-			: TEXT("\n\n[ Agent Review · error ]\n");
-		AppendReviewLog(Header + Result.ErrorMessage + TEXT("\n"));
-		if (AgentReviewStatus.IsValid())
-		{
-			AgentReviewStatus->SetText(FText::FromString(TEXT("Stream ended with error.")));
-		}
-		else
-		{
-			FNotificationInfo Info(FText::FromString(TEXT("Agent Review")));
-			Info.SubText = FText::FromString(Result.ErrorMessage);
-			Info.ExpireDuration = 8.0f;
-			FSlateNotificationManager::Get().AddNotification(Info);
-		}
-		return;
-	}
-
-	// Success — the streaming log already shows the agent's reasoning. Just
-	// mark the status and (re-)write the final answer at the bottom in case
-	// the server didn't send a "done" payload mid-stream.
-	if (AgentReviewStatus.IsValid())
-		AgentReviewStatus->SetText(LOCTEXT("AgentReviewDone", "Stream complete."));
-	if (!Result.FinalAnswer.IsEmpty()
-		&& !AgentReviewBuffer.Contains(Result.FinalAnswer))
-	{
-		AppendReviewLog(TEXT("\n\nFinal answer:\n") + Result.FinalAnswer + TEXT("\n"));
-	}
-}
 
 void SShintToolsPanel::OnAgentPlanComplete(const FShintAgentPlanResult& Result)
 {

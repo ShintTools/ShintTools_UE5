@@ -42,6 +42,13 @@ struct FShintCodeIssue
 	FString Category;         // e.g. "memory", "style", "performance", "blueprint"
 	FString Graph;            // blueprint graph name (empty for C++ issues)
 
+	// LLM pivot — issues come pre-enriched by the core's enrich_issue() helper
+	// which reads the rule's docstring + RULE_NAMES table. The customer-facing
+	// UI shows RuleName instead of RuleId; RuleExplanation is forwarded to
+	// /agent/explain so the LLM has well-grounded material to paraphrase.
+	FString RuleName;         // human-readable label, e.g. "GetWorld without null-check"
+	FString RuleExplanation;  // 2-4 sentence rationale extracted from the rule docstring
+
 	// Full source file content — used by the tree-sitter fix validator to verify
 	// that an applied change does not break the AST without re-reading from disk.
 	FString FileContent;
@@ -72,6 +79,11 @@ struct FShintValidateResult
 	// Slice B: Quality Score overall echoed by /validate/project and /validate/blueprints.
 	// -1.f = not present (older server, free SKU, or fix endpoint).
 	float   QualityScoreOverall = -1.f;
+
+	// Top-level summary.tier string ("free" | "indie") echoed by every /validate
+	// response. Used by the panel to hide the per-issue Explain button on Free
+	// instead of waiting for a 403 mid-click.
+	FString Tier;
 };
 DECLARE_DELEGATE_OneParam(FOnShintValidateComplete, const FShintValidateResult&);
 
@@ -241,44 +253,29 @@ DECLARE_DELEGATE_OneParam(FOnShintAgentPlanComplete, const FShintAgentPlanResult
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sprint C — POST /agent/review (SSE streaming, Indie tier)
+// LLM pivot — POST /agent/explain (single request/response, Indie tier)
 //
-// The endpoint isn't merged to core/main yet (lives in Genesis's `develop`
-// branch). This block stays in the public API as a forward-compatible
-// contract so the panel can wire its UI before the core lands. The plugin
-// invokes RequestAgentReview() and gets typed callbacks for each SSE event
-// kind — thinking tokens, tool calls, tool results, final answer.
+// Replaces the previous /agent/review SSE flow: the core team confirmed that
+// DeepSeek 1.3B Q4 cannot reliably emit JSON tool-call protocols, so the
+// agent-with-tools pipeline was scrapped in favour of a single-shot
+// explainer. One HTTP call carrying one already-enriched issue, one text
+// response. Latency 30-45s on CPU; the customer dialog shows a spinner and
+// rotating status text instead of streaming chunks.
 //
-// Until the endpoint exists in the deployed core, the implementation
-// short-circuits: it reports a "not available" event via OnDone with
-// bSuccess=false and a hint pointing the user at the next core release.
-// When Genesis merges Fase 4, only the .cpp body changes; the plugin UI is
-// untouched.
+// Tier gating: Free clients get 403. The panel hides the "Explain" button
+// when LastCodeResult.Tier == "free" so the user never sees the 403.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** One SSE event from /agent/review. Mirrors the documented event kinds:
- *  - "thinking"     → LLM tokens streamed mid-reasoning
- *  - "tool_call"    → "I will call analyze_cpp_source(…)"
- *  - "tool_result"  → result of the tool invocation
- *  - "done"         → final answer (also emitted on graceful failures)
- */
-struct FShintAgentReviewEvent
+struct FShintAgentExplainResponse
 {
-	FString Kind;        // see comment above
-	FString Payload;     // raw text for "thinking" / "done"; JSON for tools
-	FString ToolName;    // populated when Kind == "tool_call" / "tool_result"
+	bool    bSuccess          = false;
+	FString Explanation;            // LLM's 2-4 sentence answer (success path)
+	float   GenerationSeconds = 0.f; // wall-clock the server spent generating
+	FString Tier;                   // "free" → 403, "indie" → ok
+	FString ErrorMessage;           // populated when bSuccess == false
 };
 
-struct FShintAgentReviewResult
-{
-	bool    bSuccess = false;
-	FString ErrorMessage;
-	FString Tier;          // "free" → 403, "indie" → ok
-	FString FinalAnswer;   // == last "done" event payload when bSuccess
-};
-
-DECLARE_DELEGATE_OneParam(FOnShintAgentReviewEvent,    const FShintAgentReviewEvent&);
-DECLARE_DELEGATE_OneParam(FOnShintAgentReviewComplete, const FShintAgentReviewResult&);
+DECLARE_DELEGATE_OneParam(FOnShintAgentExplainComplete, const FShintAgentExplainResponse&);
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -321,7 +318,8 @@ struct FShintCoreConfig
 	FString ProjectId       = TEXT("");
 
 	// External web dashboard (app.shinttools.io or emergent)
-	FString ApiKey          = TEXT("");
+	FString ApiKeyDashboard          = TEXT("");
+	FString ApiKeyMongo    = TEXT("");
 	FString DashboardUrl    = TEXT("https://app.shinttools.io");
 
 	FString GetBaseUrl() const
@@ -341,7 +339,7 @@ struct FShintCoreConfig
 
 	bool HasExternalDashboard() const
 	{
-		return !ApiKey.IsEmpty() && !DashboardUrl.IsEmpty() && !ProjectId.IsEmpty();
+		return !ApiKeyDashboard.IsEmpty() && !ApiKeyMongo.IsEmpty() && !DashboardUrl.IsEmpty() && !ProjectId.IsEmpty();
 	}
 };
 
@@ -428,20 +426,22 @@ public:
 	void RequestAgentPlan(const FShintValidateResult& Source,
 	                      FOnShintAgentPlanComplete OnComplete);
 
-	/** Sprint C / Fase 4 stub — POST /agent/review (SSE).
+	/** LLM pivot — POST /agent/explain.
 	 *
-	 *  When Genesis merges the SSE endpoint to core/main, this routes through
-	 *  HTTP to /agent/review and demultiplexes the stream into typed events.
-	 *  Until then, the implementation immediately invokes OnDone with
-	 *  bSuccess=false and an informational ErrorMessage so the panel can show
-	 *  a "Coming in next core release" toast without a network round-trip.
+	 *  Sends one already-enriched issue (rule_name + rule_explanation come
+	 *  from the validate response, the panel does not synthesise them) to
+	 *  the explainer endpoint and parses the JSON reply into
+	 *  FShintAgentExplainResponse. The server takes 30-45 seconds to answer
+	 *  on CPU; the panel must show a spinner with rotating status text.
 	 *
-	 *  OnEvent fires per SSE message (thinking / tool_call / tool_result).
-	 *  OnDone fires once when the agent finishes, errors out, or falls back.
+	 *  Failure paths surface through OnComplete with bSuccess=false:
+	 *    HTTP 403   → Tier="free", upgrade hint in ErrorMessage
+	 *    HTTP 404   → "core too old" hint
+	 *    LLM unavail→ server returns success=false with its own message
+	 *    Network    → generic transport error
 	 */
-	void RequestAgentReview(const FShintValidateResult& Source,
-	                        FOnShintAgentReviewEvent    OnEvent,
-	                        FOnShintAgentReviewComplete OnDone);
+	void RequestExplainIssue(const FShintCodeIssue&      Issue,
+	                         FOnShintAgentExplainComplete OnComplete);
 
 	// ── Generic ───────────────────────────────────────────────────────────────
 	void SendRequest(const FString& FullUrl, EShintHttpMethod Method,
