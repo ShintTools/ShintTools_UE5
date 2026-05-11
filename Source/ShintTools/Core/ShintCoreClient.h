@@ -84,6 +84,17 @@ struct FShintValidateResult
 	// response. Used by the panel to hide the per-issue Explain button on Free
 	// instead of waiting for a 403 mid-click.
 	FString Tier;
+
+	// ── Free-tier cap metadata ────────────────────────────────────────────────
+	// Server-side fields advertising whether the request hit a tier limit.
+	// Read by SShintToolsPanel to render an upgrade banner above the issue
+	// list ("Scanned 40 of 96 rules — upgrade to Indie for full coverage").
+	// Source of truth lives in core summary; signed in Phase A so clients
+	// cannot fake limit_applied=false to disguise a Free scan.
+	bool    bLimitApplied   = false;
+	FString LimitKind;          // "rules" | "assets"
+	int32   LimitValue      = 0; // rules / assets actually applied
+	int32   TotalAvailable  = 0; // full catalog size on the server
 };
 DECLARE_DELEGATE_OneParam(FOnShintValidateComplete, const FShintValidateResult&);
 
@@ -159,6 +170,14 @@ struct FShintAssetScanResult
 	// Subscription tier the server resolved this request to ("free" | "indie").
 	// Empty = not parsed (older server build). Populated from summary.tier.
 	FString Tier;
+
+	// Free-tier cap metadata. Mirrors FShintValidateResult — the panel uses
+	// the same banner widget for both Code Validator and Asset Naming Bot.
+	bool    bLimitApplied  = false;
+	FString LimitKind;          // "assets" on this endpoint
+	int32   LimitValue     = 0; // assets actually scanned (post-cap)
+	int32   TotalAvailable = 0; // assets discovered before the cap
+
 	TArray<FShintAssetIssue> Issues;
 };
 DECLARE_DELEGATE_OneParam(FOnShintAssetScanComplete, const FShintAssetScanResult&);

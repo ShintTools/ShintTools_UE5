@@ -32,6 +32,7 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SComboButton.h"
+#include "Widgets/Input/SHyperlink.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -1027,6 +1028,54 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 	TSharedRef<SWidget> ListArea =
 		SNew(SVerticalBox)
 
+		// Free-tier cap banner — visible when the server reports the scan
+		// hit a tier limit (e.g. 40 of 96 rules). Server is the source of
+		// truth via summary.limit_applied; will be inside a signed payload
+		// in Phase A so the client can't fake "no cap".
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f)
+		[
+			SNew(SBorder)
+			.Visibility_Lambda([this]() {
+				return LastCodeResult.bLimitApplied
+					? EVisibility::Visible : EVisibility::Collapsed;
+			})
+			.BorderImage(ST4::Outline(C_Surface(), C_Border()))
+			.Padding(FMargin(12.f, 8.f))
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f,0.f,8.f,0.f)
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString(TEXT("⚠")))
+					.Font(F_Label())
+					.ColorAndOpacity(FSlateColor(FLinearColor(0.95f, 0.65f, 0.20f)))
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.AutoWrapText(true)
+					.Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_White()))
+					.Text_Lambda([this]() {
+						return FText::FromString(FString::Printf(
+							TEXT("Free tier: %d of %d %s applied. Upgrade to Indie for full coverage."),
+							LastCodeResult.LimitValue,
+							LastCodeResult.TotalAvailable,
+							*LastCodeResult.LimitKind));
+					})
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.f,0.f,0.f,0.f)
+				[
+					SNew(SHyperlink)
+					.Text(LOCTEXT("CVUpgrade", "Upgrade"))
+					.OnNavigate_Lambda([]() {
+						FPlatformProcess::LaunchURL(
+							TEXT("https://shint.tools/pricing"), nullptr, nullptr);
+					})
+				]
+			]
+		]
+
 		// Filter + select toolbar
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f) [ BuildCodeFilterBar() ]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f) [ Divider() ]
@@ -1452,6 +1501,53 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 
 	TSharedRef<SWidget> ListArea =
 		SNew(SVerticalBox)
+
+		// Free-tier cap banner — same widget pattern as the Code Validator
+		// destination. Visible when summary.limit_applied=true on /assets/scan
+		// (Free tier scans are always capped at 500 assets).
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f)
+		[
+			SNew(SBorder)
+			.Visibility_Lambda([this]() {
+				return LastAssetResult.bLimitApplied
+					? EVisibility::Visible : EVisibility::Collapsed;
+			})
+			.BorderImage(ST4::Outline(C_Surface(), C_Border()))
+			.Padding(FMargin(12.f, 8.f))
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f,0.f,8.f,0.f)
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString(TEXT("⚠")))
+					.Font(F_Label())
+					.ColorAndOpacity(FSlateColor(FLinearColor(0.95f, 0.65f, 0.20f)))
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.AutoWrapText(true)
+					.Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_White()))
+					.Text_Lambda([this]() {
+						return FText::FromString(FString::Printf(
+							TEXT("Free tier: scanned %d of %d assets. Upgrade to Indie for full coverage."),
+							LastAssetResult.LimitValue,
+							LastAssetResult.TotalAvailable));
+					})
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.f,0.f,0.f,0.f)
+				[
+					SNew(SHyperlink)
+					.Text(LOCTEXT("ANBUpgrade", "Upgrade"))
+					.OnNavigate_Lambda([]() {
+						FPlatformProcess::LaunchURL(
+							TEXT("https://shint.tools/pricing"), nullptr, nullptr);
+					})
+				]
+			]
+		]
+
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f)
 		[
 			SNew(SHorizontalBox)

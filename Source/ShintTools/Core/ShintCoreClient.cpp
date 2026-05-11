@@ -1872,8 +1872,18 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 		(*Sum)->TryGetNumberField(TEXT("warnings"),      R.TotalWarnings);
 		(*Sum)->TryGetNumberField(TEXT("files_scanned"), R.FilesScanned);
 
-		UE_LOG(LogShintTools, Log, TEXT("ParseValidate: summary total=%d errors=%d warnings=%d files=%d"),
-			R.TotalIssues, R.TotalErrors, R.TotalWarnings, R.FilesScanned);
+		// Free-tier cap metadata. Server is the single source of truth for
+		// "did this scan hit a tier limit". Will be inside a signed payload
+		// once Phase A ships, so the client cannot lie to itself by editing
+		// this struct — the verifier rejects unsigned/tampered responses.
+		(*Sum)->TryGetBoolField  (TEXT("limit_applied"),   R.bLimitApplied);
+		(*Sum)->TryGetStringField(TEXT("limit_kind"),      R.LimitKind);
+		(*Sum)->TryGetNumberField(TEXT("limit_value"),     R.LimitValue);
+		(*Sum)->TryGetNumberField(TEXT("total_available"), R.TotalAvailable);
+
+		UE_LOG(LogShintTools, Log, TEXT("ParseValidate: summary total=%d errors=%d warnings=%d files=%d (limit_applied=%d %s %d/%d)"),
+			R.TotalIssues, R.TotalErrors, R.TotalWarnings, R.FilesScanned,
+			R.bLimitApplied ? 1 : 0, *R.LimitKind, R.LimitValue, R.TotalAvailable);
 	}
 
 	// Slice B — top-level "quality_score" echo (overall, 0-100). Optional.
@@ -1971,6 +1981,22 @@ FShintAssetScanResult FShintCoreClient::ParseAssetScanResponse(const FShintReque
 		(*Sum)->TryGetNumberField(TEXT("invalid_assets"),     R.InvalidAssets);
 		(*Sum)->TryGetNumberField(TEXT("scan_time_seconds"),  R.ScanTimeSeconds);
 		(*Sum)->TryGetStringField(TEXT("tier"),               R.Tier);
+
+		// Free-tier cap metadata (canonical fields). Older server builds may
+		// only emit `assets_capped` + `total_assets`; we tolerate both shapes.
+		(*Sum)->TryGetBoolField  (TEXT("limit_applied"),   R.bLimitApplied);
+		(*Sum)->TryGetStringField(TEXT("limit_kind"),      R.LimitKind);
+		(*Sum)->TryGetNumberField(TEXT("limit_value"),     R.LimitValue);
+		(*Sum)->TryGetNumberField(TEXT("total_available"), R.TotalAvailable);
+		if (R.LimitKind.IsEmpty() && R.Tier.Equals(TEXT("free"), ESearchCase::IgnoreCase))
+		{
+			// Fallback for older /assets/scan responses without canonical fields.
+			bool bLegacyCapped = false;
+			(*Sum)->TryGetBoolField(TEXT("assets_capped"), bLegacyCapped);
+			R.bLimitApplied  = bLegacyCapped;
+			R.LimitKind      = TEXT("assets");
+			R.TotalAvailable = R.TotalAssets;
+		}
 	}
 
 	// Try multiple possible array field names the server may return
