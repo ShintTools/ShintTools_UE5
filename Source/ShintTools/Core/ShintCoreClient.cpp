@@ -421,13 +421,34 @@ void FShintCoreClient::ValidateBlueprints(
 				}
 
 				// ── Disconnected node detection ──────────────────────────────
-				bool bHasAnyConnection = false;
-				for (const UEdGraphPin* Pin : Node->Pins)
+				// Event / function-entry / function-result nodes are
+				// graph roots: an empty BeginPlay or a function with no
+				// body has every pin unconnected by definition and is
+				// NOT a "disconnected orphan node" — flagging them
+				// drowned BPM002 in false positives. Skip them here so
+				// only true unreachable nodes count towards the stat.
+				const bool bIsGraphRoot =
+					ClassName.Contains(TEXT("K2Node_Event")) ||
+					ClassName.Contains(TEXT("K2Node_CustomEvent")) ||
+					ClassName.Contains(TEXT("K2Node_FunctionEntry")) ||
+					ClassName.Contains(TEXT("K2Node_FunctionResult")) ||
+					ClassName.Contains(TEXT("K2Node_Tunnel")) ||
+					ClassName.Contains(TEXT("Comment"));
+
+				if (!bIsGraphRoot)
 				{
-					if (Pin && Pin->LinkedTo.Num() > 0) { bHasAnyConnection = true; break; }
+					bool bHasAnyConnection = false;
+					for (const UEdGraphPin* Pin : Node->Pins)
+					{
+						if (Pin && Pin->LinkedTo.Num() > 0)
+						{
+							bHasAnyConnection = true;
+							break;
+						}
+					}
+					if (!bHasAnyConnection && Node->Pins.Num() > 0)
+						++GraphDisconnected;
 				}
-				if (!bHasAnyConnection && Node->Pins.Num() > 0 && !ClassName.Contains(TEXT("Comment")))
-					++GraphDisconnected;
 
 				NodeTypeCounts.FindOrAdd(NodeType)++;
 			}
