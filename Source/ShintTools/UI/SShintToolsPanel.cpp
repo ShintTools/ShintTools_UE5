@@ -1501,7 +1501,8 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 
 		// Free-tier cap banner — same widget pattern as the Code Validator
 		// destination. Visible when summary.limit_applied=true on /assets/scan
-		// (Free tier scans are always capped at 500 assets).
+		// (Free tier list is always capped at 500 issues; see
+		// PopulateAssetIssueList for the row-level cap).
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f)
 		[
 			SNew(SBorder)
@@ -1527,10 +1528,15 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 					.Font(F_Small())
 					.ColorAndOpacity(FSlateColor(C_White()))
 					.Text_Lambda([this]() {
+						// Numerator: rows actually loaded into the backing
+						// store after the free-tier issue cap. Denominator:
+						// total issues the server reported pre-cap. They
+						// match when the project produces ≤ cap issues.
+						const int32 Shown = AllAssetItems.Num();
 						return FText::FromString(FString::Printf(
-							TEXT("Free tier: scanned %d of %d assets. Upgrade to Indie for full coverage."),
-							LastAssetResult.LimitValue,
-							LastAssetResult.TotalAvailable));
+							TEXT("Free tier: %d of %d issues. Upgrade to Indie for full coverage."),
+							Shown,
+							LastAssetResult.InvalidAssets));
 					})
 				]
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.f,0.f,0.f,0.f)
@@ -3124,26 +3130,22 @@ void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Resul
 	AllAssetItems.Reset();
 	AllAssetItems.Reserve(Result.Issues.Num());
 
-	// Free-tier display cap. Server caps the *scan* at 500 asset records but
-	// each asset can fire several rules, so issue rows can outnumber assets.
-	// Cap by unique AssetPath so AssetTotal_Label honours the 500-asset
-	// promise without dropping the second / third issue on the same asset.
-	// Only apply when the server reports tier="free"; Indie returns the full
-	// set untouched.
-	constexpr int32 MaxUniqueAssets = 500;
+	// Free-tier display cap. The free-tier promise is "show up to 500 issues
+	// total". Server caps the SCAN at 500 assets to bound work, but each
+	// asset can fire several rules — so the response can carry many more
+	// than 500 issue rows. Cap the DISPLAYED rows so the list never exceeds
+	// the advertised limit and the banner count stays truthful.
+	// Only apply when the server reports tier="free"; Indie returns the
+	// full set untouched.
+	constexpr int32 FreeTierIssueCap = 500;
 	const bool bApplyFreeCap = (Result.Tier == TEXT("free"));
-	TSet<FString> SeenAssetPaths;
-	if (bApplyFreeCap) SeenAssetPaths.Reserve(MaxUniqueAssets);
 
 	for (int32 i = 0; i < Result.Issues.Num(); ++i)
 	{
-		const FShintAssetIssue& Src = Result.Issues[i];
-		if (bApplyFreeCap && !SeenAssetPaths.Contains(Src.AssetPath))
-		{
-			if (SeenAssetPaths.Num() >= MaxUniqueAssets) continue;
-			SeenAssetPaths.Add(Src.AssetPath);
-		}
+		if (bApplyFreeCap && AllAssetItems.Num() >= FreeTierIssueCap)
+			break;
 
+		const FShintAssetIssue& Src = Result.Issues[i];
 		FShintAssetItemPtr Item = MakeShared<FShintAssetItem>();
 		Item->AssetPath    = Src.AssetPath;
 		Item->CurrentName  = Src.CurrentName;
