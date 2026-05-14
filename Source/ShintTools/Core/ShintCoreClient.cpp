@@ -2029,7 +2029,12 @@ FShintAssetScanResult FShintCoreClient::ParseAssetScanResponse(const FShintReque
 			// Try both possible field names for current name
 			if (!(*O)->TryGetStringField(TEXT("current_name"), Issue.CurrentName))
 				(*O)->TryGetStringField(TEXT("name"), Issue.CurrentName);
-			(*O)->TryGetStringField(TEXT("suggested_name"), Issue.SuggestedName);
+			// Core 5ee4688+ emits `fix_suggestion` (aligned with the rest of
+			// the validate-issue schema); older builds used `suggested_name`.
+			// Accept both so the rename arrow in the row renders the actual
+			// target name instead of an empty string.
+			if (!(*O)->TryGetStringField(TEXT("fix_suggestion"), Issue.SuggestedName))
+				(*O)->TryGetStringField(TEXT("suggested_name"), Issue.SuggestedName);
 			// Try both possible field names for reason
 			if (!(*O)->TryGetStringField(TEXT("reason"), Issue.Reason))
 				(*O)->TryGetStringField(TEXT("message"), Issue.Reason);
