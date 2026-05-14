@@ -329,10 +329,9 @@ private:
 	TSharedPtr<STextBlock> AssetEmptyText;
 	int32                  AssetFixesApplied = 0;
 
-	// Config field widgets
-	TSharedPtr<SEditableTextBox> ProjectIdField;
-	TSharedPtr<SEditableTextBox> ApiKeyDashboardField;
-	TSharedPtr<SEditableTextBox> ApiKeyMongoField;
+	// Config field widgets. The ProjectId / ApiKeyMongo / ApiKeyDashboard
+	// fields were removed in v1.3 — those values come from the Launcher
+	// via shinttools.config.json and are no longer user-editable here.
 	TSharedPtr<SEditableTextBox> DashboardUrlField;
 
 	// ── UI-REDESIGN: navigation state ────────────────────────────────────────

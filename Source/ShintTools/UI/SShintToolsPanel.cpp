@@ -528,21 +528,17 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 				SNew(STextBlock).Text(LOCTEXT("CfgTitle","PROJECT CONFIG"))
 				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
 			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,6.f)
-			[
-				ConfigRow(LOCTEXT("CfgProjId","Project ID"), ProjectIdField,
-					Cfg.ProjectId, LOCTEXT("CfgProjIdHint","proj_..."))
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,6.f)
-			[
-				ConfigRow(LOCTEXT("CfgApiKeyMongo","API Key Mongo"), ApiKeyMongoField,
-					Cfg.ApiKeyMongo, LOCTEXT("CfgApiKeyHint","sk...."))
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,6.f)
-			[
-				ConfigRow(LOCTEXT("CfgApiKeyDashboard","API Key Dashboard"), ApiKeyDashboardField,
-					Cfg.ApiKeyDashboard, LOCTEXT("CfgApiKeyHint","shint_..."))
-			]
+			// Project ID, API Key Mongo and API Key Dashboard fields have
+			// been removed from the panel in v1.3 — they are managed by the
+			// Launcher (it writes them into shinttools.config.json after
+			// the user signs in). Showing them here let curious users edit
+			// values they shouldn't touch, and inviting an Indie user to
+			// paste their license_key into a panel is a confusing flow now
+			// that the Launcher handles activation automatically.
+			//
+			// The struct fields (Cfg.ProjectId / Cfg.ApiKeyMongo /
+			// Cfg.ApiKeyDashboard) still exist and are loaded from JSON —
+			// the runtime contract is unchanged.
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				ConfigRow(LOCTEXT("CfgDashUrl","Dashboard URL"), DashboardUrlField,
@@ -557,8 +553,9 @@ void SShintToolsPanel::SaveConfigOverrides()
 
 	FShintCoreConfig& Cfg = CoreClient->GetConfigMutable();
 
-	if (ProjectIdField.IsValid())    Cfg.ProjectId    = ProjectIdField->GetText().ToString();
-	if (ApiKeyDashboardField.IsValid())       Cfg.ApiKeyDashboard       = ApiKeyDashboardField->GetText().ToString();
+	// Only the Dashboard URL is editable from the panel now — see the
+	// removal note above. The other fields stay populated from the
+	// shinttools.config.json that the Launcher writes after sign-in.
 	if (DashboardUrlField.IsValid()) Cfg.DashboardUrl = DashboardUrlField->GetText().ToString();
 
 	CoreClient->SaveConfig();
