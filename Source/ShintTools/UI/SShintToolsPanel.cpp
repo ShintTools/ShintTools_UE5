@@ -1700,20 +1700,13 @@ FReply SShintToolsPanel::OnCheckConnectionClicked()
 
 FReply SShintToolsPanel::OnScanProjectClicked()
 {
-	// ── All-clear guard ───────────────────────────────────────────────────────
-	// If every issue found in the previous scan has already been fixed this
-	// session, skip the server round-trip and show an informational message.
-	// Clearing AppliedFixFingerprints means the *next* click triggers a real scan.
-	if (AllCodeItems.IsEmpty() && !AppliedFixFingerprints.IsEmpty())
-	{
-		AppliedFixFingerprints.Empty();
-		if (CodeEmptyText.IsValid())
-			CodeEmptyText->SetText(LOCTEXT("CVAllFixed",
-				"✓  All issues resolved — click 'Scan' again to do a full re-scan."));
-		if (CodeEmptyState.IsValid())
-			CodeEmptyState->SetVisibility(EVisibility::Visible);
-		return FReply::Handled();
-	}
+	// Bug #35: the previous "all-clear guard" early-returned without hitting
+	// the server, so right after applying every auto-fix the user's first
+	// click on Scan only got the "click Scan again" hint — they read it as
+	// the server not responding. We now always do the real scan; if the
+	// server confirms 0 issues, PopulateCodeIssueList renders the empty
+	// state with the all-resolved message naturally.
+	AppliedFixFingerprints.Empty();
 
 	++ScanGeneration;
 	bBlueprintScanActive = false;   // full source scan — no BP-only filter
@@ -2510,7 +2503,13 @@ void SShintToolsPanel::OnHealthCheckComplete(const FShintRequestResult& Result)
 
 void SShintToolsPanel::OnProjectValidateComplete(const FShintValidateResult& Result)
 {
-	HandleValidateResult(Result, /*bMerge=*/false, /*bIsBPScan=*/false);
+	// Bug #36: this used to call HandleValidateResult with bMerge=false, which
+	// wiped LastCodeResult on every C++ scan — so doing "Scan All BP" then
+	// "Scan All Source" lost the BP findings and the user saw only what the
+	// C++ scan happened to return (often a near-empty list). Switching to
+	// bMerge=true makes the merge-by-prefix logic in HandleValidateResult
+	// keep BP issues while replacing only the C++ half of the list.
+	HandleValidateResult(Result, /*bMerge=*/true, /*bIsBPScan=*/false);
 }
 
 void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& Result)
@@ -3605,14 +3604,35 @@ void SShintToolsPanel::ShowAgentPlanDialog(const FShintAgentPlanResult& Result)
 {
 	TSharedRef<SVerticalBox> Body = SNew(SVerticalBox);
 
+	// The server's summary string is shape "3 critical · 2 high · 1 low" —
+	// translate the bucket words client-side to keep the modal in Spanish.
+	FString LocalSummary = Result.Summary;
+	LocalSummary = LocalSummary.Replace(TEXT("critical"), TEXT("críticas"));
+	LocalSummary = LocalSummary.Replace(TEXT("high"),     TEXT("altas"));
+	LocalSummary = LocalSummary.Replace(TEXT("medium"),   TEXT("medias"));
+	LocalSummary = LocalSummary.Replace(TEXT("low"),      TEXT("bajas"));
+
 	Body->AddSlot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
 	[
 		SNew(STextBlock)
 		.Text(FText::FromString(FString::Printf(
-			TEXT("%d pasos · %s"), Result.Steps.Num(), *Result.Summary)))
+			TEXT("%d pasos · %s"), Result.Steps.Num(), *LocalSummary)))
 		.Font(F_Label())
 		.ColorAndOpacity(FSlateColor(C_DimGray()))
 	];
+
+	// Bug #41: the priority badge used to render the server's raw english
+	// label (CRITICAL / HIGH / MEDIUM / LOW) while the rationales next to
+	// it came back in Spanish — that mismatch is what the user saw as
+	// "Auto-Fix Plan in English". Translate client-side so the whole
+	// modal speaks one language.
+	auto LocalizePriority = [](const FString& Raw) -> FString {
+		if (Raw == TEXT("critical")) return TEXT("CRÍTICA");
+		if (Raw == TEXT("high"))     return TEXT("ALTA");
+		if (Raw == TEXT("medium"))   return TEXT("MEDIA");
+		if (Raw == TEXT("low"))      return TEXT("BAJA");
+		return Raw.ToUpper();
+	};
 
 	for (const FShintAgentPlanStep& S : Result.Steps)
 	{
@@ -3634,7 +3654,8 @@ void SShintToolsPanel::ShowAgentPlanDialog(const FShintAgentPlanResult& Result)
 					[
 						SNew(STextBlock)
 						.Text(FText::FromString(FString::Printf(
-							TEXT("%d. [%s] %s"), S.Order, *S.Priority.ToUpper(), *S.RuleId)))
+							TEXT("%d. [%s] %s"),
+							S.Order, *LocalizePriority(S.Priority), *S.RuleId)))
 						.Font(F_Label())
 						.ColorAndOpacity(FSlateColor(PriorityColor))
 					]
