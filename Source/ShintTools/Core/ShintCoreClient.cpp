@@ -1423,7 +1423,7 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 	Body->SetStringField(TEXT("api_key"),      Config.ApiKeyDashboard);
 	Body->SetArrayField (TEXT("files"),        FilesArr);
 
-	const FString Url = Config.DashboardUrl / TEXT("api/code-validator/analyze");
+	const FString Url = Config.DashboardUrl / TEXT("api/public/code-validator/analyze");
 	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d files to dashboard at %s"), FilesArr.Num(), *Url);
 
 	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Body),
@@ -1746,7 +1746,7 @@ void FShintCoreClient::SendAssetNamingToDashboard(
 	Body->SetStringField(TEXT("api_key"),      Config.ApiKeyDashboard);
 	Body->SetArrayField (TEXT("items"),        ItemsArr);
 
-	const FString Url = Config.DashboardUrl / TEXT("api/naming-bot/analyze");
+	const FString Url = Config.DashboardUrl / TEXT("api/public/naming-bot/analyze");
 	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d asset items to dashboard at %s"), ItemsArr.Num(), *Url);
 
 	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Body),

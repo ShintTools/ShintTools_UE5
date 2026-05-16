@@ -398,7 +398,7 @@ public:
 	// ── Code Validator — external web dashboard ───────────────────────────────
 	/**
 	 * Sends the full project scan to the web dashboard.
-	 * Payload: POST {DashboardUrl}/api/code-validator/analyze
+	 * Payload: POST {DashboardUrl}/api/public/code-validator/analyze
 	 * Body: { project_id, project_name, api_key, files:[{name,path,type,content,lines_count}] }
 	 */
 	void SendCodeValidatorToDashboard(const FShintValidateResult& LastResult,
@@ -425,7 +425,7 @@ public:
 	// ── Asset Naming Bot — external web dashboard ─────────────────────────────
 	/**
 	 * Sends naming violations to the web dashboard.
-	 * Payload: POST {DashboardUrl}/api/naming-bot/analyze
+	 * Payload: POST {DashboardUrl}/api/public/naming-bot/analyze
 	 * Body: { project_id, project_name, api_key, items:[{name,path,type,category}] }
 	 */
 	void SendAssetNamingToDashboard(const FShintAssetScanResult& LastResult,
