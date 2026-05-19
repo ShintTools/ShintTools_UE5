@@ -11,6 +11,7 @@ public class ShintTools : ModuleRules
 		PrivateIncludePaths.AddRange(new string[]
 		{
 			"ShintTools/Core",
+			"ShintTools/Transport",
 			"ShintTools/UI",
 			"ShintTools/UI/Shared",
 			"ShintTools/Utils",
