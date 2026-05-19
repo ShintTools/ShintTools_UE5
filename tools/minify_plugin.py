@@ -53,9 +53,84 @@ _LINE_COMMENT  = re.compile(r"//.*?$", re.MULTILINE)
 _MULTI_BLANK = re.compile(r"\n[ \t]*\n[ \t]*\n+")
 
 
-def strip_source(text: str) -> str:
+# Doxygen tags inside surviving doc comments — strip @brief, @param, @return,
+# @note, etc., that occasionally slip through when an author used a /** */
+# block that the BLOCK_COMMENT regex catches but a stray single-line @brief
+# // remained.
+_DOXYGEN_LINE = re.compile(
+    r"^\s*//+\s*@(brief|param|return|returns|note|see|throws?|deprecated)\b.*$",
+    re.MULTILINE,
+)
+
+# Static file-local function declarations in .cpp files. These are NOT
+# reflected (UFUNCTION/UCLASS/UPROPERTY are mutually exclusive with `static`
+# at file scope) so renaming them is safe. Capture the identifier so we can
+# rename it consistently across the file, including its call sites.
+_STATIC_FUNC = re.compile(
+    r"^\s*static\s+[\w:<>&*\s]+?\b([A-Z_][A-Za-z0-9_]{3,})\s*\(",
+    re.MULTILINE,
+)
+
+# Reflection macros that must never be touched — these symbols are looked
+# up by name from UE5's reflection registry. If we rename a function that
+# the engine resolves via reflection, Blueprints break silently at runtime.
+_REFLECTED_TOKEN_GUARD = re.compile(
+    r"\b(UCLASS|UFUNCTION|UPROPERTY|USTRUCT|UENUM|GENERATED_BODY|"
+    r"GENERATED_UCLASS_BODY|UDELEGATE)\s*\("
+)
+
+
+def _rename_static_funcs(text: str, file_path: Path) -> str:
+    """Rename `static T Foo(` declarations in .cpp files to opaque names.
+
+    Skipped for headers (`.h`/`.hpp`) because callers across translation
+    units may reach the symbol via the header forward declaration even
+    when marked static — better to leave it alone than risk a link
+    breakage. Skipped when the surrounding text contains any reflection
+    macro within 200 chars before the match (defence in depth: the
+    static qualifier already makes reflection impossible, but Epic's
+    own samples occasionally combine the two in weird ways).
+    """
+    if file_path.suffix.lower() not in {".cpp", ".cc"}:
+        return text
+
+    renames: dict[str, str] = {}
+    counter = [0]
+
+    def _next_name() -> str:
+        counter[0] += 1
+        return f"_st{counter[0]}"
+
+    def _replace_decl(match: re.Match) -> str:
+        name = match.group(1)
+        # Refuse rename if the 200 chars before the match contain a
+        # reflection macro — be paranoid.
+        window_start = max(0, match.start() - 200)
+        window = text[window_start:match.start()]
+        if _REFLECTED_TOKEN_GUARD.search(window):
+            return match.group(0)
+        if name not in renames:
+            renames[name] = _next_name()
+        return match.group(0).replace(name, renames[name], 1)
+
+    new_text = _STATIC_FUNC.sub(_replace_decl, text)
+    if renames:
+        # Replace call sites too. Anchored on word boundaries so we never
+        # mangle a substring of an unrelated identifier.
+        for original, opaque in renames.items():
+            new_text = re.sub(
+                r"\b" + re.escape(original) + r"\b",
+                opaque,
+                new_text,
+            )
+    return new_text
+
+
+def strip_source(text: str, file_path: Path) -> str:
     out = _BLOCK_COMMENT.sub("", text)
     out = _LINE_COMMENT.sub("", out)
+    out = _DOXYGEN_LINE.sub("", out)
+    out = _rename_static_funcs(out, file_path)
     out = _MULTI_BLANK.sub("\n\n", out)
     return out.rstrip() + "\n"
 
@@ -88,11 +163,26 @@ def process(src_root: Path, out_root: Path) -> tuple[int, int]:
         dst.parent.mkdir(parents=True, exist_ok=True)
         if should_strip(src):
             text = src.read_text(encoding="utf-8", errors="replace")
-            dst.write_text(strip_source(text), encoding="utf-8")
+            dst.write_text(strip_source(text, src), encoding="utf-8")
             stripped += 1
         else:
             shutil.copy2(src, dst)
             copied += 1
+
+    # Flip SHINT_FREE_TIER=0 -> SHINT_FREE_TIER=1 in the Build.cs of the
+    # output tree. The line lives in PublicDefinitions and our minimal
+    # textual transform is enough — we own that exact phrasing.
+    build_cs = out_root / "Source" / "ShintTools" / "ShintTools.Build.cs"
+    if build_cs.is_file():
+        contents = build_cs.read_text(encoding="utf-8")
+        flipped = contents.replace(
+            'PublicDefinitions.Add("SHINT_FREE_TIER=0");',
+            'PublicDefinitions.Add("SHINT_FREE_TIER=1");',
+        )
+        if flipped != contents:
+            build_cs.write_text(flipped, encoding="utf-8")
+            print("[minify_plugin] Flipped SHINT_FREE_TIER -> 1 in Build.cs")
+
     return stripped, copied
 
 

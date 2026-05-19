@@ -5,6 +5,7 @@
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
 #include "HttpModule.h"
+#include "Security/ShintSecurity.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HTTP primitives
@@ -343,6 +344,15 @@ struct FShintCoreConfig
 
 	FString GetBaseUrl() const
 	{
+#if SHINT_FREE_TIER
+		// Free tier: ignore any host/port override from shinttools.config.json.
+		// A customer who edits the config to point at a rogue local proxy
+		// could otherwise make the plugin believe their fake server's
+		// tier=indie response. Loopback is hardcoded; the IDE/dev only
+		// flexibility lives in paid builds.
+		return FString::Printf(TEXT("http://%s:%d"),
+			SHINT_HARDCODED_CORE_HOST, SHINT_HARDCODED_CORE_PORT);
+#else
 		FString Host = CoreHost.IsEmpty() ? TEXT("127.0.0.1") : CoreHost;
 		// Reject obvious bind-only addresses — they are valid for the server
 		// (uvicorn --host 0.0.0.0 means "listen on every interface") but they
@@ -354,6 +364,7 @@ struct FShintCoreConfig
 			Host = TEXT("127.0.0.1");
 		}
 		return FString::Printf(TEXT("http://%s:%d"), *Host, CorePort);
+#endif
 	}
 
 	bool HasExternalDashboard() const

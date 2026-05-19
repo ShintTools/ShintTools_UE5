@@ -11,11 +11,20 @@ public class ShintTools : ModuleRules
 		PrivateIncludePaths.AddRange(new string[]
 		{
 			"ShintTools/Core",
+			"ShintTools/Security",
 			"ShintTools/Transport",
 			"ShintTools/UI",
 			"ShintTools/UI/Shared",
 			"ShintTools/Utils",
 		});
+
+		// SHINT_FREE_TIER=1 builds the lockdown variant produced by
+		// tools/minify_plugin.py for distribution to Free-tier users.
+		// minify_plugin.py edits this same file to flip the define on,
+		// commits the stripped tree under payload/ShintTools_UE5_Stripped,
+		// and reverts it for the paid bundle. Default (here) is 0 so
+		// developer / Indie / Studio builds keep the relaxed defaults.
+		PublicDefinitions.Add("SHINT_FREE_TIER=0");
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
