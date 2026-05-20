@@ -6,12 +6,12 @@
 #include "Interfaces/IHttpResponse.h"
 #include "HttpModule.h"
 #include "Security/ShintSecurity.h"
+#include "Transport/ShintHttpTypes.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HTTP primitives
+// HTTP primitives — EShintHttpMethod now lives in Transport/ShintHttpTypes.h
+// so the new transport layer can share it without an ODR clash.
 // ─────────────────────────────────────────────────────────────────────────────
-
-enum class EShintHttpMethod : uint8 { GET, POST, PUT, DELETE_ };
 
 struct FShintRequestResult
 {

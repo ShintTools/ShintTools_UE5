@@ -347,6 +347,21 @@ void SShintToolsPanel::SetDestinationIndex(int32 Index)
 
 SShintToolsPanel::~SShintToolsPanel()
 {
+	// Clean up the Explain modal + its rotating-status ticker. Without this
+	// the SWindow was orphaned in FSlateApplication's window list whenever
+	// the panel was destroyed without the user clicking Close, and the
+	// ticker delegate would keep firing against a dead `this` (the ticker
+	// also previously held the last strong ref — see bug-hunt issue #5).
+	if (ExplainTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(ExplainTickerHandle);
+		ExplainTickerHandle.Reset();
+	}
+	if (ExplainWindow.IsValid())
+	{
+		ExplainWindow->RequestDestroyWindow();
+		ExplainWindow.Reset();
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3457,17 +3472,27 @@ FReply SShintToolsPanel::OnExplainIssueClicked(FShintIssueItemPtr Item)
 				[
 					SNew(SButton)
 					.ContentPadding(FMargin(20.f, 6.f))
-					.OnClicked_Lambda([this]() -> FReply
+					// WeakPtr capture: the only strong ref to this panel may
+					// be the ticker delegate created below, which `this`
+					// captures into via CreateSP. Removing it inside the
+					// lambda would otherwise drop the ref count to 0 and
+					// the next line would dereference `this->ExplainWindow`
+					// on a destroyed panel — see bug-hunt issue #5.
+					.OnClicked_Lambda(
+						[WeakThis = TWeakPtr<SShintToolsPanel>(SharedThis(this))]() -> FReply
 					{
-						if (ExplainTickerHandle.IsValid())
+						if (TSharedPtr<SShintToolsPanel> Pin = WeakThis.Pin())
 						{
-							FTSTicker::GetCoreTicker().RemoveTicker(ExplainTickerHandle);
-							ExplainTickerHandle.Reset();
-						}
-						if (ExplainWindow.IsValid())
-						{
-							ExplainWindow->RequestDestroyWindow();
-							ExplainWindow.Reset();
+							if (Pin->ExplainTickerHandle.IsValid())
+							{
+								FTSTicker::GetCoreTicker().RemoveTicker(Pin->ExplainTickerHandle);
+								Pin->ExplainTickerHandle.Reset();
+							}
+							if (Pin->ExplainWindow.IsValid())
+							{
+								Pin->ExplainWindow->RequestDestroyWindow();
+								Pin->ExplainWindow.Reset();
+							}
 						}
 						return FReply::Handled();
 					})

@@ -21,8 +21,7 @@
 #include "CoreMinimal.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
-
-enum class EShintHttpMethod : uint8 { GET, POST, PUT, DELETE_ };
+#include "ShintHttpTypes.h"  // EShintHttpMethod (shared with Core/)
 
 struct FShintHttpResult
 {
