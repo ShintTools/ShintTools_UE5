@@ -10,6 +10,14 @@ public class ShintTools : ModuleRules
 
 		PrivateIncludePaths.AddRange(new string[]
 		{
+			// Root is required so headers can use sibling-folder
+			// include paths like "Transport/FShintHttpClient.h" or
+			// "Security/ShintSecurity.h" — Sprint 1 refactor split the
+			// monolith and the new transport/security folders need to
+			// be addressable from each other, not just from their own
+			// subfolder. Without this, UAT BuildPlugin fails with
+			// `fatal error C1083: Cannot open include file: 'Transport/…'`.
+			"ShintTools",
 			"ShintTools/Core",
 			"ShintTools/Security",
 			"ShintTools/Transport",
