@@ -51,6 +51,17 @@ public:
 	/** Name of the ShintTools dockable tab */
 	static const FName ShintToolsTabName;
 
+	// Cached license status — populated at module startup by an async
+	// POST /license/status. Read with GetCachedTier() so UI code does not
+	// have to wait for the first scan to learn the customer's tier (the
+	// previous behaviour). Defaults to "free" until the round-trip
+	// resolves; widgets should refresh when ``OnLicenseResolved`` fires.
+	static FString GetCachedTier();
+
+	/** Multicast delegate fired once /license/status returns. */
+	DECLARE_MULTICAST_DELEGATE(FOnShintLicenseResolved);
+	static FOnShintLicenseResolved OnLicenseResolved;
+
 private:
 
 	/** Registers the ShintTools tab spawner with the global tab manager */
