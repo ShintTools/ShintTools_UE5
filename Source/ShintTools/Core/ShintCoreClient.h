@@ -337,10 +337,15 @@ struct FShintCoreConfig
 	FString ProjectName     = TEXT("MyGame");
 	FString ProjectId       = TEXT("");
 
-	// External web dashboard (app.shinttools.io or emergent)
-	FString ApiKeyDashboard          = TEXT("");
-	FString ApiKeyMongo    = TEXT("");
-	FString DashboardUrl    = TEXT("https://app.shinttools.io");
+	// External web dashboard. The default points at the production
+	// Lovable host the launcher's ingest paths target — see
+	// app.constants.DASHBOARD_INGEST_KEY for the matching api_key. The
+	// previous default ("https://app.shinttools.io") was a dead host
+	// that swallowed every send-to-dashboard request silently. Override
+	// from shinttools.config.json's `dashboard_url` field for staging.
+	FString ApiKeyDashboard = TEXT("");
+	FString ApiKeyMongo     = TEXT("");
+	FString DashboardUrl    = TEXT("https://shint.tools");
 
 	FString GetBaseUrl() const
 	{
