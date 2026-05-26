@@ -18,6 +18,7 @@ public class ShintTools : ModuleRules
 			// subfolder. Without this, UAT BuildPlugin fails with
 			// `fatal error C1083: Cannot open include file: 'Transport/…'`.
 			"ShintTools",
+			"ShintTools/Api",
 			"ShintTools/Core",
 			"ShintTools/Security",
 			"ShintTools/Transport",

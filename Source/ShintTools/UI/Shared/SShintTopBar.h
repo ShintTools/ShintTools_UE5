@@ -31,6 +31,7 @@ public:
 	SLATE_BEGIN_ARGS(SShintTopBar)
 		: _Title()
 		, _StatusText()
+		, _TierText()
 		, _ConnState(EShintConnState::Unknown)
 	{}
 		/** Big destination title shown left-aligned. */
@@ -38,6 +39,11 @@ public:
 
 		/** Free-form status text shown next to the connection LED. */
 		SLATE_ATTRIBUTE(FText, StatusText)
+
+		/** License tier label rendered as a pill on the right edge.
+		 *  Empty string hides the badge — useful before the /license/status
+		 *  probe at StartupModule has resolved. */
+		SLATE_ATTRIBUTE(FText, TierText)
 
 		/** Connection state — drives the LED color. */
 		SLATE_ATTRIBUTE(EShintConnState, ConnState)

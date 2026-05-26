@@ -12,6 +12,13 @@
 #include "Widgets/Docking/SDockTab.h"
 #include "Styling/AppStyle.h"
 
+#include "Api/LicenseApi.h"
+#include "Transport/FShintHttpClient.h"
+#include "Core/ShintCoreClient.h"  // for LoadConfig() — reuses the existing
+                                   // shinttools.config.json parser to source
+                                   // base_url + api_key without duplicating
+                                   // the JSON-parsing logic.
+
 // Define the log category for the entire plugin
 DEFINE_LOG_CATEGORY(LogShintTools);
 
@@ -19,6 +26,18 @@ DEFINE_LOG_CATEGORY(LogShintTools);
 
 // Static tab name identifier
 const FName FShintToolsModule::ShintToolsTabName = FName("ShintTools");
+
+// Module-wide cached license. Default "free" so anything that reads it
+// before /license/status returns gets a safe baseline. Updated on the
+// game thread by the StartupModule probe.
+static FString GCachedTier = TEXT("free");
+FShintToolsModule::FOnShintLicenseResolved
+    FShintToolsModule::OnLicenseResolved;
+
+FString FShintToolsModule::GetCachedTier()
+{
+	return GCachedTier;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IModuleInterface
@@ -28,6 +47,37 @@ void FShintToolsModule::StartupModule()
 {
 	RegisterTabSpawner();
 	ExtendLevelEditorMenu();
+
+	// Probe the tier once at startup so the License badge and Indie/
+	// Studio feature gates resolve before the user runs their first
+	// scan. Previous behaviour: the panel showed License: Free until
+	// /validate/code or /assets/scan responded, even for paid customers.
+	// The transport and the LicenseApi are leaked to the static cache
+	// on purpose — they live for the module's lifetime, no need to
+	// store them on the module instance.
+	FShintCoreClient Tmp;  // reads shinttools.config.json to get base_url
+	const FShintCoreConfig& Cfg = Tmp.GetConfig();
+	const FString BaseUrl = Cfg.GetBaseUrl();
+	const FString ApiKey  = Cfg.ApiKeyMongo;
+
+	const TSharedRef<FShintHttpClient> Transport =
+		MakeShared<FShintHttpClient>(TEXT("license-probe"));
+	TSharedRef<FShintLicenseApi> Api =
+		MakeShared<FShintLicenseApi>(Transport, BaseUrl);
+	// Keep Api alive across the async call by capturing the shared ref
+	// in the lambda below.
+	Api->RequestStatus(ApiKey, FOnShintLicenseStatusComplete::CreateLambda(
+		[Api](const FShintLicenseStatus& Status)
+		{
+			GCachedTier = Status.bSuccess && !Status.Tier.IsEmpty()
+				? Status.Tier
+				: TEXT("free");
+			UE_LOG(LogShintTools, Display,
+			       TEXT("ShintTools: license probe -> tier=%s (took %.3fs)"),
+			       *GCachedTier, Status.ElapsedSeconds);
+			OnLicenseResolved.Broadcast();
+		}));
+
 	UE_LOG(LogShintTools, Verbose, TEXT("ShintTools: Module started."));
 }
 
