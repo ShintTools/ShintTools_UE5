@@ -168,6 +168,10 @@ void FShintCoreClient::ValidateCode(
 	Body->SetStringField(TEXT("file_path"), AbsFilePath);
 	Body->SetStringField(TEXT("content"),   Content);
 	Body->SetStringField(TEXT("engine"),    Engine);
+	// api_key drives resolve_tier on the core; without it every paid
+	// user was bucketed as "free" with the limit_applied flag tripped.
+	// See ValidateBlueprints for the matching comment.
+	Body->SetStringField(TEXT("api_key"),   Config.ApiKeyMongo);
 
 	SendRequest(Config.GetBaseUrl() + TEXT("/validate/code"), EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
@@ -234,6 +238,10 @@ void FShintCoreClient::ValidateProject(
 	Body->SetStringField(TEXT("project_id"), Config.ProjectId);
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
 	Body->SetStringField(TEXT("engine"), TEXT("unreal"));
+	// api_key drives resolve_tier on /validate/project. Empty here was
+	// the source of the "api_key is EMPTY — defaulting to 'free'" log
+	// the customer hit while running a project scan with a paid license.
+	Body->SetStringField(TEXT("api_key"), Config.ApiKeyMongo);
 	Body->SetArrayField(TEXT("files"), FilesArr);
 
 	TArray<FString> CapturedFiles = AbsFiles;
@@ -553,6 +561,12 @@ void FShintCoreClient::ValidateBlueprints(
 	Body->SetStringField(TEXT("project_id"),   Config.ProjectId);
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
 	Body->SetStringField(TEXT("engine"),       TEXT("unreal"));
+	// resolve_tier on the core side looks up `api_key` against the
+	// MongoDB licenses collection — without this field every paid user
+	// resolved to "free" and the validator silently applied free-tier
+	// caps. Body uses ApiKeyMongo (the local Mongo lookup key), not
+	// the dashboard ingest key.
+	Body->SetStringField(TEXT("api_key"),      Config.ApiKeyMongo);
 	Body->SetArrayField (TEXT("files"),        FilesArr);
 
 	SendRequest(Config.GetBaseUrl() + TEXT("/validate/blueprints"), EShintHttpMethod::POST, SerializeJson(Body),
@@ -1456,6 +1470,15 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 	const FString Url = Config.DashboardUrl / TEXT("api/public/code-validator/analyze");
 	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d files to dashboard at %s"), FilesArr.Num(), *Url);
 
+	// Dashboard endpoints authenticate via Authorization: Bearer <key>.
+	// The plugin previously sent the key in the body only — that produced
+	// "Missing bearer token" / 401 on every call. The body keeps the
+	// api_key field too for backward compatibility with older lovable
+	// deployments that read it from there.
+	TMap<FString, FString> AuthHeaders;
+	AuthHeaders.Add(TEXT("Authorization"),
+		FString::Printf(TEXT("Bearer %s"), *Config.ApiKeyDashboard));
+
 	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
 			FShintWebDashboardResult R;
@@ -1494,7 +1517,8 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 				}
 			}
 			OnComplete.ExecuteIfBound(R);
-		}));
+		}),
+		AuthHeaders);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1720,6 +1744,11 @@ void FShintCoreClient::ScanAssetNaming(
 	Body->SetStringField(TEXT("project_id"),   Config.ProjectId);
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
 	Body->SetStringField(TEXT("engine"),       TEXT("unreal"));
+	// resolve_tier on /assets/scan reads this field. Without it the
+	// core defaulted to 'free' and the 500-asset cap stuck even for
+	// paid customers. Plugin sends the Mongo license key here, NOT the
+	// dashboard ingest key — they're two separate authentication paths.
+	Body->SetStringField(TEXT("api_key"),      Config.ApiKeyMongo);
 	Body->SetArrayField(TEXT("asset_paths"),   Arr);
 
 	const FString BodyStr = SerializeJson(Body);
@@ -1810,6 +1839,11 @@ void FShintCoreClient::SendAssetNamingToDashboard(
 	const FString Url = Config.DashboardUrl / TEXT("api/public/naming-bot/analyze");
 	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d asset items to dashboard at %s"), ItemsArr.Num(), *Url);
 
+	// Mirror auth contract of /code-validator/analyze — Bearer header.
+	TMap<FString, FString> AuthHeaders;
+	AuthHeaders.Add(TEXT("Authorization"),
+		FString::Printf(TEXT("Bearer %s"), *Config.ApiKeyDashboard));
+
 	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
 			FShintWebDashboardResult R;
@@ -1847,7 +1881,8 @@ void FShintCoreClient::SendAssetNamingToDashboard(
 				}
 			}
 			OnComplete.ExecuteIfBound(R);
-		}));
+		}),
+		AuthHeaders);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
