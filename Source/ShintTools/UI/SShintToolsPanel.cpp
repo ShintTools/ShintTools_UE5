@@ -241,7 +241,12 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 		case EShintConnState::Connecting:   return NSLOCTEXT("ShintPanel","Probe", "Connecting…");
 		case EShintConnState::Disconnected: return NSLOCTEXT("ShintPanel","Down",  "Core offline");
 		case EShintConnState::Unknown:
-		default:                            return NSLOCTEXT("ShintPanel","Idle",  "Idle");
+		default:
+			// Empty before the first health check resolves — the LED dot
+			// alone signals "no info yet" and the previous "Idle" label
+			// was clutter that customers found confusing (looked like
+			// the plugin was disabled).
+			return FText::GetEmpty();
 		}
 	};
 
@@ -577,6 +582,12 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 			// The struct fields (Cfg.ProjectId / Cfg.ApiKeyMongo /
 			// Cfg.ApiKeyDashboard) still exist and are loaded from JSON —
 			// the runtime contract is unchanged.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,6.f)
+			[
+				ConfigRow(LOCTEXT("CfgProjectId","Project ID"), ProjectIdField,
+					Cfg.ProjectId, LOCTEXT("CfgProjectIdHint",
+						"Identifier sent to the dashboard with every scan"))
+			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				ConfigRow(LOCTEXT("CfgDashUrl","Dashboard URL"), DashboardUrlField,
@@ -591,10 +602,12 @@ void SShintToolsPanel::SaveConfigOverrides()
 
 	FShintCoreConfig& Cfg = CoreClient->GetConfigMutable();
 
-	// Only the Dashboard URL is editable from the panel now — see the
-	// removal note above. The other fields stay populated from the
-	// shinttools.config.json that the Launcher writes after sign-in.
-	if (DashboardUrlField.IsValid()) Cfg.DashboardUrl = DashboardUrlField->GetText().ToString();
+	// Project ID + Dashboard URL are user-editable; ApiKeyMongo / ApiKey
+	// Dashboard stay launcher-managed (sign-in writes them).
+	if (ProjectIdField.IsValid())
+		Cfg.ProjectId = ProjectIdField->GetText().ToString();
+	if (DashboardUrlField.IsValid())
+		Cfg.DashboardUrl = DashboardUrlField->GetText().ToString();
 
 	CoreClient->SaveConfig();
 }
@@ -1067,12 +1080,24 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 		// hit a tier limit (e.g. 40 of 96 rules). Server is the source of
 		// truth via summary.limit_applied; will be inside a signed payload
 		// in Phase A so the client can't fake "no cap".
+		//
+		// Cross-check with the launcher's startup probe (GetCachedTier):
+		// the server occasionally resolves a freshly-activated key to
+		// "free" before the local Mongo licenses row is seeded, which
+		// previously surfaced the banner to a paid customer on every
+		// rescan until they restarted the launcher. Trust the cached
+		// tier when it disagrees — Sprint 2's /license/status is the
+		// canonical source for the customer's actual subscription.
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f)
 		[
 			SNew(SBorder)
 			.Visibility_Lambda([this]() {
-				return LastCodeResult.bLimitApplied
-					? EVisibility::Visible : EVisibility::Collapsed;
+				if (!LastCodeResult.bLimitApplied)
+					return EVisibility::Collapsed;
+				const FString Tier = FShintToolsModule::GetCachedTier().ToLower();
+				if (!Tier.IsEmpty() && Tier != TEXT("free"))
+					return EVisibility::Collapsed;
+				return EVisibility::Visible;
 			})
 			.BorderImage(ST4::Outline(C_Surface(), C_Border()))
 			.Padding(FMargin(12.f, 8.f))
@@ -1540,13 +1565,20 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 		// Free-tier cap banner — same widget pattern as the Code Validator
 		// destination. Visible when summary.limit_applied=true on /assets/scan
 		// (Free tier list is always capped at 500 issues; see
-		// PopulateAssetIssueList for the row-level cap).
+		// PopulateAssetIssueList for the row-level cap). Cross-check
+		// FShintToolsModule::GetCachedTier so paid customers don't see
+		// the banner when the server resolves a freshly-activated key
+		// to free before Mongo is seeded.
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,8.f)
 		[
 			SNew(SBorder)
 			.Visibility_Lambda([this]() {
-				return LastAssetResult.bLimitApplied
-					? EVisibility::Visible : EVisibility::Collapsed;
+				if (!LastAssetResult.bLimitApplied)
+					return EVisibility::Collapsed;
+				const FString Tier = FShintToolsModule::GetCachedTier().ToLower();
+				if (!Tier.IsEmpty() && Tier != TEXT("free"))
+					return EVisibility::Collapsed;
+				return EVisibility::Visible;
 			})
 			.BorderImage(ST4::Outline(C_Surface(), C_Border()))
 			.Padding(FMargin(12.f, 8.f))
@@ -3477,12 +3509,17 @@ FReply SShintToolsPanel::OnExplainIssueClicked(FShintIssueItemPtr Item)
 					]
 				]
 
-				// Result textbox — read-only, becomes the LLM\'s answer or
+				// Result textbox — read-only, becomes the LLM's answer or
 				// the deterministic fallback (message + fix_suggestion).
+				// AutoWrapText keeps the LLM output inside the window
+				// width — the previous behaviour rendered everything on
+				// a single long line and forced the user to scroll right
+				// (Daniel reported this as "cero responsive").
 				+ SVerticalBox::Slot().FillHeight(1.f)
 				[
 					SAssignNew(ExplainResultBox, SMultiLineEditableTextBox)
 					.IsReadOnly(true)
+					.AutoWrapText(true)
 					.AlwaysShowScrollbars(true)
 					.Font(FShintStyle::Fonts::Small())
 					.Text(FText::FromString(TEXT("")))

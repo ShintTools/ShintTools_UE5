@@ -329,9 +329,15 @@ private:
 	TSharedPtr<STextBlock> AssetEmptyText;
 	int32                  AssetFixesApplied = 0;
 
-	// Config field widgets. The ProjectId / ApiKeyMongo / ApiKeyDashboard
-	// fields were removed in v1.3 — those values come from the Launcher
-	// via shinttools.config.json and are no longer user-editable here.
+	// Config field widgets. ApiKeyMongo / ApiKeyDashboard stay launcher-
+	// managed (license sync writes them on sign-in), but ProjectId was
+	// brought back in 1.7.10 — Daniel reported users on multi-project
+	// teams couldn't redirect their plugin's dashboard payloads to the
+	// right project without manually editing shinttools.config.json.
+	// The field still defaults to whatever the launcher's config_gen
+	// derived from the project name, so the common case ("one project,
+	// don't touch") keeps zero-config.
+	TSharedPtr<SEditableTextBox> ProjectIdField;
 	TSharedPtr<SEditableTextBox> DashboardUrlField;
 
 	// ── UI-REDESIGN: navigation state ────────────────────────────────────────
