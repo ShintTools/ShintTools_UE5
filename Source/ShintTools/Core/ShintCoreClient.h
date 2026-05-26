@@ -388,7 +388,11 @@ struct FShintCoreConfig
 
 	bool HasExternalDashboard() const
 	{
-		return !ApiKeyDashboard.IsEmpty() && !ApiKeyMongo.IsEmpty() && !DashboardUrl.IsEmpty() && !ProjectId.IsEmpty();
+		// ProjectId dropped in 1.7.11 — the per-project API key (st_<hex>)
+		// identifies the project on the dashboard side, no need for a
+		// separate project_id field. ApiKeyMongo is still required for
+		// local-core authentication (resolve_tier).
+		return !ApiKeyDashboard.IsEmpty() && !ApiKeyMongo.IsEmpty() && !DashboardUrl.IsEmpty();
 	}
 };
 

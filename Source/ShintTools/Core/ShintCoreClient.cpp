@@ -73,7 +73,11 @@ bool FShintCoreClient::LoadConfig()
 	FString S;
 	if (Json->TryGetStringField(TEXT("core_host"),    S) && !S.IsEmpty()) Config.CoreHost = S;
 	if (Json->TryGetStringField(TEXT("project_name"), S)) Config.ProjectName = S;
-	if (Json->TryGetStringField(TEXT("project_id"),   S)) Config.ProjectId   = S;
+	// project_id was removed from the config schema in 1.7.11. The
+	// dashboard's per-project API key (st_<hex>, ApiKeyDashboard)
+	// identifies the project implicitly, and the local core only used
+	// project_id for correlation logging. Old configs that still carry
+	// the field are tolerated — we just don't read it back.
 	if (Json->TryGetStringField(TEXT("api_key"),       S)) Config.ApiKeyDashboard = S;
 	if (Json->TryGetStringField(TEXT("api_key_mongo"), S)) Config.ApiKeyMongo    = S;
 	if (Json->TryGetStringField(TEXT("session_token"), S)) Config.SessionToken   = S;
@@ -110,12 +114,12 @@ bool FShintCoreClient::SaveConfig() const
 	}
 	if (!Json.IsValid()) Json = MakeShared<FJsonObject>();
 
-	// Overwrite config fields
+	// Overwrite config fields. project_id is intentionally NOT written —
+	// removed from the schema in 1.7.11; see LoadConfig for the rationale.
 	Json->SetStringField(TEXT("core_host"),       Config.CoreHost);
 	Json->SetNumberField(TEXT("core_port"),       Config.CorePort);
 	Json->SetBoolField(TEXT("auto_start_core"),   Config.bAutoStartCore);
 	Json->SetStringField(TEXT("project_name"),    Config.ProjectName);
-	Json->SetStringField(TEXT("project_id"),      Config.ProjectId);
 	Json->SetStringField(TEXT("api_key"),         Config.ApiKeyDashboard);
 	Json->SetStringField(TEXT("api_key_mongo"),   Config.ApiKeyMongo);
 	Json->SetStringField(TEXT("dashboard_url"),   Config.DashboardUrl);
@@ -216,9 +220,10 @@ void FShintCoreClient::ValidateProject(
 		return;
 	}
 
-	// Build request body
+	// Build request body. project_id removed in 1.7.11 — the dashboard
+	// uses the per-project API key for identification; the local core
+	// uses project_name + api_key (license).
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("project_id"), Config.ProjectId);
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
 	Body->SetStringField(TEXT("engine"), TEXT("unreal"));
 	// api_key drives resolve_tier on /validate/project. Empty here was
@@ -541,7 +546,6 @@ void FShintCoreClient::ValidateBlueprints(
 		LoadedCount, BlueprintAssets.Num(), SkippedCount);
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("project_id"),   Config.ProjectId);
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
 	Body->SetStringField(TEXT("engine"),       TEXT("unreal"));
 	// resolve_tier on the core side looks up `api_key` against the
@@ -1403,7 +1407,7 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 	{
 		FShintWebDashboardResult Err;
 		Err.bSuccess     = false;
-		Err.ErrorMessage = TEXT("api_key, project_id, or dashboard_url not set in shinttools.config.json");
+		Err.ErrorMessage = TEXT("api_key or dashboard_url not set in shinttools.config.json");
 		OnComplete.ExecuteIfBound(Err);
 		return;
 	}
@@ -1445,34 +1449,34 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 	}
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("project_id"),   Config.ProjectId);
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
-	Body->SetStringField(TEXT("api_key"),      Config.ApiKeyDashboard);
 	Body->SetArrayField (TEXT("files"),        FilesArr);
 
 	const FString Url = Config.DashboardUrl / TEXT("api/public/code-validator/analyze");
 	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d files to dashboard at %s"), FilesArr.Num(), *Url);
 
-	// Dashboard endpoints authenticate via Authorization: Bearer <token>
-	// where <token> is the per-user session_token issued by /auth/login.
-	// The launcher writes it into shinttools.config.json after sign-in;
-	// the plugin just forwards it. Surface a clear error if it's empty
-	// (user never signed in via launcher) rather than POSTing an empty
-	// Bearer and getting a confusing "Invalid or expired session." from
-	// the server.
-	if (Config.SessionToken.IsEmpty())
+	// Dashboard endpoints authenticate via Authorization: Bearer <key>
+	// where <key> is the per-project API key generated when the user
+	// clicks "+ New project" on shint.tools/dashboard (format: st_<hex>).
+	// The user pastes it into the plugin's Settings → "Dashboard API Key"
+	// field; the value lands in shinttools.config.json::api_key and the
+	// plugin reads it into ApiKeyDashboard. Short-circuit with a clear
+	// error when the key is missing rather than POSTing an empty Bearer.
+	if (Config.ApiKeyDashboard.IsEmpty())
 	{
 		FShintWebDashboardResult Err;
 		Err.bSuccess     = false;
-		Err.ErrorMessage = TEXT("Sign in via the ShintTools launcher to "
-		                        "send results to the dashboard.");
+		Err.ErrorMessage = TEXT("No dashboard API key. Open Settings, "
+		                        "create a project on shint.tools and "
+		                        "paste the st_… key into 'Dashboard "
+		                        "API Key'.");
 		OnComplete.ExecuteIfBound(Err);
 		return;
 	}
 
 	TMap<FString, FString> AuthHeaders;
 	AuthHeaders.Add(TEXT("Authorization"),
-		FString::Printf(TEXT("Bearer %s"), *Config.SessionToken));
+		FString::Printf(TEXT("Bearer %s"), *Config.ApiKeyDashboard));
 
 	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
@@ -1736,7 +1740,6 @@ void FShintCoreClient::ScanAssetNaming(
 	}
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("project_id"),   Config.ProjectId);
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
 	Body->SetStringField(TEXT("engine"),       TEXT("unreal"));
 	// resolve_tier on /assets/scan reads this field. Without it the
@@ -1805,7 +1808,7 @@ void FShintCoreClient::SendAssetNamingToDashboard(
 	{
 		FShintWebDashboardResult Err;
 		Err.bSuccess     = false;
-		Err.ErrorMessage = TEXT("api_key, project_id, or dashboard_url not set in shinttools.config.json");
+		Err.ErrorMessage = TEXT("api_key or dashboard_url not set in shinttools.config.json");
 		OnComplete.ExecuteIfBound(Err);
 		return;
 	}
@@ -1826,29 +1829,29 @@ void FShintCoreClient::SendAssetNamingToDashboard(
 	}
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("project_id"),   Config.ProjectId);
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
-	Body->SetStringField(TEXT("api_key"),      Config.ApiKeyDashboard);
 	Body->SetArrayField (TEXT("items"),        ItemsArr);
 
 	const FString Url = Config.DashboardUrl / TEXT("api/public/naming-bot/analyze");
 	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d asset items to dashboard at %s"), ItemsArr.Num(), *Url);
 
-	// Mirror auth contract of /code-validator/analyze — Bearer SessionToken
-	// (NOT the static api_key). See that function for the full rationale.
-	if (Config.SessionToken.IsEmpty())
+	// Mirror auth contract of /code-validator/analyze — Bearer st_<key>
+	// from the user's per-project entry on shint.tools/dashboard.
+	if (Config.ApiKeyDashboard.IsEmpty())
 	{
 		FShintWebDashboardResult Err;
 		Err.bSuccess     = false;
-		Err.ErrorMessage = TEXT("Sign in via the ShintTools launcher to "
-		                        "send results to the dashboard.");
+		Err.ErrorMessage = TEXT("No dashboard API key. Open Settings, "
+		                        "create a project on shint.tools and "
+		                        "paste the st_… key into 'Dashboard "
+		                        "API Key'.");
 		OnComplete.ExecuteIfBound(Err);
 		return;
 	}
 
 	TMap<FString, FString> AuthHeaders;
 	AuthHeaders.Add(TEXT("Authorization"),
-		FString::Printf(TEXT("Bearer %s"), *Config.SessionToken));
+		FString::Printf(TEXT("Bearer %s"), *Config.ApiKeyDashboard));
 
 	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
