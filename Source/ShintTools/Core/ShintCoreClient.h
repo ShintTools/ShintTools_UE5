@@ -337,14 +337,28 @@ struct FShintCoreConfig
 	FString ProjectName     = TEXT("MyGame");
 	FString ProjectId       = TEXT("");
 
-	// External web dashboard. The default points at the production
-	// Lovable host the launcher's ingest paths target — see
-	// app.constants.DASHBOARD_INGEST_KEY for the matching api_key. The
-	// previous default ("https://app.shinttools.io") was a dead host
-	// that swallowed every send-to-dashboard request silently. Override
-	// from shinttools.config.json's `dashboard_url` field for staging.
+	// External web dashboard auth.
+	//
+	//   * SessionToken — the user's per-login Bearer credential, written
+	//     into shinttools.config.json by the launcher's apply_login_result.
+	//     Required by every dashboard endpoint (Authorization header).
+	//     Expires when the portal session expires (~30 days).
+	//
+	//   * ApiKeyDashboard — historical body field, kept for backward
+	//     compatibility with older lovable handlers that read api_key
+	//     from the JSON body. Current handlers ignore it.
+	//
+	//   * ApiKeyMongo — license key the LOCAL core resolves to a tier.
+	//     Sent to /validate/*, /assets/scan, /agent/*. Distinct from
+	//     the dashboard auth path — do not mix them.
+	//
+	// The default DashboardUrl points at production shint.tools (the
+	// previous default "https://app.shinttools.io" was a dead host that
+	// swallowed every request silently). Override from
+	// shinttools.config.json's `dashboard_url` field for staging.
 	FString ApiKeyDashboard = TEXT("");
 	FString ApiKeyMongo     = TEXT("");
+	FString SessionToken    = TEXT("");
 	FString DashboardUrl    = TEXT("https://shint.tools");
 
 	FString GetBaseUrl() const
