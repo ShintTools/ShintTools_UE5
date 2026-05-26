@@ -171,8 +171,10 @@ private:
 	FReply OnDeselectAllCodeClicked();
 	FReply OnApplySelectedCodeFixesClicked();
 	FReply OnSendCodeToDashboardClicked();
-	FReply OnAutoFixPlanClicked();
-	void   OnAgentPlanComplete(const FShintAgentPlanResult& Result);
+	// OnAutoFixPlanClicked / OnAgentPlanComplete / ShowAgentPlanDialog
+	// were removed in 1.7.11 alongside the Auto-Fix Plan button. The
+	// per-row Explain entry point covers the same UX with focused
+	// /agent/explain context.
 
 	// LLM pivot — single-shot /agent/explain modal.
 	// One per-issue "Explain" button on each row; click opens the modal,
@@ -188,7 +190,6 @@ private:
 	TSharedPtr<class STextBlock>                      ExplainStatusLine;
 	int32                                             ExplainStatusIndex = 0;
 	FTSTicker::FDelegateHandle                        ExplainTickerHandle;
-	void   ShowAgentPlanDialog(const FShintAgentPlanResult& Result);
 	FReply OnScanAssetsClicked();
 	FReply OnApplySingleFix(FShintIssueItemPtr Item);
 	FReply OnIgnoreSingleFix(FShintIssueItemPtr Item);
@@ -329,15 +330,13 @@ private:
 	TSharedPtr<STextBlock> AssetEmptyText;
 	int32                  AssetFixesApplied = 0;
 
-	// Config field widgets. ApiKeyMongo / ApiKeyDashboard stay launcher-
-	// managed (license sync writes them on sign-in), but ProjectId was
-	// brought back in 1.7.10 — Daniel reported users on multi-project
-	// teams couldn't redirect their plugin's dashboard payloads to the
-	// right project without manually editing shinttools.config.json.
-	// The field still defaults to whatever the launcher's config_gen
-	// derived from the project name, so the common case ("one project,
-	// don't touch") keeps zero-config.
-	TSharedPtr<SEditableTextBox> ProjectIdField;
+	// Config field widgets. ApiKeyMongo stays launcher-managed (license
+	// sync writes it on sign-in). ApiKeyDashboard is user-pasted from
+	// the dashboard's "+ New project" flow — the per-project Bearer
+	// credential the plugin attaches to /api/public/* requests.
+	// ProjectIdField was removed in 1.7.11; the API key identifies the
+	// project implicitly server-side.
+	TSharedPtr<SEditableTextBox> ApiKeyDashboardField;
 	TSharedPtr<SEditableTextBox> DashboardUrlField;
 
 	// ── UI-REDESIGN: navigation state ────────────────────────────────────────

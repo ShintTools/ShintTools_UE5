@@ -584,14 +584,16 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 			// the runtime contract is unchanged.
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f,0.f,0.f,6.f)
 			[
-				ConfigRow(LOCTEXT("CfgProjectId","Project ID"), ProjectIdField,
-					Cfg.ProjectId, LOCTEXT("CfgProjectIdHint",
-						"Identifier sent to the dashboard with every scan"))
+				ConfigRow(LOCTEXT("CfgApiKey","Dashboard API Key"),
+					ApiKeyDashboardField,
+					Cfg.ApiKeyDashboard, LOCTEXT("CfgApiKeyHint",
+						"st_… key from shint.tools/dashboard → Projects "
+						"→ + New project (per-project Bearer credential)"))
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				ConfigRow(LOCTEXT("CfgDashUrl","Dashboard URL"), DashboardUrlField,
-					Cfg.DashboardUrl, LOCTEXT("CfgDashUrlHint","https://shint.tools/dashboard"))
+					Cfg.DashboardUrl, LOCTEXT("CfgDashUrlHint","https://shint.tools"))
 			]
 		];
 }
@@ -602,10 +604,10 @@ void SShintToolsPanel::SaveConfigOverrides()
 
 	FShintCoreConfig& Cfg = CoreClient->GetConfigMutable();
 
-	// Project ID + Dashboard URL are user-editable; ApiKeyMongo / ApiKey
-	// Dashboard stay launcher-managed (sign-in writes them).
-	if (ProjectIdField.IsValid())
-		Cfg.ProjectId = ProjectIdField->GetText().ToString();
+	// Dashboard API Key + Dashboard URL are user-editable. ApiKeyMongo
+	// is launcher-managed (license sync on sign-in writes it).
+	if (ApiKeyDashboardField.IsValid())
+		Cfg.ApiKeyDashboard = ApiKeyDashboardField->GetText().ToString();
 	if (DashboardUrlField.IsValid())
 		Cfg.DashboardUrl = DashboardUrlField->GetText().ToString();
 
@@ -1181,23 +1183,12 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Blue()))
 				]
 			]
-			+ SWrapBox::Slot()
-			[
-				// Auto-Fix Plan — calls /agent/plan, shows a modal with the
-				// prioritized step list. Indie-only: free-tier servers
-				// answer 403 and the modal surfaces an upgrade hint.
-				SNew(SButton)
-				.ContentPadding(FMargin(14.f,7.f))
-				.OnClicked(this, &SShintToolsPanel::OnAutoFixPlanClicked)
-				[
-					SNew(STextBlock)
-					.Text(LOCTEXT("AutoFixPlan","✨  Auto-Fix Plan"))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(FLinearColor(0.55f, 0.42f, 0.95f)))
-				]
-			]
-			// LLM pivot — the global "Agent Review" button was retired.
-			// /agent/explain runs per-issue, so the entry point lives on
-			// each row of the issue list (see GenerateCodeIssueRow).
+			// Auto-Fix Plan was retired in 1.7.11 — the modal proved
+			// confusing (prioritized step list with no apply-all action)
+			// and the underlying /agent/plan endpoint duplicated work
+			// the per-issue /agent/explain already does better. The
+			// per-row "Explain" entry point on each issue row covers
+			// the same need with focused LLM context.
 		];
 
 	return SNew(SVerticalBox)
@@ -3672,142 +3663,21 @@ void SShintToolsPanel::OnExplainComplete(
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Agent — Auto-Fix Plan
+// Agent — Auto-Fix Plan (retired in 1.7.11)
+//
+// The button + modal + /agent/plan request stack were removed because the
+// modal was a read-only list with no apply-all action — users routinely
+// asked "what is this for?". The per-issue "Explain" entry point on each
+// row of the issue list (calling /agent/explain) gives focused LLM
+// context for one rule violation at a time and is what actually shipped
+// value. The /agent/plan endpoint stays in the core for now but the
+// plugin no longer calls it.
 // ─────────────────────────────────────────────────────────────────────────────
 
-FReply SShintToolsPanel::OnAutoFixPlanClicked()
-{
-	if (LastCodeResult.Issues.IsEmpty())
-	{
-		ShintShowErrorToast(
-			TEXT("Auto-Fix Plan"),
-			TEXT("Run a code scan first — the planner needs issues to prioritize."));
-		return FReply::Handled();
-	}
-
-	CoreClient->RequestAgentPlan(
-		LastCodeResult,
-		FOnShintAgentPlanComplete::CreateSP(this, &SShintToolsPanel::OnAgentPlanComplete));
-	return FReply::Handled();
-}
-
-
-void SShintToolsPanel::OnAgentPlanComplete(const FShintAgentPlanResult& Result)
-{
-	if (!Result.bSuccess)
-	{
-		// Free-tier servers answer 403; surface as a friendly upgrade hint
-		// rather than as a generic HTTP error.
-		const bool bForbidden = Result.ErrorMessage.Contains(TEXT("Indie-tier"))
-			|| Result.ErrorMessage.Contains(TEXT("403"));
-		const FString Title = bForbidden
-			? TEXT("Auto-Fix Plan — Indie only")
-			: TEXT("Auto-Fix Plan failed");
-		ShintShowErrorToast(*Title, *Result.ErrorMessage);
-		return;
-	}
-	ShowAgentPlanDialog(Result);
-}
-
-void SShintToolsPanel::ShowAgentPlanDialog(const FShintAgentPlanResult& Result)
-{
-	TSharedRef<SVerticalBox> Body = SNew(SVerticalBox);
-
-	// The server's summary string is shape "3 critical · 2 high · 1 low" —
-	// translate the bucket words client-side to keep the modal in Spanish.
-	FString LocalSummary = Result.Summary;
-	LocalSummary = LocalSummary.Replace(TEXT("critical"), TEXT("críticas"));
-	LocalSummary = LocalSummary.Replace(TEXT("high"),     TEXT("altas"));
-	LocalSummary = LocalSummary.Replace(TEXT("medium"),   TEXT("medias"));
-	LocalSummary = LocalSummary.Replace(TEXT("low"),      TEXT("bajas"));
-
-	Body->AddSlot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
-	[
-		SNew(STextBlock)
-		.Text(FText::FromString(FString::Printf(
-			TEXT("%d pasos · %s"), Result.Steps.Num(), *LocalSummary)))
-		.Font(F_Label())
-		.ColorAndOpacity(FSlateColor(C_DimGray()))
-	];
-
-	// Bug #41: the priority badge used to render the server's raw english
-	// label (CRITICAL / HIGH / MEDIUM / LOW) while the rationales next to
-	// it came back in Spanish — that mismatch is what the user saw as
-	// "Auto-Fix Plan in English". Translate client-side so the whole
-	// modal speaks one language.
-	auto LocalizePriority = [](const FString& Raw) -> FString {
-		if (Raw == TEXT("critical")) return TEXT("CRÍTICA");
-		if (Raw == TEXT("high"))     return TEXT("ALTA");
-		if (Raw == TEXT("medium"))   return TEXT("MEDIA");
-		if (Raw == TEXT("low"))      return TEXT("BAJA");
-		return Raw.ToUpper();
-	};
-
-	for (const FShintAgentPlanStep& S : Result.Steps)
-	{
-		FLinearColor PriorityColor = FLinearColor::Gray;
-		if      (S.Priority == TEXT("critical")) PriorityColor = FLinearColor(0.93f, 0.27f, 0.27f);
-		else if (S.Priority == TEXT("high"))     PriorityColor = FLinearColor(0.97f, 0.45f, 0.09f);
-		else if (S.Priority == TEXT("medium"))   PriorityColor = FLinearColor(0.86f, 0.78f, 0.16f);
-		else                                     PriorityColor = FLinearColor(0.42f, 0.65f, 0.42f);
-
-		Body->AddSlot().AutoHeight().Padding(0.f, 4.f)
-		[
-			SNew(SBorder).BorderImage(ST4::Solid(C_Surface())).Padding(8.f)
-			[
-				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 8.f, 0.f)
-					[
-						SNew(STextBlock)
-						.Text(FText::FromString(FString::Printf(
-							TEXT("%d. [%s] %s"),
-							S.Order, *LocalizePriority(S.Priority), *S.RuleId)))
-						.Font(F_Label())
-						.ColorAndOpacity(FSlateColor(PriorityColor))
-					]
-					+ SHorizontalBox::Slot().FillWidth(1.f)
-					[
-						SNew(STextBlock)
-						.Text(FText::FromString(FString::Printf(
-							TEXT("%s:%d"),
-							*FPaths::GetCleanFilename(S.FilePath), S.Line)))
-						.Font(F_Small())
-						.ColorAndOpacity(FSlateColor(C_DimGray()))
-					]
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f, 0.f, 0.f)
-				[
-					SNew(STextBlock)
-					.Text(FText::FromString(S.Rationale))
-					.Font(F_Small())
-					.ColorAndOpacity(FSlateColor(C_White()))
-					.AutoWrapText(true)
-				]
-			]
-		];
-	}
-
-	TSharedRef<SWindow> Win = SNew(SWindow)
-		.Title(LOCTEXT("AgentPlanWin", "ShintTools — Auto-Fix Plan"))
-		.ClientSize(FVector2D(720.f, 520.f))
-		.SizingRule(ESizingRule::UserSized);
-
-	Win->SetContent(
-		SNew(SBorder).BorderImage(ST4::Solid(C_BG())).Padding(16.f)
-		[
-			SNew(SScrollBox)
-			+ SScrollBox::Slot()
-			[
-				Body
-			]
-		]
-	);
-
-	FSlateApplication::Get().AddWindow(Win, true);
-}
+// All Auto-Fix Plan handler bodies removed entirely (1.7.11). The
+// per-row Explain modal handles the same UX with focused /agent/explain
+// context. The /agent/plan core endpoint stays available for future
+// experiments; the plugin just stops calling it.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UI-REDESIGN step 8 — Overview hero
