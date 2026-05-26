@@ -59,13 +59,70 @@ namespace ShintTopBarPrivate
 	}
 }
 
+namespace ShintTopBarPrivate
+{
+	// Pill-shaped background for the license badge. One brush per tier so
+	// the colour matches the tier (free=muted grey, indie=accent blue,
+	// studio/enterprise=gold). The map mirrors the LedBrushes pattern
+	// above — lazily allocated, lives for the module lifetime.
+	static TMap<FString, TUniquePtr<FSlateRoundedBoxBrush>> GTierPillBrushes;
+
+	static FLinearColor TierAccent(const FString& Tier)
+	{
+		const FString Lower = Tier.ToLower();
+		if (Lower == TEXT("indie"))      return FShintStyle::Colors::AccentBlue();
+		if (Lower == TEXT("studio"))     return FShintStyle::Colors::Warning();
+		if (Lower == TEXT("enterprise")) return FShintStyle::Colors::Warning();
+		return FShintStyle::Colors::TextMuted();  // free / unknown / empty
+	}
+
+	static const FSlateBrush* TierPill(const FString& Tier)
+	{
+		const FString Key = Tier.ToLower();
+		if (TUniquePtr<FSlateRoundedBoxBrush>* Found = GTierPillBrushes.Find(Key))
+			return Found->Get();
+
+		const FLinearColor Accent = TierAccent(Tier);
+		FLinearColor Fill = Accent;
+		Fill.A = 0.15f;  // soft tint so the text stays the focal point
+
+		TUniquePtr<FSlateRoundedBoxBrush> Brush = MakeUnique<FSlateRoundedBoxBrush>(
+			Fill,
+			/*Radius=*/8.f,
+			Accent,
+			/*OutlineWidth=*/1.f);
+		const FSlateBrush* Raw = Brush.Get();
+		GTierPillBrushes.Add(Key, MoveTemp(Brush));
+		return Raw;
+	}
+}
+
 void SShintTopBar::Construct(const FArguments& InArgs)
 {
 	const TAttribute<EShintConnState> ConnAttr = InArgs._ConnState;
+	const TAttribute<FText> TierAttr           = InArgs._TierText;
 
 	auto LedBrushAttr = [ConnAttr]() -> const FSlateBrush*
 	{
 		return ShintTopBarPrivate::LedBrush(ConnAttr.Get());
+	};
+
+	auto TierBrushAttr = [TierAttr]() -> const FSlateBrush*
+	{
+		return ShintTopBarPrivate::TierPill(TierAttr.Get().ToString());
+	};
+
+	auto TierColorAttr = [TierAttr]() -> FSlateColor
+	{
+		return FSlateColor(ShintTopBarPrivate::TierAccent(
+			TierAttr.Get().ToString()));
+	};
+
+	auto TierVisibility = [TierAttr]() -> EVisibility
+	{
+		return TierAttr.Get().IsEmpty()
+			? EVisibility::Collapsed
+			: EVisibility::Visible;
 	};
 
 	ChildSlot
@@ -112,6 +169,25 @@ void SShintTopBar::Construct(const FArguments& InArgs)
 				.Text(InArgs._StatusText)
 				.Font(FShintStyle::Fonts::Small())
 				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
+			]
+
+			// License tier pill — collapsed until /license/status resolves.
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(FMargin(FShintStyle::Space::S3, 0.f, 0.f, 0.f))
+			[
+				SNew(SBorder)
+				.Visibility_Lambda(TierVisibility)
+				.BorderImage_Lambda(TierBrushAttr)
+				.Padding(FMargin(FShintStyle::Space::S2,
+				                 FShintStyle::Space::S1))
+				[
+					SNew(STextBlock)
+					.Text(InArgs._TierText)
+					.Font(FShintStyle::Fonts::Small())
+					.ColorAndOpacity_Lambda(TierColorAttr)
+				]
 			]
 		]
 	];

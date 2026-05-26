@@ -255,6 +255,28 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 		return static_cast<EShintConnState>(CurrentConnStateIndex);
 	};
 
+	// License tier label fed by FShintToolsModule's startup probe of
+	// /license/status (added in Sprint 2). Renders as a pill badge in the
+	// top-right of the TopBar so paid users immediately see "Indie" /
+	// "Studio" / "Enterprise" instead of waiting for the first scan to
+	// confirm their tier. Hidden until the probe resolves to avoid a
+	// confusing "Free" flash for paid customers during boot.
+	auto TierText = []() -> FText
+	{
+		const FString Tier = FShintToolsModule::GetCachedTier();
+		if (Tier.IsEmpty())
+		{
+			return FText::GetEmpty();
+		}
+		// Capitalise for display: "indie" -> "Indie".
+		FString Display = Tier.ToLower();
+		if (!Display.IsEmpty())
+		{
+			Display[0] = FChar::ToUpper(Display[0]);
+		}
+		return FText::FromString(Display);
+	};
+
 	// Wrap a section in a vertical scrollbox so long content doesn't push the
 	// sidebar/topbar off-screen. Padding around the section uses S5 (24px) to
 	// give the dashboard feel some breathing room from the edges.
@@ -282,6 +304,7 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 				SNew(SShintTopBar)
 				.Title_Lambda(CurrentTitle)
 				.StatusText_Lambda(StatusText)
+				.TierText_Lambda(TierText)
 				.ConnState_Lambda(ConnState)
 			]
 
