@@ -76,30 +76,13 @@ bool FShintCoreClient::LoadConfig()
 	if (Json->TryGetStringField(TEXT("project_id"),   S)) Config.ProjectId   = S;
 	if (Json->TryGetStringField(TEXT("api_key"),       S)) Config.ApiKeyDashboard = S;
 	if (Json->TryGetStringField(TEXT("api_key_mongo"), S)) Config.ApiKeyMongo    = S;
+	if (Json->TryGetStringField(TEXT("session_token"), S)) Config.SessionToken   = S;
 	if (Json->TryGetStringField(TEXT("dashboard_url"), S)) Config.DashboardUrl   = S;
 
-	// Migration shim — installs from launcher <= 1.7.10 wrote a random
-	// `shint_<hex>` token as api_key that the dashboard never registered,
-	// so every send-to-dashboard call failed with "Invalid api_key" and
-	// surfaced to users as "✗ Send failed". The canonical shared ingest
-	// key is now the same `st_…` value baked into the launcher's
-	// app.constants.DASHBOARD_INGEST_KEY. Overwrite the stale field at
-	// load time so the user doesn't have to reinstall to pick up the
-	// new contract. Same value lives in two places intentionally — it
-	// is a shared client identifier, not a per-user secret.
-	const FString DASHBOARD_INGEST_KEY =
-		TEXT("st_62f0efdefdbd4d15b1de9a6b0ff7bf56");
-	if (Config.ApiKeyDashboard.IsEmpty()
-		|| Config.ApiKeyDashboard.StartsWith(TEXT("shint_")))
-	{
-		Config.ApiKeyDashboard = DASHBOARD_INGEST_KEY;
-		UE_LOG(LogShintTools, Display,
-			TEXT("ShintCoreClient: migrated stale api_key to canonical "
-			     "DASHBOARD_INGEST_KEY"));
-	}
-
-	// Same idea for dashboard_url — launcher <= 1.7.9 sometimes wrote
-	// the dead "app.shinttools.io" host or left it blank.
+	// Migrate the dead "app.shinttools.io" host — launcher <= 1.7.9 wrote
+	// it as the default and Cloudflare serves an HTML 404 there, which
+	// the plugin used to surface as the cryptic "Only HTML requests are
+	// supported here" error. The new default is the live production host.
 	if (Config.DashboardUrl.IsEmpty()
 		|| Config.DashboardUrl.Contains(TEXT("app.shinttools.io")))
 	{
@@ -1470,14 +1453,26 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 	const FString Url = Config.DashboardUrl / TEXT("api/public/code-validator/analyze");
 	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d files to dashboard at %s"), FilesArr.Num(), *Url);
 
-	// Dashboard endpoints authenticate via Authorization: Bearer <key>.
-	// The plugin previously sent the key in the body only — that produced
-	// "Missing bearer token" / 401 on every call. The body keeps the
-	// api_key field too for backward compatibility with older lovable
-	// deployments that read it from there.
+	// Dashboard endpoints authenticate via Authorization: Bearer <token>
+	// where <token> is the per-user session_token issued by /auth/login.
+	// The launcher writes it into shinttools.config.json after sign-in;
+	// the plugin just forwards it. Surface a clear error if it's empty
+	// (user never signed in via launcher) rather than POSTing an empty
+	// Bearer and getting a confusing "Invalid or expired session." from
+	// the server.
+	if (Config.SessionToken.IsEmpty())
+	{
+		FShintWebDashboardResult Err;
+		Err.bSuccess     = false;
+		Err.ErrorMessage = TEXT("Sign in via the ShintTools launcher to "
+		                        "send results to the dashboard.");
+		OnComplete.ExecuteIfBound(Err);
+		return;
+	}
+
 	TMap<FString, FString> AuthHeaders;
 	AuthHeaders.Add(TEXT("Authorization"),
-		FString::Printf(TEXT("Bearer %s"), *Config.ApiKeyDashboard));
+		FString::Printf(TEXT("Bearer %s"), *Config.SessionToken));
 
 	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
@@ -1839,10 +1834,21 @@ void FShintCoreClient::SendAssetNamingToDashboard(
 	const FString Url = Config.DashboardUrl / TEXT("api/public/naming-bot/analyze");
 	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Sending %d asset items to dashboard at %s"), ItemsArr.Num(), *Url);
 
-	// Mirror auth contract of /code-validator/analyze — Bearer header.
+	// Mirror auth contract of /code-validator/analyze — Bearer SessionToken
+	// (NOT the static api_key). See that function for the full rationale.
+	if (Config.SessionToken.IsEmpty())
+	{
+		FShintWebDashboardResult Err;
+		Err.bSuccess     = false;
+		Err.ErrorMessage = TEXT("Sign in via the ShintTools launcher to "
+		                        "send results to the dashboard.");
+		OnComplete.ExecuteIfBound(Err);
+		return;
+	}
+
 	TMap<FString, FString> AuthHeaders;
 	AuthHeaders.Add(TEXT("Authorization"),
-		FString::Printf(TEXT("Bearer %s"), *Config.ApiKeyDashboard));
+		FString::Printf(TEXT("Bearer %s"), *Config.SessionToken));
 
 	SendRequest(Url, EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
