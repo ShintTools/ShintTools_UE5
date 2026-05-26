@@ -2846,9 +2846,21 @@ void SShintToolsPanel::OnCodeDashboardComplete(const FShintWebDashboardResult& R
 	}
 	else
 	{
-		SendCodeBtnLabel->SetText(LOCTEXT("SendCodeErr", "✗  Send failed"));
+		// Surface the truncated server message inline so the user sees
+		// WHY the send failed without having to open the Output Log.
+		FString Short = Result.ErrorMessage.IsEmpty()
+			? FString(TEXT("Network or auth error"))
+			: Result.ErrorMessage;
+		if (Short.Len() > 60)
+		{
+			Short = Short.Left(57) + TEXT("…");
+		}
+		SendCodeBtnLabel->SetText(FText::FromString(
+			FString::Printf(TEXT("✗  Send failed — %s"), *Short)));
 		SendCodeBtnLabel->SetColorAndOpacity(FSlateColor(C_Red()));
-		UE_LOG(LogShintTools, Error, TEXT("Dashboard send failed: %s"), *Result.ErrorMessage);
+		UE_LOG(LogShintTools, Error,
+			TEXT("Dashboard send failed: %s | response: %s"),
+			*Result.ErrorMessage, *Result.ResponseBody);
 	}
 
 	TWeakPtr<SShintToolsPanel> weak_this = SharedThis(this);
@@ -2974,9 +2986,19 @@ void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& 
 	}
 	else
 	{
-		SendAssetBtnLabel->SetText(LOCTEXT("SendAssetErr", "✗  Send failed"));
+		FString Short = Result.ErrorMessage.IsEmpty()
+			? FString(TEXT("Network or auth error"))
+			: Result.ErrorMessage;
+		if (Short.Len() > 60)
+		{
+			Short = Short.Left(57) + TEXT("…");
+		}
+		SendAssetBtnLabel->SetText(FText::FromString(
+			FString::Printf(TEXT("✗  Send failed — %s"), *Short)));
 		SendAssetBtnLabel->SetColorAndOpacity(FSlateColor(C_Red()));
-		UE_LOG(LogShintTools, Error, TEXT("Dashboard send failed: %s"), *Result.ErrorMessage);
+		UE_LOG(LogShintTools, Error,
+			TEXT("Dashboard send failed: %s | response: %s"),
+			*Result.ErrorMessage, *Result.ResponseBody);
 	}
 
 	TWeakPtr<SShintToolsPanel> weak_this = SharedThis(this);

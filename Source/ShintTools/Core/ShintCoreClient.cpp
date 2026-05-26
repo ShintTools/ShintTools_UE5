@@ -78,6 +78,36 @@ bool FShintCoreClient::LoadConfig()
 	if (Json->TryGetStringField(TEXT("api_key_mongo"), S)) Config.ApiKeyMongo    = S;
 	if (Json->TryGetStringField(TEXT("dashboard_url"), S)) Config.DashboardUrl   = S;
 
+	// Migration shim — installs from launcher <= 1.7.10 wrote a random
+	// `shint_<hex>` token as api_key that the dashboard never registered,
+	// so every send-to-dashboard call failed with "Invalid api_key" and
+	// surfaced to users as "✗ Send failed". The canonical shared ingest
+	// key is now the same `st_…` value baked into the launcher's
+	// app.constants.DASHBOARD_INGEST_KEY. Overwrite the stale field at
+	// load time so the user doesn't have to reinstall to pick up the
+	// new contract. Same value lives in two places intentionally — it
+	// is a shared client identifier, not a per-user secret.
+	const FString DASHBOARD_INGEST_KEY =
+		TEXT("st_62f0efdefdbd4d15b1de9a6b0ff7bf56");
+	if (Config.ApiKeyDashboard.IsEmpty()
+		|| Config.ApiKeyDashboard.StartsWith(TEXT("shint_")))
+	{
+		Config.ApiKeyDashboard = DASHBOARD_INGEST_KEY;
+		UE_LOG(LogShintTools, Display,
+			TEXT("ShintCoreClient: migrated stale api_key to canonical "
+			     "DASHBOARD_INGEST_KEY"));
+	}
+
+	// Same idea for dashboard_url — launcher <= 1.7.9 sometimes wrote
+	// the dead "app.shinttools.io" host or left it blank.
+	if (Config.DashboardUrl.IsEmpty()
+		|| Config.DashboardUrl.Contains(TEXT("app.shinttools.io")))
+	{
+		Config.DashboardUrl = TEXT("https://shint.tools");
+		UE_LOG(LogShintTools, Display,
+			TEXT("ShintCoreClient: migrated dashboard_url to shint.tools"));
+	}
+
 	UE_LOG(LogShintTools, Verbose,
 		TEXT("ShintCoreClient: Config loaded. Port=%d"), Config.CorePort);
 	return true;
@@ -1430,8 +1460,39 @@ void FShintCoreClient::SendCodeValidatorToDashboard(
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
 			FShintWebDashboardResult R;
 			R.bSuccess     = Raw.bSuccess;
-			R.ErrorMessage = Raw.bSuccess ? TEXT("") : Raw.ErrorMessage;
 			R.ResponseBody = Raw.ResponseBody;
+			// On failure, prefer the JSON `error` field in the body
+			// over the generic transport message — that's what the
+			// dashboard returns when api_key is rejected, and it is
+			// what the customer needs to see in the UI.
+			if (!Raw.bSuccess)
+			{
+				R.ErrorMessage = Raw.ErrorMessage;
+				if (!Raw.ResponseBody.IsEmpty())
+				{
+					TSharedPtr<FJsonObject> Obj;
+					const TSharedRef<TJsonReader<>> Reader =
+						TJsonReaderFactory<>::Create(Raw.ResponseBody);
+					if (FJsonSerializer::Deserialize(Reader, Obj) && Obj.IsValid())
+					{
+						FString ErrField;
+						if (Obj->TryGetStringField(TEXT("error"), ErrField)
+							&& !ErrField.IsEmpty())
+						{
+							R.ErrorMessage = FString::Printf(
+								TEXT("HTTP %d: %s"),
+								Raw.StatusCode, *ErrField);
+						}
+					}
+					if (R.ErrorMessage.IsEmpty())
+					{
+						R.ErrorMessage = FString::Printf(
+							TEXT("HTTP %d: %s"),
+							Raw.StatusCode,
+							*Raw.ResponseBody.Left(120));
+					}
+				}
+			}
 			OnComplete.ExecuteIfBound(R);
 		}));
 }
@@ -1753,8 +1814,38 @@ void FShintCoreClient::SendAssetNamingToDashboard(
 		FOnShintRequestComplete::CreateLambda([OnComplete](const FShintRequestResult& Raw) mutable {
 			FShintWebDashboardResult R;
 			R.bSuccess     = Raw.bSuccess;
-			R.ErrorMessage = Raw.bSuccess ? TEXT("") : Raw.ErrorMessage;
 			R.ResponseBody = Raw.ResponseBody;
+			// Mirror of SendCodeValidatorToDashboard's error surfacing —
+			// extract `error` from the JSON body so the UI can show
+			// "HTTP 401: Invalid api_key" instead of a vague "Send failed".
+			if (!Raw.bSuccess)
+			{
+				R.ErrorMessage = Raw.ErrorMessage;
+				if (!Raw.ResponseBody.IsEmpty())
+				{
+					TSharedPtr<FJsonObject> Obj;
+					const TSharedRef<TJsonReader<>> Reader =
+						TJsonReaderFactory<>::Create(Raw.ResponseBody);
+					if (FJsonSerializer::Deserialize(Reader, Obj) && Obj.IsValid())
+					{
+						FString ErrField;
+						if (Obj->TryGetStringField(TEXT("error"), ErrField)
+							&& !ErrField.IsEmpty())
+						{
+							R.ErrorMessage = FString::Printf(
+								TEXT("HTTP %d: %s"),
+								Raw.StatusCode, *ErrField);
+						}
+					}
+					if (R.ErrorMessage.IsEmpty())
+					{
+						R.ErrorMessage = FString::Printf(
+							TEXT("HTTP %d: %s"),
+							Raw.StatusCode,
+							*Raw.ResponseBody.Left(120));
+					}
+				}
+			}
 			OnComplete.ExecuteIfBound(R);
 		}));
 }
