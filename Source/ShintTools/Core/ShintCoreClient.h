@@ -388,11 +388,15 @@ struct FShintCoreConfig
 
 	bool HasExternalDashboard() const
 	{
-		// ProjectId dropped in 1.7.11 — the per-project API key (st_<hex>)
-		// identifies the project on the dashboard side, no need for a
-		// separate project_id field. ApiKeyMongo is still required for
-		// local-core authentication (resolve_tier).
-		return !ApiKeyDashboard.IsEmpty() && !ApiKeyMongo.IsEmpty() && !DashboardUrl.IsEmpty();
+		// External dashboard authenticates via Authorization: Bearer
+		// <ApiKeyDashboard>. ApiKeyMongo is the LOCAL-core license key
+		// used for tier resolution against MongoDB — orthogonal to the
+		// dashboard and required only on /validate/* + /assets/scan
+		// (those call sites send it explicitly). Gating dashboard
+		// sends on ApiKeyMongo blocked every Free-tier user from
+		// uploading scan results even when they had a valid st_<hex>
+		// key pasted from shint.tools.
+		return !ApiKeyDashboard.IsEmpty() && !DashboardUrl.IsEmpty();
 	}
 };
 
