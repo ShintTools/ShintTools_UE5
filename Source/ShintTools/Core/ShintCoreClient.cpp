@@ -856,11 +856,13 @@ void FShintCoreClient::ApplyCodeFixes(
 			Content.ParseIntoArray(Lines, TEXT("\n"), false);
 
 			TArray<const FShintCodeIssue*> Sorted = Issues;
-			// Sorted is an array of pointers, so the comparator must accept
-			// pointers — not references. The previous reference-typed
-			// signature was a type mismatch that broke compilation for any
-			// Indie/Studio customer building the plugin from source.
-			Sorted.Sort([](const FShintCodeIssue* A, const FShintCodeIssue* B) { return A->Line > B->Line; });
+			// References (NOT pointers) in the comparator are correct here:
+			// UE5's TArray<T*>::Sort wraps the user predicate in a
+			// dereferencing adapter, so the lambda receives the pointed-to
+			// elements. The bug-hunter agent that flagged this as a type
+			// mismatch (issue #8) misread UE5 semantics — verified with the
+			// UAT BuildPlugin C2664 the pointer-typed signature produced.
+			Sorted.Sort([](const FShintCodeIssue& A, const FShintCodeIssue& B) { return A.Line > B.Line; });
 
 			int32 Applied = 0, Skipped = 0;
 			for (const FShintCodeIssue* Issue : Sorted)
