@@ -856,7 +856,11 @@ void FShintCoreClient::ApplyCodeFixes(
 			Content.ParseIntoArray(Lines, TEXT("\n"), false);
 
 			TArray<const FShintCodeIssue*> Sorted = Issues;
-			Sorted.Sort([](const FShintCodeIssue& A, const FShintCodeIssue& B) { return A.Line > B.Line; });
+			// Sorted is an array of pointers, so the comparator must accept
+			// pointers — not references. The previous reference-typed
+			// signature was a type mismatch that broke compilation for any
+			// Indie/Studio customer building the plugin from source.
+			Sorted.Sort([](const FShintCodeIssue* A, const FShintCodeIssue* B) { return A->Line > B->Line; });
 
 			int32 Applied = 0, Skipped = 0;
 			for (const FShintCodeIssue* Issue : Sorted)
