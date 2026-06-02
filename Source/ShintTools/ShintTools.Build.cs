@@ -20,6 +20,7 @@ public class ShintTools : ModuleRules
 			"ShintTools",
 			"ShintTools/Api",
 			"ShintTools/Core",
+			"ShintTools/Marketplace",
 			"ShintTools/Security",
 			"ShintTools/Transport",
 			"ShintTools/UI",
@@ -34,6 +35,13 @@ public class ShintTools : ModuleRules
 		// and reverts it for the paid bundle. Default (here) is 0 so
 		// developer / Indie / Studio builds keep the relaxed defaults.
 		PublicDefinitions.Add("SHINT_FREE_TIER=0");
+
+		// SHINT_MARKETPLACE_BUILD=1 enables the standalone Core install
+		// wizard (Docker pull + container) at module startup. tools/
+		// build_marketplace_pack.py flips this to 1 when producing the
+		// Fab/Unreal Marketplace bundle; launcher builds keep it at 0
+		// because the launcher's installer.py owns Core install.
+		PublicDefinitions.Add("SHINT_MARKETPLACE_BUILD=0");
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{

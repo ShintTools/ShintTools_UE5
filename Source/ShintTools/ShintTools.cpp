@@ -19,6 +19,10 @@
                                    // base_url + api_key without duplicating
                                    // the JSON-parsing logic.
 
+#if SHINT_MARKETPLACE_BUILD
+#include "Marketplace/SShintCoreInstallerWindow.h"
+#endif
+
 // Define the log category for the entire plugin
 DEFINE_LOG_CATEGORY(LogShintTools);
 
@@ -77,6 +81,14 @@ void FShintToolsModule::StartupModule()
 			       *GCachedTier, Status.ElapsedSeconds);
 			OnLicenseResolved.Broadcast();
 		}));
+
+#if SHINT_MARKETPLACE_BUILD
+	// Marketplace builds own Core install. Probe localhost:18200 on a
+	// worker thread; if Core isn't healthy, open the install wizard.
+	// Launcher builds skip this -- the launcher's installer.py path
+	// installs Core before the editor opens.
+	SShintCoreInstallerWindow::OpenIfNeededAsync(18200);
+#endif
 
 	UE_LOG(LogShintTools, Verbose, TEXT("ShintTools: Module started."));
 }
