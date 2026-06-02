@@ -1,6 +1,7 @@
 // Copyright ShintTools. All Rights Reserved.
 
 #include "SShintCoreInstallerWindow.h"
+#include "SShintConsentDialog.h"
 #include "ShintTools/ShintTools.h"
 
 #include "Async/Async.h"
@@ -162,7 +163,19 @@ void SShintCoreInstallerWindow::OpenIfNeededAsync(int32 Port)
 
 		AsyncTask(ENamedThreads::GameThread, []()
 		{
-			OpenNow();
+			// Fab guidelines require explicit consent before any
+			// download or third-party process is launched. Skip the
+			// dialog only if the user already accepted in a prior
+			// session.
+			if (SShintConsentDialog::HasUserConsented())
+			{
+				OpenNow();
+				return;
+			}
+			SShintConsentDialog::OpenModal([]()
+			{
+				OpenNow();
+			});
 		});
 	});
 }
