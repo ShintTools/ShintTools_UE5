@@ -55,8 +55,10 @@ class SHINTTOOLS_API FShintCoreInstaller
 {
 public:
 
-	/** Image to pull. Override in tests or for staging. */
-	FString ImageTag = TEXT("shinttools/core:latest");
+	/** Image to pull. Published by Genesis's CI to ghcr.io (see
+	 *  .github/workflows/publish-core.yml in the Core repo). ghcr.io
+	 *  public images have no per-puller rate limit, unlike Docker Hub. */
+	FString ImageTag = TEXT("ghcr.io/genesishg1509/shinttools-core:latest");
 
 	/** Container name (so we can `docker start <name>` on subsequent boots). */
 	FString ContainerName = TEXT("shinttools-core");
