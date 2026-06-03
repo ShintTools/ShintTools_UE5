@@ -160,23 +160,131 @@ bool FShintCoreInstaller::StartContainer()
 bool FShintCoreInstaller::WaitForHealth()
 {
 	Emit(EShintInstallStep::WaitingForHealth, 85,
-		TEXT("Waiting for Core Engine to respond..."));
-	const double Deadline = FPlatformTime::Seconds()
+		TEXT("Waiting for Core Engine to respond... "
+		     "(first run can take ~1 min while FastAPI loads)"));
+	const double Start    = FPlatformTime::Seconds();
+	const double Deadline = Start
 		+ static_cast<double>(HealthTimeoutSeconds);
+	int32 Attempt = 0;
 	while (FPlatformTime::Seconds() < Deadline)
 	{
 		if (IsCoreHealthy(HostPort))
 		{
 			return true;
 		}
-		FPlatformProcess::Sleep(1.0f);
+		++Attempt;
+		// Surface progress every 5 attempts so the user can see the
+		// wizard is alive instead of staring at a frozen "Waiting...".
+		// Without this the only signal during the 1-3 min cold-start
+		// window is the spinning progress bar, which has historically
+		// pushed users to kill the editor.
+		if (Attempt % 5 == 0)
+		{
+			const double Elapsed = FPlatformTime::Seconds() - Start;
+			Emit(EShintInstallStep::WaitingForHealth, 85,
+				FString::Printf(TEXT(
+					"Still waiting for /health on port %d "
+					"(%.0fs / %.0fs)..."),
+					HostPort, Elapsed, HealthTimeoutSeconds));
+		}
+		FPlatformProcess::Sleep(2.0f);
 	}
 	Emit(EShintInstallStep::Failed, 0,
 		FString::Printf(TEXT(
 			"Core Engine didn't respond on port %d within %.0f s. "
-			"Check Docker Desktop is running and try again."),
+			"Running auto-diagnostics..."),
 			HostPort, HealthTimeoutSeconds));
+	EmitDiagnostics();
 	return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Diagnostics
+// ─────────────────────────────────────────────────────────────────────────────
+
+void FShintCoreInstaller::EmitDiagnostics()
+{
+	// Each block is emitted as a single log line (with embedded
+	// newlines) so the Slate log widget renders it grouped. We trim
+	// each block to a sensible cap to avoid 100 KB log blasts when
+	// the container has been spewing tracebacks.
+	auto Trim = [](const FString& In, int32 MaxChars) -> FString {
+		const FString Stripped = In.TrimStartAndEnd();
+		return Stripped.Len() <= MaxChars
+			? Stripped
+			: FString::Printf(TEXT("...(truncated)...\n%s"),
+				*Stripped.Right(MaxChars));
+	};
+
+	// 1) docker ps for our container -- did it survive?
+	FString PsOut;
+	const int32 PsCode = RunDocker(
+		FString::Printf(TEXT(
+			"ps -a --filter name=^%s$ "
+			"--format \"{{.Names}}  {{.Status}}  {{.Ports}}\""),
+			*ContainerName), PsOut);
+	Emit(EShintInstallStep::Failed, 0,
+		FString::Printf(TEXT("[diag] docker ps (exit=%d):\n%s"),
+			PsCode, *Trim(PsOut, 800)));
+
+	// 2) docker logs -- the container's stdout/stderr, where uvicorn
+	// /FastAPI errors land. Tail 60 lines covers most startup
+	// tracebacks without flooding the wizard log.
+	FString LogsOut;
+	const int32 LogsCode = RunDocker(
+		FString::Printf(TEXT("logs --tail 60 %s"), *ContainerName),
+		LogsOut);
+	Emit(EShintInstallStep::Failed, 0,
+		FString::Printf(TEXT("[diag] docker logs --tail 60 (exit=%d):\n%s"),
+			LogsCode, *Trim(LogsOut, 2400)));
+
+	// 3) One more HTTP probe, this time reporting the actual response
+	// code (or "no connection") instead of the bool from
+	// IsCoreHealthy. Distinguishes "port closed" from "service up but
+	// returning 500".
+	const FString Url = FString::Printf(
+		TEXT("http://127.0.0.1:%d/health"), HostPort);
+	auto Request = FHttpModule::Get().CreateRequest();
+	Request->SetURL(Url);
+	Request->SetVerb(TEXT("GET"));
+	Request->SetTimeout(3.f);
+
+	bool bDone = false;
+	int32 RespCode = -1;
+	FString RespBody;
+	Request->OnProcessRequestComplete().BindLambda(
+		[&bDone, &RespCode, &RespBody](
+			FHttpRequestPtr, FHttpResponsePtr Resp, bool bSuccess)
+		{
+			if (bSuccess && Resp.IsValid())
+			{
+				RespCode = Resp->GetResponseCode();
+				RespBody = Resp->GetContentAsString();
+			}
+			bDone = true;
+		});
+	Request->ProcessRequest();
+	const double Deadline = FPlatformTime::Seconds() + 4.0;
+	while (!bDone && FPlatformTime::Seconds() < Deadline)
+	{
+		FHttpModule::Get().GetHttpManager().Tick(0.05f);
+		FPlatformProcess::Sleep(0.05f);
+	}
+	if (RespCode < 0)
+	{
+		Emit(EShintInstallStep::Failed, 0,
+			FString::Printf(TEXT(
+				"[diag] HTTP GET %s -> no connection "
+				"(port closed or container not bound)"),
+				*Url));
+	}
+	else
+	{
+		Emit(EShintInstallStep::Failed, 0,
+			FString::Printf(TEXT(
+				"[diag] HTTP GET %s -> %d\n%s"),
+				*Url, RespCode, *Trim(RespBody, 400)));
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

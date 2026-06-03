@@ -66,8 +66,11 @@ public:
 	/** Host port we publish 18200 on. Matches the launcher's CORE_PORT default. */
 	int32 HostPort = 18200;
 
-	/** Max wait for /health to come up after start, in seconds. */
-	float HealthTimeoutSeconds = 60.f;
+	/** Max wait for /health to come up after start, in seconds.
+	 *  Generous: on first run the FastAPI app + transformers import
+	 *  can take 30-40 s, and Docker Desktop itself can take another
+	 *  20-30 s to actually start the container on a cold daemon. */
+	float HealthTimeoutSeconds = 180.f;
 
 	/** Where progress events are delivered. */
 	TFunction<void(const FShintInstallProgress&)> OnProgress;
@@ -89,6 +92,18 @@ private:
 	bool PullImage();
 	bool StartContainer();
 	bool WaitForHealth();
+
+	/**
+	 * Auto-diagnose post-failure: shell out to `docker ps`,
+	 * `docker logs <container>`, and re-probe /health with the raw
+	 * HTTP response code visible. Emits each output block to the
+	 * wizard log so the user (and support) sees what went wrong
+	 * without having to copy / paste commands into a terminal.
+	 *
+	 * Called from WaitForHealth on timeout; safe to invoke whenever
+	 * the install is in a half-broken state.
+	 */
+	void EmitDiagnostics();
 
 	/** Shell out to `docker <args>`; captures stdout. Returns exit code. */
 	int32 RunDocker(const FString& Args, FString& OutStdout);
