@@ -81,6 +81,18 @@ struct FShintValidateResult
 	// -1.f = not present (older server, free SKU, or fix endpoint).
 	float   QualityScoreOverall = -1.f;
 
+	// Per-category breakdown echoed inline (when the server is new enough).
+	// Avoids the second /metrics/score/latest round-trip — which broke after
+	// project_id was removed from shinttools.config.json in 1.7.11. Default
+	// 100 = "no issues in this category yet"; bHasCategoryBreakdown=false
+	// tells the panel to show only the overall score, not the per-bucket row.
+	bool    bHasCategoryBreakdown = false;
+	float   PerformanceScore      = 100.f;
+	float   SecurityScore         = 100.f;
+	float   BestPracticesScore    = 100.f;
+	float   MaintainabilityScore  = 100.f;
+	float   NamingScore           = 100.f;
+
 	// Top-level summary.tier string ("free" | "indie") echoed by every /validate
 	// response. Used by the panel to hide the per-issue Explain button on Free
 	// instead of waiting for a 403 mid-click.

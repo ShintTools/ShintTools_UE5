@@ -486,74 +486,133 @@ void FShintCoreClient::ApplyCodeFixes(
 
 	int32 BPApplied = 0;
 	int32 BPSkipped = 0;
-	for (const FShintCodeIssue* Issue : BPIssues)
+
+	// Group issues by BP path so we touch each Blueprint exactly once.
+	// The previous flow called CompileBlueprint after every individual
+	// fix on the same BP, which produced cascading "graph in inconsistent
+	// state" warnings in the Message Log and could leave the BP in a
+	// half-compiled state if any intermediate fix faulted.
+	TMap<FString, TArray<const FShintCodeIssue*>> BPByPath;
+	for (const FShintCodeIssue* I : BPIssues)
 	{
-		if (Issue->RuleId == TEXT("BPP001"))
+		BPByPath.FindOrAdd(I->FilePath).Add(I);
+	}
+
+	// Extracts the quoted identifier from rule messages of the form
+	// "Variable 'XXX' is …" — used by BPM001 / BPB007.
+	auto ExtractQuotedName = [](const FString& Msg) -> FString
+	{
+		int32 Q1 = INDEX_NONE, Q2 = INDEX_NONE;
+		Msg.FindChar(TCHAR('\''), Q1);
+		if (Q1 != INDEX_NONE)
 		{
-			UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *MakeBPPath(Issue->FilePath));
-			if (BP && BP->GeneratedClass)
+			Q2 = Msg.Find(TEXT("'"), ESearchCase::CaseSensitive,
+				ESearchDir::FromStart, Q1 + 1);
+		}
+		if (Q1 != INDEX_NONE && Q2 != INDEX_NONE && Q2 > Q1)
+		{
+			return Msg.Mid(Q1 + 1, Q2 - Q1 - 1);
+		}
+		return FString();
+	};
+
+	for (auto& BPEntry : BPByPath)
+	{
+		const FString& BPPath = BPEntry.Key;
+		const TArray<const FShintCodeIssue*>& Issues = BPEntry.Value;
+
+		UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *MakeBPPath(BPPath));
+		if (!BP)
+		{
+			UE_LOG(LogShintTools, Warning,
+				TEXT("ApplyFix: Could not load BP '%s' — skipping %d issue(s)"),
+				*BPPath, Issues.Num());
+			BPSkipped += Issues.Num();
+			continue;
+		}
+
+		// E-005: ControlRigBlueprint uses a non-standard graph; structural
+		// fixes corrupt the rig wiring. CDO-only fixes (BPP001) are still
+		// safe so we check rule-by-rule rather than blanket-skipping.
+		const bool bIsCR = IsControlRigBP(BP);
+		bool bAnyApplied = false;
+
+		for (const FShintCodeIssue* Issue : Issues)
+		{
+			const FString& Rule = Issue->RuleId;
+
+			if (Rule == TEXT("BPP001"))
 			{
+				if (!BP->GeneratedClass)
+				{
+					++BPSkipped;
+					continue;
+				}
 				AActor* CDO = Cast<AActor>(BP->GeneratedClass->GetDefaultObject(true));
-				if (CDO)
+				if (!CDO)
 				{
-					CDO->PrimaryActorTick.bCanEverTick        = false;
-					CDO->PrimaryActorTick.bStartWithTickEnabled = false;
-					(void)BP->MarkPackageDirty();
-					UE_LOG(LogShintTools, Log,
-						TEXT("ApplyFix: [BPP001] Disabled tick on '%s'"), *Issue->FilePath);
-					++BPApplied;
+					++BPSkipped;
 					continue;
 				}
+				CDO->PrimaryActorTick.bCanEverTick          = false;
+				CDO->PrimaryActorTick.bStartWithTickEnabled = false;
+				UE_LOG(LogShintTools, Log,
+					TEXT("ApplyFix: [BPP001] Disabled tick on '%s'"), *BPPath);
+				++BPApplied;
+				bAnyApplied = true;
 			}
-			UE_LOG(LogShintTools, Warning,
-				TEXT("ApplyFix: [BPP001] Could not load BP '%s'"), *Issue->FilePath);
-			++BPSkipped;
-		}
-		else if (Issue->RuleId == TEXT("BPM001"))
-		{
-			FString VarName;
-			const FString& Msg = Issue->Message;
-			int32 Q1 = INDEX_NONE, Q2 = INDEX_NONE;
-			Msg.FindChar(TCHAR('\''), Q1);
-			if (Q1 != INDEX_NONE)
-				Q2 = Msg.Find(TEXT("'"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Q1 + 1);
-
-			if (Q1 != INDEX_NONE && Q2 != INDEX_NONE && Q2 > Q1)
-				VarName = Msg.Mid(Q1 + 1, Q2 - Q1 - 1);
-
-			if (!VarName.IsEmpty())
+			else if (Rule == TEXT("BPM001"))
 			{
-				if (UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *MakeBPPath(Issue->FilePath)))
+				if (bIsCR)
 				{
-					if (IsControlRigBP(BP))
-					{
-						UE_LOG(LogShintTools, Log,
-							TEXT("ApplyFix: [BPM001] Skipped ControlRigBlueprint '%s'"), *Issue->FilePath);
-						++BPSkipped;
-						continue;
-					}
-					FBlueprintEditorUtils::RemoveMemberVariable(BP, FName(*VarName));
-					FKismetEditorUtilities::CompileBlueprint(BP);
-					(void)BP->MarkPackageDirty();
 					UE_LOG(LogShintTools, Log,
-						TEXT("ApplyFix: [BPM001] Removed variable '%s' from '%s'"), *VarName, *Issue->FilePath);
-					++BPApplied;
+						TEXT("ApplyFix: [BPM001] Skipped ControlRigBlueprint '%s'"), *BPPath);
+					++BPSkipped;
 					continue;
 				}
-			}
-			UE_LOG(LogShintTools, Warning,
-				TEXT("ApplyFix: [BPM001] Could not fix '%s' — VarName='%s'"), *Issue->FilePath, *VarName);
-			++BPSkipped;
-		}
-		else if (Issue->RuleId == TEXT("BPM002"))
-		{
-			UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *MakeBPPath(Issue->FilePath));
-			if (BP)
-			{
-				if (IsControlRigBP(BP))
+				const FString VarName = ExtractQuotedName(Issue->Message);
+				if (VarName.IsEmpty())
+				{
+					UE_LOG(LogShintTools, Warning,
+						TEXT("ApplyFix: [BPM001] could not parse var name from '%s'"),
+						*Issue->Message);
+					++BPSkipped;
+					continue;
+				}
+				const FName VarFName(*VarName);
+
+				// Confirm the variable still exists on the BP. If the
+				// validator's message was stale (e.g. user already
+				// renamed/removed it), RemoveMemberVariable is a no-op
+				// but RemoveVariableNodes can still break references —
+				// skip cleanly instead.
+				bool bExists = false;
+				for (const FBPVariableDescription& V : BP->NewVariables)
+				{
+					if (V.VarName == VarFName) { bExists = true; break; }
+				}
+				if (!bExists)
 				{
 					UE_LOG(LogShintTools, Log,
-						TEXT("ApplyFix: [BPM002] Skipped ControlRigBlueprint '%s'"), *Issue->FilePath);
+						TEXT("ApplyFix: [BPM001] '%s' not on '%s' — already removed?"),
+						*VarName, *BPPath);
+					++BPSkipped;
+					continue;
+				}
+
+				FBlueprintEditorUtils::RemoveMemberVariable(BP, VarFName);
+				UE_LOG(LogShintTools, Log,
+					TEXT("ApplyFix: [BPM001] Removed variable '%s' from '%s'"),
+					*VarName, *BPPath);
+				++BPApplied;
+				bAnyApplied = true;
+			}
+			else if (Rule == TEXT("BPM002"))
+			{
+				if (bIsCR)
+				{
+					UE_LOG(LogShintTools, Log,
+						TEXT("ApplyFix: [BPM002] Skipped ControlRigBlueprint '%s'"), *BPPath);
 					++BPSkipped;
 					continue;
 				}
@@ -571,8 +630,9 @@ void FShintCoreClient::ApplyCodeFixes(
 						if (!Node) continue;
 
 						if (Node->IsA<UK2Node_FunctionEntry>()) continue;
-						if (Node->GetClass()->GetName().Contains(TEXT("Event"))) continue;
-						if (Node->GetClass()->GetName().Contains(TEXT("Tunnel"))) continue;
+						const FString CN = Node->GetClass()->GetName();
+						if (CN.Contains(TEXT("Event")))  continue;
+						if (CN.Contains(TEXT("Tunnel"))) continue;
 
 						bool bAllDisconnected = true;
 						for (UEdGraphPin* Pin : Node->Pins)
@@ -584,9 +644,10 @@ void FShintCoreClient::ApplyCodeFixes(
 							}
 						}
 
-						if (bAllDisconnected)
+						if (bAllDisconnected && Node->Pins.Num() > 0)
 						{
-							FBlueprintEditorUtils::RemoveNode(BP, Node, /*bDontRecompile=*/true);
+							FBlueprintEditorUtils::RemoveNode(
+								BP, Node, /*bDontRecompile=*/true);
 							++RemovedNodes;
 						}
 					}
@@ -594,74 +655,74 @@ void FShintCoreClient::ApplyCodeFixes(
 
 				if (RemovedNodes > 0)
 				{
-					FKismetEditorUtilities::CompileBlueprint(BP);
-					(void)BP->MarkPackageDirty();
 					UE_LOG(LogShintTools, Log,
 						TEXT("ApplyFix: [BPM002] Removed %d disconnected node(s) from '%s'"),
-						RemovedNodes, *Issue->FilePath);
+						RemovedNodes, *BPPath);
 					++BPApplied;
+					bAnyApplied = true;
+				}
+				else
+				{
+					++BPSkipped;
+				}
+			}
+			else if (Rule == TEXT("BPB007"))
+			{
+				const FString VarName = ExtractQuotedName(Issue->Message);
+				if (VarName.IsEmpty())
+				{
+					++BPSkipped;
 					continue;
 				}
-			}
-			UE_LOG(LogShintTools, Warning,
-				TEXT("ApplyFix: [BPM002] Could not fix '%s'"), *Issue->FilePath);
-			++BPSkipped;
-		}
-		else if (Issue->RuleId == TEXT("BPB007"))
-		{
-			FString VarName;
-			const FString& Msg = Issue->Message;
-			int32 Q1 = INDEX_NONE, Q2 = INDEX_NONE;
-			Msg.FindChar(TCHAR('\''), Q1);
-			if (Q1 != INDEX_NONE)
-				Q2 = Msg.Find(TEXT("'"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Q1 + 1);
-
-			if (Q1 != INDEX_NONE && Q2 != INDEX_NONE && Q2 > Q1)
-				VarName = Msg.Mid(Q1 + 1, Q2 - Q1 - 1);
-
-			if (!VarName.IsEmpty())
-			{
-				UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *MakeBPPath(Issue->FilePath));
-				if (BP)
+				const FName VarFName(*VarName);
+				bool bFound = false;
+				for (FBPVariableDescription& Var : BP->NewVariables)
 				{
-					bool bFound = false;
-					for (FBPVariableDescription& Var : BP->NewVariables)
+					if (Var.VarName == VarFName)
 					{
-						if (Var.VarName == FName(*VarName))
-						{
-							Var.Category = NSLOCTEXT("ShintTools", "DefaultCategory", "Default");
-							bFound = true;
-							break;
-						}
-					}
-					if (bFound)
-					{
-						FBlueprintEditorUtils::RefreshAllNodes(BP);
-						FKismetEditorUtilities::CompileBlueprint(BP);
-						(void)BP->MarkPackageDirty();
-						UE_LOG(LogShintTools, Log,
-							TEXT("ApplyFix: [BPB007] Set category 'Default' on '%s' in '%s'"),
-							*VarName, *Issue->FilePath);
-						++BPApplied;
-						continue;
+						Var.Category = NSLOCTEXT(
+							"ShintTools", "DefaultCategory", "Default");
+						bFound = true;
+						break;
 					}
 				}
+				if (bFound)
+				{
+					UE_LOG(LogShintTools, Log,
+						TEXT("ApplyFix: [BPB007] Set category 'Default' on '%s' in '%s'"),
+						*VarName, *BPPath);
+					++BPApplied;
+					bAnyApplied = true;
+				}
+				else
+				{
+					++BPSkipped;
+				}
 			}
-			UE_LOG(LogShintTools, Warning,
-				TEXT("ApplyFix: [BPB007] Could not fix '%s' — VarName='%s'"), *Issue->FilePath, *VarName);
-			++BPSkipped;
+			else if (Rule == TEXT("BPB001"))
+			{
+				// W-003: BPB001 (BP naming) is handled by the Asset Naming
+				// pipeline (see SShintToolsPanel::OnBlueprintValidateComplete).
+				++BPSkipped;
+			}
+			else
+			{
+				UE_LOG(LogShintTools, Verbose,
+					TEXT("ApplyFix: BP rule '%s' has no plugin-side handler — skipping"),
+					*Rule);
+				++BPSkipped;
+			}
 		}
-		else if (Issue->RuleId == TEXT("BPB001"))
+
+		// One compile per BP, after every fix has been queued up. The
+		// previous flow recompiled per-issue, which could leave the BP
+		// graph in an inconsistent state mid-batch and surface as
+		// "Failed to compile" warnings in the Message Log.
+		if (bAnyApplied)
 		{
-			// W-003: BPB001 (BP naming) is handled by the Asset Naming pipeline
-			// (see SShintToolsPanel::OnBlueprintValidateComplete).
-			++BPSkipped;
-		}
-		else
-		{
-			UE_LOG(LogShintTools, Verbose,
-				TEXT("ApplyFix: BP rule '%s' has no plugin-side handler — skipping"), *Issue->RuleId);
-			++BPSkipped;
+			FBlueprintEditorUtils::RefreshAllNodes(BP);
+			FKismetEditorUtilities::CompileBlueprint(BP);
+			(void)BP->MarkPackageDirty();
 		}
 	}
 
@@ -1261,6 +1322,24 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 		{
 			R.QualityScoreOverall = static_cast<float>(Q);
 			UE_LOG(LogShintTools, Log, TEXT("ParseValidate: quality_score=%.1f"), R.QualityScoreOverall);
+		}
+
+		// Inline per-category breakdown. The /metrics/score/latest endpoint
+		// is unreachable from the plugin since project_id was dropped from
+		// the config schema in 1.7.11, so we lean on the validate response
+		// for the 5-bucket row shown in the Overview panel. Older cores
+		// that don't echo `category_scores` cause the panel to fall back
+		// to showing only the overall score.
+		const TSharedPtr<FJsonObject>* Cat = nullptr;
+		if (J->TryGetObjectField(TEXT("category_scores"), Cat) && Cat)
+		{
+			double V = 100.0;
+			if ((*Cat)->TryGetNumberField(TEXT("performance"),     V)) R.PerformanceScore     = static_cast<float>(V);
+			if ((*Cat)->TryGetNumberField(TEXT("security"),        V)) R.SecurityScore        = static_cast<float>(V);
+			if ((*Cat)->TryGetNumberField(TEXT("best_practices"),  V)) R.BestPracticesScore   = static_cast<float>(V);
+			if ((*Cat)->TryGetNumberField(TEXT("maintainability"), V)) R.MaintainabilityScore = static_cast<float>(V);
+			if ((*Cat)->TryGetNumberField(TEXT("naming"),          V)) R.NamingScore          = static_cast<float>(V);
+			R.bHasCategoryBreakdown = true;
 		}
 	}
 

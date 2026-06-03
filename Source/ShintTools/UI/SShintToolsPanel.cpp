@@ -2696,6 +2696,21 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 			if (I.Severity == TEXT("error"))   ++LastCodeResult.TotalErrors;
 			if (I.Severity == TEXT("warning")) ++LastCodeResult.TotalWarnings;
 		}
+
+		// Refresh the score from THIS scan's response. The merge path used
+		// to drop the new quality_score on the floor, so a BP scan after a
+		// C++ scan kept showing the C++ score forever — the OverviewHero
+		// would freeze on the first scan's value.
+		if (Result.QualityScoreOverall >= 0.f)
+		{
+			LastCodeResult.QualityScoreOverall   = Result.QualityScoreOverall;
+			LastCodeResult.bHasCategoryBreakdown = Result.bHasCategoryBreakdown;
+			LastCodeResult.PerformanceScore      = Result.PerformanceScore;
+			LastCodeResult.SecurityScore         = Result.SecurityScore;
+			LastCodeResult.BestPracticesScore    = Result.BestPracticesScore;
+			LastCodeResult.MaintainabilityScore  = Result.MaintainabilityScore;
+			LastCodeResult.NamingScore           = Result.NamingScore;
+		}
 	}
 	else
 	{
@@ -2709,8 +2724,11 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 	PopulateCodeIssueList(LastCodeResult, bIsBPScan);
 	RefreshCodeStats();
 
-	// Slice B — show the overall score the server returned inline (no extra round-trip),
-	// then fetch the full per-category breakdown via /metrics/score/latest.
+	// Slice B — show the overall score the server returned inline. The
+	// /metrics/score/latest round-trip used to fetch the per-category
+	// breakdown was removed in 1.7.11 along with project_id from the
+	// config schema; the breakdown now rides on the validate response
+	// as `category_scores` (when the connected core is new enough).
 	if (LastCodeResult.QualityScoreOverall >= 0.f)
 	{
 		LastQualityScore = FShintQualityScoreSnapshot();
@@ -2720,18 +2738,15 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 		LastQualityScore.Warnings     = LastCodeResult.TotalWarnings;
 		LastQualityScore.TotalIssues  = LastCodeResult.TotalIssues;
 		LastQualityScore.FilesScanned = LastCodeResult.FilesScanned;
-		RefreshQualityScore();
-	}
-
-	if (CoreClient.IsValid())
-	{
-		const FString& ProjectId = CoreClient->GetConfig().ProjectId;
-		if (!ProjectId.IsEmpty())
+		if (LastCodeResult.bHasCategoryBreakdown)
 		{
-			CoreClient->GetLatestQualityScore(
-				ProjectId,
-				FOnShintQualityScoreComplete::CreateSP(this, &SShintToolsPanel::OnLatestScoreFetched));
+			LastQualityScore.PerformanceScore     = LastCodeResult.PerformanceScore;
+			LastQualityScore.SecurityScore        = LastCodeResult.SecurityScore;
+			LastQualityScore.BestPracticesScore   = LastCodeResult.BestPracticesScore;
+			LastQualityScore.MaintainabilityScore = LastCodeResult.MaintainabilityScore;
+			LastQualityScore.NamingScore          = LastCodeResult.NamingScore;
 		}
+		RefreshQualityScore();
 	}
 }
 
@@ -3742,9 +3757,24 @@ TSharedRef<SWidget> SShintToolsPanel::BuildOverviewHero()
 
 	auto IntText = [](int32 N) -> FText { return FText::AsNumber(N); };
 
-	auto IssuesValue = [Snap, IntText]() -> FText { return IntText(Snap().TotalIssues); };
-	auto ErrorsValue = [Snap, IntText]() -> FText { return IntText(Snap().Errors); };
-	auto FilesValue  = [Snap, IntText]() -> FText { return IntText(Snap().FilesScanned); };
+	// Overview tiles aggregate code + asset stats so the row reflects the
+	// full project state regardless of which module ran last. Previously
+	// the tiles bound to LastQualityScore only — running just the Asset
+	// scan left "TOTAL ISSUES = 0" because LastQualityScore was empty,
+	// and running both modules in sequence still only showed the code
+	// side of the summary.
+	auto IssuesValue = [this, IntText]() -> FText
+	{
+		return IntText(LastCodeResult.TotalIssues + LastAssetResult.InvalidAssets);
+	};
+	auto ErrorsValue = [this, IntText]() -> FText
+	{
+		return IntText(LastCodeResult.TotalErrors);
+	};
+	auto FilesValue  = [this, IntText]() -> FText
+	{
+		return IntText(LastCodeResult.FilesScanned + LastAssetResult.TotalAssets);
+	};
 
 	// 4-up tile grid — inlined (avoids TAttribute<FSlateColor>::Create gymnastics).
 	const FMargin GapL  = FMargin(0.f, 0.f, FShintStyle::Space::S2 * 0.5f, 0.f);
