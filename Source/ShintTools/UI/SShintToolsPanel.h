@@ -254,7 +254,12 @@ private:
 		TAttribute<TOptional<float>> PercentAttr);
 
 	// ── State ─────────────────────────────────────────────────────────────────
-	TSharedPtr<FShintCoreClient>    CoreClient;
+	TSharedPtr<FShintCoreClient>     CoreClient;
+	// Created lazily in Construct after CoreClient. Borrows the
+	// transport from CoreClient; lifetime is tied to CoreClient via
+	// the shared_ptr -- DashboardSync holds a reference, never null
+	// for the panel's lifetime.
+	TSharedPtr<class FShintDashboardSync> DashboardSync;
 	TSharedPtr<FCoreProcessManager> ProcessManager;
 
 	ECoreStatus  StatusState = ECoreStatus::Unknown;

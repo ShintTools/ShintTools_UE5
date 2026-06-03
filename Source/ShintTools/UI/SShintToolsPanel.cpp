@@ -3,6 +3,7 @@
 #include "SShintToolsPanel.h"
 #include "ShintTools/ShintTools.h"
 #include "ShintCoreClient.h"
+#include "ShintDashboardSync.h"
 #include "CoreProcessManager.h"
 
 // Shared design-system widgets (UI redesign foundation)
@@ -210,6 +211,7 @@ namespace ST4
 void SShintToolsPanel::Construct(const FArguments& InArgs)
 {
 	CoreClient     = MakeShared<FShintCoreClient>();
+	DashboardSync  = MakeShared<FShintDashboardSync>(*CoreClient);
 	ProcessManager = MakeShared<FCoreProcessManager>();
 
 	// UI-REDESIGN — dashboard shell: VBox(TopBar) over HBox(Sidebar, SwitcherContent).
@@ -1174,7 +1176,24 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 			]
 			+ SWrapBox::Slot()
 			[
+				// "Send to Dashboard" is a paid-tier feature: it
+				// POSTs the entire scan to shint.tools, which is
+				// part of the paid SaaS offering. Hide the button
+				// completely on free so the user does not see an
+				// affordance that always 403s. The cached tier comes
+				// from the launcher's startup /license/status probe;
+				// it defaults to "free" until that resolves, which
+				// is intentional -- a paid user simply sees the
+				// button appear after the probe lands. See
+				// FShintToolsModule::OnLicenseResolved for the
+				// broadcast that drives the rebuild.
 				SAssignNew(SendCodeBtn, SButton)
+				.Visibility_Lambda([]() -> EVisibility {
+					return FShintToolsModule::GetCachedTier()
+							.Equals(TEXT("free"), ESearchCase::IgnoreCase)
+						? EVisibility::Collapsed
+						: EVisibility::Visible;
+				})
 				.IsEnabled(false).ContentPadding(FMargin(14.f,7.f))
 				.OnClicked(this, &SShintToolsPanel::OnSendCodeToDashboardClicked)
 				[
@@ -1666,7 +1685,17 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 			]
 			+ SWrapBox::Slot()
 			[
+				// Same tier gate as SendCodeBtn -- shint.tools
+				// dashboard ingest is paid-only. See SendCodeBtn for
+				// the rationale on using GetCachedTier vs the per-
+				// scan LastAssetResult.Tier.
 				SAssignNew(SendAssetBtn, SButton)
+				.Visibility_Lambda([]() -> EVisibility {
+					return FShintToolsModule::GetCachedTier()
+							.Equals(TEXT("free"), ESearchCase::IgnoreCase)
+						? EVisibility::Collapsed
+						: EVisibility::Visible;
+				})
 				.IsEnabled(false).ContentPadding(FMargin(14.f,7.f))
 				.OnClicked(this, &SShintToolsPanel::OnSendAssetToDashboardClicked)
 				[
@@ -1932,7 +1961,7 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 
 FReply SShintToolsPanel::OnSendCodeToDashboardClicked()
 {
-	CoreClient->SendCodeValidatorToDashboard(LastCodeResult,
+	DashboardSync->SendCodeValidator(LastCodeResult,
 		FOnShintWebDashboardComplete::CreateSP(this, &SShintToolsPanel::OnCodeDashboardComplete));
 	return FReply::Handled();
 }
@@ -2554,7 +2583,7 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 FReply SShintToolsPanel::OnSendAssetToDashboardClicked()
 {
-	CoreClient->SendAssetNamingToDashboard(LastAssetResult,
+	DashboardSync->SendAssetNaming(LastAssetResult,
 		FOnShintWebDashboardComplete::CreateSP(this, &SShintToolsPanel::OnAssetDashboardComplete));
 	return FReply::Handled();
 }

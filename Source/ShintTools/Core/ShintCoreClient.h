@@ -233,17 +233,11 @@ struct FShintQualityScoreHistory
 };
 DECLARE_DELEGATE_OneParam(FOnShintQualityScoreHistoryComplete, const FShintQualityScoreHistory&);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// External web dashboard results
-// ─────────────────────────────────────────────────────────────────────────────
-
-struct FShintWebDashboardResult
-{
-	bool    bSuccess     = false;
-	FString ErrorMessage;
-	FString ResponseBody;
-};
-DECLARE_DELEGATE_OneParam(FOnShintWebDashboardComplete, const FShintWebDashboardResult&);
+// External web dashboard types (FShintWebDashboardResult,
+// FOnShintWebDashboardComplete) moved to Core/ShintDashboardSync.h.
+// The "Send to Dashboard" feature is a paid-tier-only POST to
+// shint.tools and lives in its own translation unit so the free SKU
+// can skip the code path entirely.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent — Auto-Fix Plan (Indie tier; free SKU never builds the UI button)
@@ -433,14 +427,9 @@ public:
 	/** Pre-flight safety check: calls /validate/check-fix-safety. On HTTP error, treats as safe. */
 	void CheckFixSafety(const TArray<FShintCodeIssue>& Issues, FOnShintSafetyCheckComplete OnComplete);
 
-	// ── Code Validator — external web dashboard ───────────────────────────────
-	/**
-	 * Sends the full project scan to the web dashboard.
-	 * Payload: POST {DashboardUrl}/api/public/code-validator/analyze
-	 * Body: { project_id, project_name, api_key, files:[{name,path,type,content,lines_count}] }
-	 */
-	void SendCodeValidatorToDashboard(const FShintValidateResult& LastResult,
-	                                  FOnShintWebDashboardComplete OnComplete);
+	// ── Code Validator — external web dashboard ──────────────────────────────
+	//   Moved to FShintDashboardSync::SendCodeValidator
+	//   (see Core/ShintDashboardSync.h).
 
 	// ── Quality Score (Slice B) ──────────────────────────────────────────────
 	/**
@@ -460,14 +449,9 @@ public:
 	void ReportAssetFixesToServer(const TArray<FShintAssetIssue>& Fixed,
 	                              FOnShintAssetFixComplete OnComplete);
 
-	// ── Asset Naming Bot — external web dashboard ─────────────────────────────
-	/**
-	 * Sends naming violations to the web dashboard.
-	 * Payload: POST {DashboardUrl}/api/public/naming-bot/analyze
-	 * Body: { project_id, project_name, api_key, items:[{name,path,type,category}] }
-	 */
-	void SendAssetNamingToDashboard(const FShintAssetScanResult& LastResult,
-	                                FOnShintWebDashboardComplete OnComplete);
+	// ── Asset Naming Bot — external web dashboard ────────────────────────────
+	//   Moved to FShintDashboardSync::SendAssetNaming
+	//   (see Core/ShintDashboardSync.h).
 
 	// ── Local MongoDB dashboard report (legacy) ───────────────────────────────
 	void SendDashboardReport(const FShintDashboardReport& Report,
@@ -505,12 +489,22 @@ public:
 	                 const FString& Body, FOnShintRequestComplete OnComplete,
 	                 const TMap<FString, FString>& ExtraHeaders = {});
 
+	// Read-only config accessor for callers (FShintDashboardSync uses
+	// it to build dashboard URLs and read ApiKeyDashboard without
+	// touching the underlying fields directly).
+	const FShintCoreConfig& GetConfig() const { return Config; }
+
+	// Helpers exposed for sibling classes that build payloads
+	// against the same JSON shape (FShintDashboardSync). Kept static
+	// + pure so they can stay free functions in spirit.
+	static FString SerializeJson(const TSharedRef<FJsonObject>& Obj);
+	static FString AssetTypeToCategory(const FString& AssetType);
+
 private:
 	void OnHttpRequestComplete(FHttpRequestPtr Request, FHttpResponsePtr Response,
 	                           bool bConnectedSuccessfully, FOnShintRequestComplete OnComplete);
 
 	static FString MethodToString(EShintHttpMethod Method);
-	static FString SerializeJson(const TSharedRef<FJsonObject>& Obj);
 	static FShintValidateResult  ParseValidateResponse (const FShintRequestResult& Raw);
 	static FShintAssetScanResult ParseAssetScanResponse(const FShintRequestResult& Raw);
 	static FShintFixResult       ParseFixResponse      (const FShintRequestResult& Raw);
@@ -528,8 +522,6 @@ private:
 	                                 TArray<FShintCodeIssue>     TreeSitterIssues,
 	                                 FOnShintFixComplete         OnComplete);
 
-	// Infer asset category from UE type string (for dashboard payload)
-	static FString AssetTypeToCategory(const FString& AssetType);
 	static FShintAgentPlanResult ParseAgentPlanResponse(const FShintRequestResult& Raw);
 
 	FShintCoreConfig Config;
