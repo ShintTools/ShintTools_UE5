@@ -3,6 +3,11 @@
 
 #include "CoreMinimal.h"
 #include "ShintCoreClient.h"
+// FShintWebDashboardResult / FOnShintWebDashboardComplete used by the
+// OnCodeDashboardComplete / OnAssetDashboardComplete signatures below.
+// These types moved out of ShintCoreClient.h in the dashboard-sync
+// refactor.
+#include "ShintDashboardSync.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SEditableTextBox.h"

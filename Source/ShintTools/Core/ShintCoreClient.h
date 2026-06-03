@@ -489,10 +489,9 @@ public:
 	                 const FString& Body, FOnShintRequestComplete OnComplete,
 	                 const TMap<FString, FString>& ExtraHeaders = {});
 
-	// Read-only config accessor for callers (FShintDashboardSync uses
-	// it to build dashboard URLs and read ApiKeyDashboard without
-	// touching the underlying fields directly).
-	const FShintCoreConfig& GetConfig() const { return Config; }
+	// GetConfig() / GetConfigMutable() are already declared above
+	// (lines ~409). FShintDashboardSync uses GetConfig() to read
+	// DashboardUrl + ApiKeyDashboard without touching internals.
 
 	// Helpers exposed for sibling classes that build payloads
 	// against the same JSON shape (FShintDashboardSync). Kept static
