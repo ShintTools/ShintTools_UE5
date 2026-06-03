@@ -7,6 +7,7 @@
 #include "HAL/PlatformTime.h"
 #include "Misc/Paths.h"
 #include "HttpModule.h"
+#include "HttpManager.h"
 #include "Interfaces/IHttpResponse.h"
 #include "Interfaces/IHttpRequest.h"
 
