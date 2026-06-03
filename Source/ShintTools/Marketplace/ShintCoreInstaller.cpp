@@ -5,6 +5,7 @@
 
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "HttpModule.h"
 #include "HttpManager.h"
@@ -204,86 +205,97 @@ bool FShintCoreInstaller::WaitForHealth()
 
 void FShintCoreInstaller::EmitDiagnostics()
 {
-	// Each block is emitted as a single log line (with embedded
-	// newlines) so the Slate log widget renders it grouped. We trim
-	// each block to a sensible cap to avoid 100 KB log blasts when
-	// the container has been spewing tracebacks.
-	auto Trim = [](const FString& In, int32 MaxChars) -> FString {
-		const FString Stripped = In.TrimStartAndEnd();
-		return Stripped.Len() <= MaxChars
-			? Stripped
-			: FString::Printf(TEXT("...(truncated)...\n%s"),
-				*Stripped.Right(MaxChars));
-	};
+	// Spawn an interactive cmd.exe window that runs `docker ps`,
+	// `docker logs`, and `curl /health` against our container, then
+	// stays open with `cmd /k` so the user can keep typing extra
+	// commands (`docker logs -f`, `docker exec -it ... bash`, etc.)
+	// without copy-pasting anything from the wizard log.
+	//
+	// We materialise the script as a .bat in the OS temp dir rather
+	// than passing the whole sequence as a single /k argument because
+	// (a) it survives the quoting horror of nested `"..."` in cmd /k
+	// and (b) the user can re-run the file later from Explorer.
 
-	// 1) docker ps for our container -- did it survive?
-	FString PsOut;
-	const int32 PsCode = RunDocker(
-		FString::Printf(TEXT(
-			"ps -a --filter name=^%s$ "
-			"--format \"{{.Names}}  {{.Status}}  {{.Ports}}\""),
-			*ContainerName), PsOut);
-	Emit(EShintInstallStep::Failed, 0,
-		FString::Printf(TEXT("[diag] docker ps (exit=%d):\n%s"),
-			PsCode, *Trim(PsOut, 800)));
+	const FString TempDir = FPlatformProcess::UserTempDir();
+	const FString BatPath = FPaths::Combine(TempDir,
+		TEXT("ShintTools_Core_Diagnostics.bat"));
 
-	// 2) docker logs -- the container's stdout/stderr, where uvicorn
-	// /FastAPI errors land. Tail 60 lines covers most startup
-	// tracebacks without flooding the wizard log.
-	FString LogsOut;
-	const int32 LogsCode = RunDocker(
-		FString::Printf(TEXT("logs --tail 60 %s"), *ContainerName),
-		LogsOut);
-	Emit(EShintInstallStep::Failed, 0,
-		FString::Printf(TEXT("[diag] docker logs --tail 60 (exit=%d):\n%s"),
-			LogsCode, *Trim(LogsOut, 2400)));
+	const FString BatBody = FString::Printf(TEXT(
+		"@echo off\r\n"
+		"chcp 65001 > nul\r\n"
+		"title ShintTools Core Engine - Diagnostics\r\n"
+		"echo ===========================================\r\n"
+		"echo   ShintTools Core Engine - Diagnostics\r\n"
+		"echo ===========================================\r\n"
+		"echo.\r\n"
+		"echo --- docker ps -a --filter name=%s ---\r\n"
+		"docker ps -a --filter name=^^%s$ --format \"table {{.Names}}\\t{{.Status}}\\t{{.Ports}}\"\r\n"
+		"echo.\r\n"
+		"echo --- docker logs --tail 80 %s ---\r\n"
+		"docker logs --tail 80 %s\r\n"
+		"echo.\r\n"
+		"echo --- curl -v http://localhost:%d/health ---\r\n"
+		"curl -v --max-time 5 http://localhost:%d/health\r\n"
+		"echo.\r\n"
+		"echo ===========================================\r\n"
+		"echo  Window stays open. Try:\r\n"
+		"echo    docker logs -f %s\r\n"
+		"echo    docker restart %s\r\n"
+		"echo    docker exec -it %s bash\r\n"
+		"echo ===========================================\r\n"
+		"echo.\r\n"),
+		*ContainerName, *ContainerName,
+		*ContainerName, *ContainerName,
+		HostPort, HostPort,
+		*ContainerName, *ContainerName, *ContainerName);
 
-	// 3) One more HTTP probe, this time reporting the actual response
-	// code (or "no connection") instead of the bool from
-	// IsCoreHealthy. Distinguishes "port closed" from "service up but
-	// returning 500".
-	const FString Url = FString::Printf(
-		TEXT("http://127.0.0.1:%d/health"), HostPort);
-	auto Request = FHttpModule::Get().CreateRequest();
-	Request->SetURL(Url);
-	Request->SetVerb(TEXT("GET"));
-	Request->SetTimeout(3.f);
-
-	bool bDone = false;
-	int32 RespCode = -1;
-	FString RespBody;
-	Request->OnProcessRequestComplete().BindLambda(
-		[&bDone, &RespCode, &RespBody](
-			FHttpRequestPtr, FHttpResponsePtr Resp, bool bSuccess)
-		{
-			if (bSuccess && Resp.IsValid())
-			{
-				RespCode = Resp->GetResponseCode();
-				RespBody = Resp->GetContentAsString();
-			}
-			bDone = true;
-		});
-	Request->ProcessRequest();
-	const double Deadline = FPlatformTime::Seconds() + 4.0;
-	while (!bDone && FPlatformTime::Seconds() < Deadline)
-	{
-		FHttpModule::Get().GetHttpManager().Tick(0.05f);
-		FPlatformProcess::Sleep(0.05f);
-	}
-	if (RespCode < 0)
+	if (!FFileHelper::SaveStringToFile(BatBody, *BatPath,
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 	{
 		Emit(EShintInstallStep::Failed, 0,
 			FString::Printf(TEXT(
-				"[diag] HTTP GET %s -> no connection "
-				"(port closed or container not bound)"),
-				*Url));
+				"[diag] Could not write diagnostics script to %s. "
+				"Manual commands:\n"
+				"  docker ps -a --filter name=%s\n"
+				"  docker logs --tail 80 %s\n"
+				"  curl http://localhost:%d/health"),
+				*BatPath, *ContainerName, *ContainerName, HostPort));
+		return;
+	}
+
+	// `cmd /k` keeps the window open after the .bat finishes. Quote
+	// the path because TempDir contains spaces on most systems
+	// (`C:\Users\<name>\AppData\Local\Temp\`).
+	const FString CmdArgs = FString::Printf(
+		TEXT("/k \"\"%s\"\""), *BatPath);
+
+	uint32 OutPID = 0;
+	FProcHandle Handle = FPlatformProcess::CreateProc(
+		TEXT("cmd.exe"), *CmdArgs,
+		/*bLaunchDetached=*/ true,
+		/*bLaunchHidden=*/   false,
+		/*bLaunchReallyHidden=*/ false,
+		&OutPID,
+		/*PriorityModifier=*/ 0,
+		/*OptionalWorkingDirectory=*/ nullptr,
+		/*PipeWriteChild=*/ nullptr,
+		/*PipeReadChild=*/  nullptr);
+
+	if (Handle.IsValid())
+	{
+		FPlatformProcess::CloseProc(Handle);
+		Emit(EShintInstallStep::Failed, 0,
+			FString::Printf(TEXT(
+				"[diag] Diagnostics window opened (PID %u). "
+				"Check the new cmd terminal for docker ps / "
+				"docker logs / curl output."), OutPID));
 	}
 	else
 	{
 		Emit(EShintInstallStep::Failed, 0,
 			FString::Printf(TEXT(
-				"[diag] HTTP GET %s -> %d\n%s"),
-				*Url, RespCode, *Trim(RespBody, 400)));
+				"[diag] Failed to launch cmd.exe. Run this script "
+				"manually:\n  %s"), *BatPath));
 	}
 }
 
