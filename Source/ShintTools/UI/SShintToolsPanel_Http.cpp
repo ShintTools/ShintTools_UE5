@@ -63,6 +63,10 @@ void SShintToolsPanel::OnProjectValidateComplete(const FShintValidateResult& Res
 
 void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& Result)
 {
+	UE_LOG(LogShintTools, Log,
+		TEXT("OnBlueprintValidateComplete: bSuccess=%d, %d issues from server (bBlueprintScanActive=%d)"),
+		Result.bSuccess ? 1 : 0, Result.Issues.Num(), bBlueprintScanActive ? 1 : 0);
+
 	// Separate naming issues (BPB001) → route to Asset Naming panel.
 	FShintValidateResult QualityResult;
 	QualityResult.bSuccess     = Result.bSuccess;
@@ -104,6 +108,10 @@ void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& R
 		ApplyAssetFilter();
 		RefreshAssetStats();
 	}
+
+	UE_LOG(LogShintTools, Log,
+		TEXT("OnBlueprintValidateComplete: routed %d to asset panel, %d kept for code merge"),
+		NamingRouted, QualityResult.Issues.Num());
 
 	// T4 — Always merge into the unified code-validator panel so the user sees
 	// C++ AND Blueprint findings in the same list. The Code-Type filter

@@ -204,8 +204,16 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result,
 	RefreshApplyCodeLabel();
 
 	UE_LOG(LogShintTools, Log,
-		TEXT("[BENCH] PopulateCodeIssueList: %.3f s, %d items (filtered from %d)"),
-		FPlatformTime::Seconds() - PopStart, AllCodeItems.Num(), Result.Issues.Num());
+		TEXT("[BENCH] PopulateCodeIssueList: %.3f s, AllCodeItems=%d (raw issues=%d, fingerprints suppressed=%d), CodeIssueItems=%d after filter "
+		     "[CodeType=%d Severity=%d Category=%d Fixable=%d]"),
+		FPlatformTime::Seconds() - PopStart,
+		AllCodeItems.Num(), Result.Issues.Num(),
+		Result.Issues.Num() - AllCodeItems.Num(),
+		CodeIssueItems.Num(),
+		static_cast<int32>(CurrentCodeTypeFilter),
+		static_cast<int32>(CurrentSeverityFilter),
+		static_cast<int32>(CurrentCategoryFilter),
+		static_cast<int32>(CurrentFilter));
 }
 
 void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Result)
@@ -325,6 +333,30 @@ void SShintToolsPanel::ApplyCodeFilter()
 	}
 
 	if (CodeIssueListView.IsValid()) CodeIssueListView->RequestListRefresh();
+
+	// Manage the empty-state surface from here too. Without this, a stale
+	// filter (e.g. Severity="Error" + a BP scan whose findings are all
+	// warnings) collapses the empty state hosted by PopulateCodeIssueList
+	// AND empties CodeIssueItems — the user sees a blank panel with no
+	// explanation. When AllCodeItems has rows but every one was masked,
+	// surface a "no matches for current filters" message instead.
+	if (CodeEmptyState.IsValid() && CodeEmptyText.IsValid())
+	{
+		if (CodeIssueItems.IsEmpty() && !AllCodeItems.IsEmpty())
+		{
+			CodeEmptyText->SetText(LOCTEXT("CVFilterMasked",
+				"No issues match the current filters — reset Category / "
+				"Severity / Fixable to see all results."));
+			CodeEmptyState->SetVisibility(EVisibility::Visible);
+		}
+		else if (!CodeIssueItems.IsEmpty())
+		{
+			CodeEmptyState->SetVisibility(EVisibility::Collapsed);
+		}
+		// CodeIssueItems empty AND AllCodeItems empty falls through —
+		// PopulateCodeIssueList owns that state ("Run a scan" / "No issues
+		// found"); we don't second-guess it here.
+	}
 }
 
 void SShintToolsPanel::ApplyAssetFilter()
