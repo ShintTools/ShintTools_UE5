@@ -52,8 +52,10 @@ namespace
 void SShintCoreInstallerWindow::Construct(const FArguments& InArgs)
 {
 	AppendLog(TEXT("ShintTools Core Engine setup."));
-	AppendLog(TEXT("This downloads the Core Engine Docker image"
-	               " (~600 MB) and starts it locally on port 18200."));
+	// One logical sentence per AppendLog call — the row's AutoWrapText handles
+	// reflow at the current dialog width, so we don't pre-wrap with C++ string
+	// concatenation.
+	AppendLog(TEXT("This downloads the Core Engine Docker image (~600 MB) and starts it locally on port 18200."));
 
 	ChildSlot
 	[
@@ -71,11 +73,14 @@ void SShintCoreInstallerWindow::Construct(const FArguments& InArgs)
 				.Font(FAppStyle::GetFontStyle("HeadingExtraSmall"))
 			]
 
-			// Status line
+			// Status line. AutoWrapText so terminal-state messages like
+			// "Failed to start container: docker daemon not running…" wrap
+			// instead of running off the right edge of the dialog.
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
 			[
 				SAssignNew(StatusLabel, STextBlock)
 				.Text(StepToText(EShintInstallStep::CheckingDocker))
+				.AutoWrapText(true)
 			]
 
 			// Progress bar
@@ -98,10 +103,17 @@ void SShintCoreInstallerWindow::Construct(const FArguments& InArgs)
 						[](TSharedPtr<FString> Item,
 						   const TSharedRef<STableViewBase>& Owner)
 						{
+							// AutoWrapText is required here: docker pull
+							// emits long lines including image digests +
+							// status URLs that exceed the dialog width.
+							// Without wrapping, those rows get clipped at
+							// the right edge and the user only ever sees
+							// the first half of the message.
 							return SNew(STableRow<TSharedPtr<FString>>, Owner)
 								[
 									SNew(STextBlock)
 									.Text(FText::FromString(*Item))
+									.AutoWrapText(true)
 								];
 						})
 				]

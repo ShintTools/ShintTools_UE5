@@ -63,22 +63,20 @@ void SShintConsentDialog::OpenModal(TFunction<void()> OnAccept)
 
 void SShintConsentDialog::Construct(const FArguments& InArgs)
 {
+	// One sentence per line — no hard breaks INSIDE a sentence. AutoWrapText
+	// on the body STextBlock handles responsive wrapping; the previous source
+	// pre-wrapped every line manually, which looked aesthetically broken when
+	// the dialog was resized and left orphan words on narrower screens.
 	const FText Body = LOCTEXT("ConsentBody",
 		"ShintTools requires a local Core Engine to operate.\n\n"
 		"To set up the Core Engine, ShintTools will:\n"
 		"  - Detect Docker Desktop on this machine.\n"
 		"  - Download a Docker image (~600 MB) from ghcr.io.\n"
 		"  - Start a container named 'shinttools-core'.\n"
-		"  - Bind port 18200 on localhost so the editor plugin\n"
-		"    can talk to it.\n\n"
-		"What stays local: your project assets, source code, and\n"
-		"scan results never leave your machine. The Core Engine\n"
-		"runs entirely in the Docker container on localhost.\n\n"
-		"What we contact remotely: only ghcr.io (to download the\n"
-		"image) and shinttools-api.com (to validate your license\n"
-		"tier, if you provide an API key).\n\n"
-		"By clicking Accept you agree to download and run the\n"
-		"Core Engine container.");
+		"  - Bind port 18200 on localhost so the editor plugin can talk to it.\n\n"
+		"What stays local: your project assets, source code, and scan results never leave your machine. The Core Engine runs entirely in the Docker container on localhost.\n\n"
+		"What we contact remotely: only ghcr.io (to download the image) and shinttools-api.com (to validate your license tier, if you provide an API key).\n\n"
+		"By clicking Accept you agree to download and run the Core Engine container.");
 
 	ChildSlot
 	[
