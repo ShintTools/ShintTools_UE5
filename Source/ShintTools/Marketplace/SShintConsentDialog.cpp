@@ -78,8 +78,7 @@ void SShintConsentDialog::Construct(const FArguments& InArgs)
 		"image) and shinttools-api.com (to validate your license\n"
 		"tier, if you provide an API key).\n\n"
 		"By clicking Accept you agree to download and run the\n"
-		"Core Engine container. You can review the source at\n"
-		"https://github.com/Genesishg1509/ShintTools .");
+		"Core Engine container.");
 
 	ChildSlot
 	[

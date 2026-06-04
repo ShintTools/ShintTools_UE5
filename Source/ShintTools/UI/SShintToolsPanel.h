@@ -148,10 +148,12 @@ public:
 
 private:
 	// ── Widget builders ───────────────────────────────────────────────────────
-	TSharedRef<SWidget> BuildHeader();
-	TSharedRef<SWidget> BuildOverviewHero();   // step 8 — KPI hero for Overview destination
+	// BuildHeader / BuildStatusBar were retired with the UI-REDESIGN switch to
+	// the SShintTopBar/SShintSidebar shell — neither was reachable from the
+	// destination switcher, so they were removed entirely instead of carried
+	// forward as dead overloads.
+	TSharedRef<SWidget> BuildOverviewHero();   // 4-up KPI hero for the Overview destination
 	TSharedRef<SWidget> BuildConfigSection();
-	TSharedRef<SWidget> BuildStatusBar();
 	TSharedRef<SWidget> BuildCodeValidatorSection();
 	TSharedRef<SWidget> BuildCodeResultsPanel();
 	TSharedRef<SWidget> BuildCodeFilterBar();
