@@ -51,6 +51,13 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 	DashboardSync  = MakeShared<FShintDashboardSync>(*CoreClient);
 	ProcessManager = MakeShared<FCoreProcessManager>();
 
+	// Kick off an initial /health probe so the Settings tab's LED + the
+	// TopBar's status text both reflect reality on first paint instead of
+	// waiting for the user to click Refresh.
+	SetStatus(ECoreStatus::Checking);
+	CoreClient->CheckHealth(FOnShintRequestComplete::CreateSP(
+		this, &SShintToolsPanel::OnHealthCheckComplete));
+
 	// UI-REDESIGN — dashboard shell: VBox(TopBar) over HBox(Sidebar, SwitcherContent).
 	// The sidebar pushes destination changes to SetDestinationIndex(); the
 	// switcher reads CurrentDestinationIndex via a lambda so the routing stays

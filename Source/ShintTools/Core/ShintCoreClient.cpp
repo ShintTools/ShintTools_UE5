@@ -78,6 +78,31 @@ bool FShintCoreClient::LoadConfig()
 	if (Json->TryGetStringField(TEXT("api_key_mongo"), S)) Config.ApiKeyMongo    = S;
 	if (Json->TryGetStringField(TEXT("session_token"), S)) Config.SessionToken   = S;
 	if (Json->TryGetStringField(TEXT("dashboard_url"), S)) Config.DashboardUrl   = S;
+	if (Json->TryGetStringField(TEXT("export_path"),   S)) Config.ExportPath     = S;
+
+	// excluded_paths: array of substrings the scanner skips. Tolerates two
+	// legacy shapes — JSON array of strings (current) and a single newline-
+	// separated string (old hand-edited configs) — so we don't break users
+	// who already had the field.
+	Config.ExcludedPaths.Reset();
+	const TArray<TSharedPtr<FJsonValue>>* ExcArr = nullptr;
+	if (Json->TryGetArrayField(TEXT("excluded_paths"), ExcArr) && ExcArr)
+	{
+		for (const TSharedPtr<FJsonValue>& V : *ExcArr)
+		{
+			FString Entry;
+			if (V->TryGetString(Entry) && !Entry.IsEmpty())
+				Config.ExcludedPaths.Add(MoveTemp(Entry));
+		}
+	}
+	else
+	{
+		FString ExcRaw;
+		if (Json->TryGetStringField(TEXT("excluded_paths"), ExcRaw))
+		{
+			ExcRaw.ParseIntoArray(Config.ExcludedPaths, TEXT("\n"), /*CullEmpty=*/true);
+		}
+	}
 
 	// Migrate the dead "app.shinttools.io" host — launcher <= 1.7.9 wrote
 	// it as the default and Cloudflare serves an HTML 404 there, which
@@ -119,6 +144,13 @@ bool FShintCoreClient::SaveConfig() const
 	Json->SetStringField(TEXT("api_key"),         Config.ApiKeyDashboard);
 	Json->SetStringField(TEXT("api_key_mongo"),   Config.ApiKeyMongo);
 	Json->SetStringField(TEXT("dashboard_url"),   Config.DashboardUrl);
+	Json->SetStringField(TEXT("export_path"),     Config.ExportPath);
+
+	TArray<TSharedPtr<FJsonValue>> ExcArr;
+	ExcArr.Reserve(Config.ExcludedPaths.Num());
+	for (const FString& P : Config.ExcludedPaths)
+		ExcArr.Add(MakeShared<FJsonValueString>(P));
+	Json->SetArrayField(TEXT("excluded_paths"), ExcArr);
 
 	const FString Out = SerializeJson(Json.ToSharedRef());
 	return FFileHelper::SaveStringToFile(Out, *CfgPath,

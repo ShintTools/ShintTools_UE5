@@ -1,21 +1,28 @@
 // Copyright ShintTools. All Rights Reserved.
 //
-// Settings destination — the "PROJECT CONFIG" card with the dashboard API
-// key + dashboard URL fields, plus SaveConfigOverrides() that flushes the
-// edited values back to shinttools.config.json.
+// Settings destination — Core Engine connection indicator + the 5-field
+// config card (Core Engine port, API Key, Dashboard API Key, Excluded
+// Paths, Export Path) plus SaveConfigOverrides() that flushes every
+// edited value back to shinttools.config.json.
 //
-// Split out because the section is independent of every other panel
-// destination: it does not consume scan state, it does not produce HTTP
-// requests, and it only mutates CoreClient's config struct.
+// Layout mirrors the Unity Settings tab so users moving between engines
+// see the same affordances in the same order. The connection LED at the
+// top binds to GetStatusColor / GetStatusText (the panel's existing
+// state setters already wire those to the health-check callback), and
+// the refresh button fires CheckHealth on demand without leaving the
+// destination.
 
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
 #include "ShintCoreClient.h"
+#include "ShintStyle.h"
 
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SMultiLineEditableTextBox.h"
 
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
 
@@ -23,13 +30,15 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 {
 	const FShintCoreConfig& Cfg = CoreClient->GetConfig();
 
+	// One-row helper. Label column is fixed width so every field column
+	// lines up vertically regardless of label length.
 	auto ConfigRow = [this](const FText& Label, TSharedPtr<SEditableTextBox>& OutField,
 		const FString& InitialValue, const FText& Hint) -> TSharedRef<SWidget>
 	{
 		return SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 10.f, 0.f)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 12.f, 0.f)
 			[
-				SNew(SBox).WidthOverride(110.f)
+				SNew(SBox).WidthOverride(160.f)
 				[
 					SNew(STextBlock).Text(Label).Font(F_Label())
 					.ColorAndOpacity(FSlateColor(C_DimGray()))
@@ -45,39 +54,140 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 			];
 	};
 
+	// Multi-line variant for Excluded Paths so users can paste one path per
+	// line instead of struggling with comma/semicolon delimiters.
+	auto MultiLineRow = [this](const FText& Label,
+		TSharedPtr<SMultiLineEditableTextBox>& OutField,
+		const FString& InitialValue, const FText& Hint) -> TSharedRef<SWidget>
+	{
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(0.f, 4.f, 12.f, 0.f)
+			[
+				SNew(SBox).WidthOverride(160.f)
+				[
+					SNew(STextBlock).Text(Label).Font(F_Label())
+					.ColorAndOpacity(FSlateColor(C_DimGray()))
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f)
+			[
+				SNew(SBox).MinDesiredHeight(64.f)
+				[
+					SAssignNew(OutField, SMultiLineEditableTextBox)
+					.Text(FText::FromString(InitialValue))
+					.HintText(Hint)
+					.Font(F_Mono())
+					.AutoWrapText(true)
+					.OnTextCommitted_Lambda([this](const FText&, ETextCommit::Type) { SaveConfigOverrides(); })
+				]
+			];
+	};
+
+	const FString CorePortStr = FString::Printf(TEXT("%d"), Cfg.CorePort);
+	const FString ExcludedJoined = FString::Join(Cfg.ExcludedPaths, TEXT("\n"));
+
 	return SNew(SBorder)
 		.BorderImage(ST4::Outline(C_Surface(), C_Border()))
-		.Padding(FMargin(20.f, 12.f))
+		.Padding(FMargin(20.f, 16.f))
 		[
 			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
+
+			// ── Core Engine status indicator ─────────────────────────────────
+			// LED + text bound to the panel's existing GetStatusColor /
+			// GetStatusText attributes. Refresh button fires a one-shot
+			// CheckHealth — the existing OnHealthCheckComplete callback
+			// updates StatusState which the LED reads next paint.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 14.f)
 			[
-				SNew(STextBlock).Text(LOCTEXT("CfgTitle", "PROJECT CONFIG"))
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
+				[
+					SNew(STextBlock).Text(FText::FromString(TEXT("●")))
+					.Font(FCoreStyle::GetDefaultFontStyle("Bold", 16))
+					.ColorAndOpacity(TAttribute<FSlateColor>::Create(
+						TAttribute<FSlateColor>::FGetter::CreateSP(this, &SShintToolsPanel::GetStatusColor)))
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
+				[
+					SNew(STextBlock).Text(LOCTEXT("CfgCoreLbl", "CORE ENGINE"))
+					.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.Text(TAttribute<FText>::Create(
+						TAttribute<FText>::FGetter::CreateSP(this, &SShintToolsPanel::GetStatusText)))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White()))
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					SNew(SButton)
+					.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+					.ContentPadding(FMargin(12.f, 5.f))
+					.OnClicked(this, &SShintToolsPanel::OnCheckConnectionClicked)
+					[
+						SNew(STextBlock).Text(LOCTEXT("CfgRefresh", "Refresh"))
+						.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Blue()))
+					]
+				]
+			]
+
+			// ── Header ───────────────────────────────────────────────────────
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 10.f)
+			[
+				SNew(STextBlock).Text(LOCTEXT("CfgTitle", "SETTINGS"))
 				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
 			]
-			// Project ID, API Key Mongo and API Key Dashboard fields have been
-			// removed from the panel in v1.3 — they are managed by the
-			// Launcher (it writes them into shinttools.config.json after the
-			// user signs in). Showing them here let curious users edit values
-			// they shouldn't touch, and inviting an Indie user to paste their
-			// license_key into a panel is a confusing flow now that the
-			// Launcher handles activation automatically.
+
+			// ── Fields ───────────────────────────────────────────────────────
 			//
-			// The struct fields (Cfg.ProjectId / Cfg.ApiKeyMongo /
-			// Cfg.ApiKeyDashboard) still exist and are loaded from JSON — the
-			// runtime contract is unchanged.
+			// Order mirrors the Unity Settings tab + the marketplace docs
+			// table: Core Engine port → API Key → Dashboard API Key →
+			// Excluded Paths → Export Path. The Launcher still owns initial
+			// population of api_key_mongo (license sync on sign-in); the
+			// field is exposed here so users can override or paste a key
+			// manually when offline.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
+			[
+				ConfigRow(LOCTEXT("CfgCorePort", "Core Engine port"),
+					CorePortField,
+					CorePortStr,
+					LOCTEXT("CfgCorePortHint", "Local port the Core Engine listens on. Default 18200."))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
+			[
+				ConfigRow(LOCTEXT("CfgApiKeyMongo", "API Key"),
+					ApiKeyMongoField,
+					Cfg.ApiKeyMongo,
+					LOCTEXT("CfgApiKeyMongoHint", "License key (api_key_mongo). Unlocks Indie features."))
+			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
 			[
 				ConfigRow(LOCTEXT("CfgApiKey", "Dashboard API Key"),
 					ApiKeyDashboardField,
-					Cfg.ApiKeyDashboard, LOCTEXT("CfgApiKeyHint",
-						"st_… key from shint.tools/dashboard → Projects "
-						"→ + New project (per-project Bearer credential)"))
+					Cfg.ApiKeyDashboard,
+					LOCTEXT("CfgApiKeyHint",
+						"st_… per-project Bearer for shint.tools uploads."))
 			]
-			+ SVerticalBox::Slot().AutoHeight()
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
+			[
+				MultiLineRow(LOCTEXT("CfgExcluded", "Excluded Paths"),
+					ExcludedPathsField,
+					ExcludedJoined,
+					LOCTEXT("CfgExcludedHint", "One folder per line. Skipped during code scans."))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
+			[
+				ConfigRow(LOCTEXT("CfgExportPath", "Export Path"),
+					ExportPathField,
+					Cfg.ExportPath,
+					LOCTEXT("CfgExportPathHint", "Default folder for JSON exports."))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
 			[
 				ConfigRow(LOCTEXT("CfgDashUrl", "Dashboard URL"), DashboardUrlField,
-					Cfg.DashboardUrl, LOCTEXT("CfgDashUrlHint", "https://shint.tools"))
+					Cfg.DashboardUrl,
+					LOCTEXT("CfgDashUrlHint", "https://shint.tools"))
 			]
 		];
 }
@@ -88,12 +198,31 @@ void SShintToolsPanel::SaveConfigOverrides()
 
 	FShintCoreConfig& Cfg = CoreClient->GetConfigMutable();
 
-	// Dashboard API Key + Dashboard URL are user-editable. ApiKeyMongo is
-	// launcher-managed (license sync on sign-in writes it).
+	if (CorePortField.IsValid())
+	{
+		const FString PortStr = CorePortField->GetText().ToString();
+		const int32 Parsed = FCString::Atoi(*PortStr);
+		// Atoi returns 0 on parse failure; treat 0 or negative as "ignore"
+		// rather than corrupting the config with an unbindable port.
+		if (Parsed > 0 && Parsed < 65536) Cfg.CorePort = Parsed;
+	}
+	if (ApiKeyMongoField.IsValid())
+		Cfg.ApiKeyMongo = ApiKeyMongoField->GetText().ToString();
 	if (ApiKeyDashboardField.IsValid())
 		Cfg.ApiKeyDashboard = ApiKeyDashboardField->GetText().ToString();
 	if (DashboardUrlField.IsValid())
 		Cfg.DashboardUrl = DashboardUrlField->GetText().ToString();
+	if (ExportPathField.IsValid())
+		Cfg.ExportPath = ExportPathField->GetText().ToString();
+	if (ExcludedPathsField.IsValid())
+	{
+		const FString Raw = ExcludedPathsField->GetText().ToString();
+		Cfg.ExcludedPaths.Reset();
+		Raw.ParseIntoArray(Cfg.ExcludedPaths, TEXT("\n"), /*CullEmpty=*/true);
+		// Trim each entry — users often paste with trailing spaces.
+		for (FString& Entry : Cfg.ExcludedPaths)
+			Entry.TrimStartAndEndInline();
+	}
 
 	CoreClient->SaveConfig();
 }

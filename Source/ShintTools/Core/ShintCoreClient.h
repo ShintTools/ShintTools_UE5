@@ -367,6 +367,20 @@ struct FShintCoreConfig
 	FString SessionToken    = TEXT("");
 	FString DashboardUrl    = TEXT("https://shint.tools");
 
+	// User-editable scan / export prefs — parity with the Unity Settings tab.
+	//
+	//   * ExcludedPaths — substrings checked against every absolute path
+	//     CollectSourceFiles emits. If any entry is a prefix-substring of
+	//     the file's path, the file is dropped before the scan request is
+	//     built. Stored newline-separated in shinttools.config.json so the
+	//     user can edit them by hand without re-quoting commas.
+	//   * ExportPath — default destination folder for JSON exports of scan
+	//     results. The plugin does not write here yet (Indie export feature
+	//     pending); the field persists the user preference so the future
+	//     export command can pre-fill it.
+	TArray<FString> ExcludedPaths;
+	FString         ExportPath      = TEXT("");
+
 	FString GetBaseUrl() const
 	{
 #if SHINT_FREE_TIER

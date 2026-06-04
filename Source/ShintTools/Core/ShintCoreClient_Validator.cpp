@@ -72,6 +72,28 @@ void FShintCoreClient::ValidateProject(
 	TArray<FString> AbsFiles;
 	CollectSourceFiles(SourceDir, AbsFiles);
 
+	// Drop anything matching the user's excluded_paths preference. Substring
+	// match (case-insensitive) so an entry like "Source/Plugins/" filters out
+	// every file under that subtree regardless of platform path separator.
+	if (!Config.ExcludedPaths.IsEmpty())
+	{
+		const int32 PreCount = AbsFiles.Num();
+		AbsFiles.RemoveAll([this](const FString& F)
+		{
+			const FString Norm = F.Replace(TEXT("\\"), TEXT("/"));
+			for (const FString& Excl : Config.ExcludedPaths)
+			{
+				if (Excl.IsEmpty()) continue;
+				const FString E = Excl.Replace(TEXT("\\"), TEXT("/"));
+				if (Norm.Contains(E, ESearchCase::IgnoreCase)) return true;
+			}
+			return false;
+		});
+		UE_LOG(LogShintTools, Log,
+			TEXT("ShintCoreClient: excluded_paths filtered %d/%d files"),
+			PreCount - AbsFiles.Num(), PreCount);
+	}
+
 	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Scanning %d source files from %s"), AbsFiles.Num(), *SourceDir);
 
 	TMap<FString, FString> FilenameLookup;

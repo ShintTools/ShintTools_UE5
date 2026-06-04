@@ -350,6 +350,14 @@ private:
 	// project implicitly server-side.
 	TSharedPtr<SEditableTextBox> ApiKeyDashboardField;
 	TSharedPtr<SEditableTextBox> DashboardUrlField;
+	// Added to mirror the Unity Settings tab layout (Core Engine port, API
+	// Key, Excluded Paths, Export Path). All persist back into
+	// shinttools.config.json via SaveConfigOverrides; ExcludedPaths feeds
+	// CollectSourceFiles-side filtering in ValidateProject.
+	TSharedPtr<SEditableTextBox> CorePortField;
+	TSharedPtr<SEditableTextBox> ApiKeyMongoField;
+	TSharedPtr<class SMultiLineEditableTextBox> ExcludedPathsField;
+	TSharedPtr<SEditableTextBox> ExportPathField;
 
 	// ── UI-REDESIGN: navigation state ────────────────────────────────────────
 	// The panel routes between four destinations via a SWidgetSwitcher driven
