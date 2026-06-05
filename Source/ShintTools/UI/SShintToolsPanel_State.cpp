@@ -16,6 +16,7 @@
 #include "SShintToolsPanel_Private.h"
 #include "ShintTools/ShintTools.h"
 #include "ShintCoreClient.h"
+#include "SShintTopBar.h"  // EShintConnState — bridged from SetStatus()
 
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
@@ -530,7 +531,26 @@ void SShintToolsPanel::RefreshApplyAssetLabel()
 // State setters + attribute getters
 // ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::SetStatus(ECoreStatus S)
-{ StatusState = S; Invalidate(EInvalidateWidget::Paint); }
+{
+	StatusState = S;
+	// Mirror onto the TopBar's parallel enum. The TopBar LED reads
+	// CurrentConnStateIndex — without this bridge it stayed permanently in
+	// the Unknown/grey state because nothing else wrote to that index.
+	// ECoreStatus and EShintConnState are intentionally separate types so
+	// each subsystem owns its vocabulary (the panel speaks "checking", the
+	// TopBar speaks "connecting"); the bridge translates between them.
+	EShintConnState Bridged = EShintConnState::Unknown;
+	switch (S)
+	{
+	case ECoreStatus::Online:   Bridged = EShintConnState::Connected;    break;
+	case ECoreStatus::Offline:  Bridged = EShintConnState::Disconnected; break;
+	case ECoreStatus::Checking: Bridged = EShintConnState::Connecting;   break;
+	case ECoreStatus::Unknown:
+	default:                    Bridged = EShintConnState::Unknown;      break;
+	}
+	CurrentConnStateIndex = static_cast<int32>(Bridged);
+	Invalidate(EInvalidateWidget::Paint);
+}
 
 void SShintToolsPanel::SetCodeState(EModuleState S)
 { CodeState = S; Invalidate(EInvalidateWidget::Paint); }

@@ -1,16 +1,15 @@
 // Copyright ShintTools. All Rights Reserved.
 //
-// Settings destination — Core Engine connection indicator + the 5-field
-// config card (Core Engine port, API Key, Dashboard API Key, Excluded
-// Paths, Export Path) plus SaveConfigOverrides() that flushes every
-// edited value back to shinttools.config.json.
+// Settings destination — the 5-field config card (Core Engine port, API
+// Key, Dashboard API Key, Excluded Paths, Export Path) plus
+// SaveConfigOverrides() that flushes every edited value back to
+// shinttools.config.json.
 //
 // Layout mirrors the Unity Settings tab so users moving between engines
-// see the same affordances in the same order. The connection LED at the
-// top binds to GetStatusColor / GetStatusText (the panel's existing
-// state setters already wire those to the health-check callback), and
-// the refresh button fires CheckHealth on demand without leaving the
-// destination.
+// see the same affordances in the same order. The Core Engine
+// connection indicator lives in the TopBar (top-right corner — bridged
+// from SetStatus via CurrentConnStateIndex); the Settings tab does NOT
+// duplicate it.
 
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
@@ -91,46 +90,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 		.Padding(FMargin(20.f, 16.f))
 		[
 			SNew(SVerticalBox)
-
-			// ── Core Engine status indicator ─────────────────────────────────
-			// LED + text bound to the panel's existing GetStatusColor /
-			// GetStatusText attributes. Refresh button fires a one-shot
-			// CheckHealth — the existing OnHealthCheckComplete callback
-			// updates StatusState which the LED reads next paint.
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 14.f)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
-				[
-					SNew(STextBlock).Text(FText::FromString(TEXT("●")))
-					.Font(FCoreStyle::GetDefaultFontStyle("Bold", 16))
-					.ColorAndOpacity(TAttribute<FSlateColor>::Create(
-						TAttribute<FSlateColor>::FGetter::CreateSP(this, &SShintToolsPanel::GetStatusColor)))
-				]
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
-				[
-					SNew(STextBlock).Text(LOCTEXT("CfgCoreLbl", "CORE ENGINE"))
-					.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
-				]
-				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
-				[
-					SNew(STextBlock)
-					.Text(TAttribute<FText>::Create(
-						TAttribute<FText>::FGetter::CreateSP(this, &SShintToolsPanel::GetStatusText)))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White()))
-				]
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-				[
-					SNew(SButton)
-					.ButtonColorAndOpacity(FSlateColor(C_Surface()))
-					.ContentPadding(FMargin(12.f, 5.f))
-					.OnClicked(this, &SShintToolsPanel::OnCheckConnectionClicked)
-					[
-						SNew(STextBlock).Text(LOCTEXT("CfgRefresh", "Refresh"))
-						.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Blue()))
-					]
-				]
-			]
 
 			// ── Header ───────────────────────────────────────────────────────
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 10.f)
