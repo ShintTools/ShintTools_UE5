@@ -2,6 +2,21 @@
 
 ---
 
+## [Unreleased] — 2026-06-08
+
+### Bug Fixes
+- **#28 — Quality score frozen after "Scan All BP".** `OnBlueprintValidateComplete` rebuilds a stripped `QualityResult` (to route `BPB001` naming issues out of the code list) but copied only `bSuccess` + `FilesScanned`, leaving `QualityScoreOverall` at its `-1` default. `HandleValidateResult`'s merge path updates the score only when `QualityScoreOverall >= 0`, so the Overview score badge + per-category breakdown stayed frozen on the previous C++ scan (or "—" if none ran). Now copies `QualityScoreOverall`, `bHasCategoryBreakdown`, the five per-category scores and `Tier` before the merge. (`SShintToolsPanel_Http.cpp`)
+- **#27 — TreeSitter-only auto-fixes silently skipped.** Both apply entry points (`OnApplySelectedCodeFixesClicked`, `OnApplySingleFix`) rejected any non-Blueprint issue with an empty `FixSuggestion`, even when it carried `FileContent` — the prerequisite for the `/validate/fix` AST path that `ApplyCodeFixes` already routes. Clicking **Apply** on such an issue did nothing (no toast when it was the only selection). Guards now reject only when `FixSuggestion` **and** `FileContent` are both empty. (`SShintToolsPanel_Fixes.cpp`)
+
+### Tooling
+- **Daily bug-hunt routine** (`tools/bug_hunt/`, `.github/workflows/bug-hunt.yml`). A headless `claude -p` pass scans `Source/ShintTools/**` once a day, de-dupes against open `bug-hunt` issues, and files one issue in the standard template (Bug / File / Lines / Faulty code / Root cause / Trigger path / Suggested fix). Reviews all three shipped build variants — Marketplace (`SHINT_MARKETPLACE_BUILD=1`), Free (`SHINT_FREE_TIER=1`) and Paid — plus the runtime tier gating, so defects inside `#if` branches the default config compiles out are still caught; each issue tags the affected variant. Schedulable via Windows Task Scheduler (local) or GitHub Actions cron (always-on).
+
+### Bug Reports (addressed)
+- `bug-hunt #28` — score badge frozen after Scan All BP → fixed above.
+- `bug-hunt #27` — "Apply Selected" no-ops for TreeSitter-only C++ issues → fixed above.
+
+---
+
 ## [Unreleased] — 2026-04-09
 
 ### Bug Fixes
