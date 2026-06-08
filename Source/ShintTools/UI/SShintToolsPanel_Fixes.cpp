@@ -67,7 +67,13 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 		// Only accept issues that are checked AND actually auto-fixable.
 		if (!Item->bChecked || !Item->bIsAutoFixable) continue;
 		// BP issues use plugin-side handlers — no FixSuggestion required.
-		if (!Item->bIsBlueprint && Item->FixSuggestion.IsEmpty()) continue;
+		// #27 — C++ AST-level rules are auto-fixable via the TreeSitter
+		// endpoint using FileContent, with no line-level fix_suggestion. Only
+		// reject items that have nothing to work with: no suggestion AND no
+		// file content. ApplyCodeFixes already routes FileContent issues to
+		// the TreeSitter path, so excluding them here was dropping valid fixes.
+		if (!Item->bIsBlueprint && Item->FixSuggestion.IsEmpty()
+			&& Item->FileContent.IsEmpty()) continue;
 
 		FShintCodeIssue I;
 		I.RuleId         = Item->RuleId;
@@ -141,8 +147,11 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 
 FReply SShintToolsPanel::OnApplySingleFix(FShintIssueItemPtr Item)
 {
+	// #27 — mirror the batch-apply guard: a C++ item with FileContent is
+	// fixable via the TreeSitter path even without a line-level fix_suggestion.
 	if (!Item.IsValid() || !Item->bIsAutoFixable
-		|| (!Item->bIsBlueprint && Item->FixSuggestion.IsEmpty()))
+		|| (!Item->bIsBlueprint && Item->FixSuggestion.IsEmpty()
+			&& Item->FileContent.IsEmpty()))
 		return FReply::Handled();
 
 	TArray<FShintCodeIssue> Issues;

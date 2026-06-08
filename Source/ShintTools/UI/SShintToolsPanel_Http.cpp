@@ -103,6 +103,20 @@ void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& R
 	}
 	QualityResult.TotalIssues = QualityResult.Issues.Num();
 
+	// #28 — copy the score fields from the server result. HandleValidateResult's
+	// merge path only updates the badge + per-category breakdown when
+	// QualityScoreOverall >= 0; the stripped QualityResult left it at the -1
+	// default (and per-category at 100), so the condition was always false and
+	// the score stayed frozen on whatever the last C++ scan produced.
+	QualityResult.QualityScoreOverall   = Result.QualityScoreOverall;
+	QualityResult.bHasCategoryBreakdown = Result.bHasCategoryBreakdown;
+	QualityResult.PerformanceScore      = Result.PerformanceScore;
+	QualityResult.SecurityScore         = Result.SecurityScore;
+	QualityResult.BestPracticesScore    = Result.BestPracticesScore;
+	QualityResult.MaintainabilityScore  = Result.MaintainabilityScore;
+	QualityResult.NamingScore           = Result.NamingScore;
+	QualityResult.Tier                  = Result.Tier;
+
 	if (NamingRouted > 0)
 	{
 		ApplyAssetFilter();
