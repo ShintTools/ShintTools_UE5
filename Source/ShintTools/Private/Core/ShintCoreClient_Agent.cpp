@@ -6,7 +6,7 @@
 // header dependencies don't fork between tiers.
 
 #include "ShintCoreClient.h"
-#include "ShintTools/ShintTools.h"
+#include "ShintTools.h"
 
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"

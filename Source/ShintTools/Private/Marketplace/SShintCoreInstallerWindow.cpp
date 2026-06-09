@@ -2,7 +2,7 @@
 
 #include "SShintCoreInstallerWindow.h"
 #include "SShintConsentDialog.h"
-#include "ShintTools/ShintTools.h"
+#include "ShintTools.h"
 
 #include "Async/Async.h"
 #include "Framework/Application/SlateApplication.h"

@@ -3,7 +3,7 @@
 #include "ShintDashboardSync.h"
 
 #include "ShintCoreClient.h"
-#include "ShintTools/ShintTools.h"
+#include "ShintTools.h"
 
 #include "Dom/JsonObject.h"
 #include "Misc/FileHelper.h"

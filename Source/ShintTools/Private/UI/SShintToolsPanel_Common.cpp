@@ -14,7 +14,7 @@
 
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
-#include "ShintTools/ShintTools.h"
+#include "ShintTools.h"
 
 // Shared design-system widgets
 #include "ShintStyle.h"

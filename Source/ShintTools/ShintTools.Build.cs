@@ -38,11 +38,13 @@ public class ShintTools : ModuleRules
 		PublicDefinitions.Add("SHINT_FREE_TIER=0");
 
 		// SHINT_MARKETPLACE_BUILD=1 enables the standalone Core install
-		// wizard (Docker pull + container) at module startup. tools/
-		// build_marketplace_pack.py flips this to 1 when producing the
-		// Fab/Unreal Marketplace bundle; launcher builds keep it at 0
-		// because the launcher's installer.py owns Core install.
-		PublicDefinitions.Add("SHINT_MARKETPLACE_BUILD=0");
+		// wizard (Docker pull + container) at module startup. This is the
+		// `develop-marketplace` branch — the Fab SOURCE submission, which
+		// Fab compiles as-is, so the define is baked to 1 here (there is no
+		// launcher to install the Core for marketplace customers). On the
+		// paid `develop`/`main` branches this stays 0 (installer.py owns
+		// Core install).
+		PublicDefinitions.Add("SHINT_MARKETPLACE_BUILD=1");
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{

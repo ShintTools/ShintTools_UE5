@@ -1,7 +1,7 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
 
 #include "SShintConsentDialog.h"
-#include "ShintTools/ShintTools.h"
+#include "ShintTools.h"
 
 #include "Framework/Application/SlateApplication.h"
 #include "Misc/FileHelper.h"

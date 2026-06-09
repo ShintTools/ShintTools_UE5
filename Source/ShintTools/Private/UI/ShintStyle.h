@@ -166,7 +166,12 @@ public:
 			{
 				// FSlateFontInfo built from a TTF path is supported by Slate's
 				// FreeType backend without registering a composite font asset.
+				// The (path, size) constructor is deprecated in UE 5.7 but still
+				// functional; suppress the deprecation rather than pull in a
+				// composite-font asset just to set a branding font.
+				PRAGMA_DISABLE_DEPRECATION_WARNINGS
 				return FSlateFontInfo(Path, Size);
+				PRAGMA_ENABLE_DEPRECATION_WARNINGS
 			}
 			// Fallback — Engine/Content/Slate/Fonts/Roboto-Regular.ttf is
 			// guaranteed to exist on every UE5 install.

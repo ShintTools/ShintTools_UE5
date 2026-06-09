@@ -6,7 +6,7 @@
 // without touching headers or callsites.
 
 #include "ShintCoreClient.h"
-#include "ShintTools/ShintTools.h"
+#include "ShintTools.h"
 
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"

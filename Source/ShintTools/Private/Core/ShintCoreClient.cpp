@@ -22,7 +22,7 @@
 //   * MethodToString / SerializeJson (pure helpers reused everywhere)
 
 #include "ShintCoreClient.h"
-#include "ShintTools/ShintTools.h"
+#include "ShintTools.h"
 
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"

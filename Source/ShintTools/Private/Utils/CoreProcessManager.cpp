@@ -1,7 +1,7 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
 
 #include "CoreProcessManager.h"
-#include "ShintTools/ShintTools.h"
+#include "ShintTools.h"
 
 #include "HAL/PlatformProcess.h"
 #include "Misc/Paths.h"

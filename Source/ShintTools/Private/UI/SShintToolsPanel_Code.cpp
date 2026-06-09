@@ -13,7 +13,7 @@
 
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
-#include "ShintTools/ShintTools.h"
+#include "ShintTools.h"
 #include "ShintCoreClient.h"
 #include "ShintDashboardSync.h"
 
