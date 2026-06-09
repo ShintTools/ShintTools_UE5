@@ -2,6 +2,44 @@
 
 ---
 
+## [1.0.0] — 2026-06-09 — Fab Marketplace submission (compliance)
+
+Addresses the Fab Technical Review rejection of *ShintTools AI for Unreal Engine*.
+Each item below maps to a failed checklist row. These changes live on
+`develop-marketplace` and ship via `tools/build_fab_source_pack.py`.
+
+### Marketplace / Fab compliance
+- **Standard UE module layout (Public/Private).** All sources moved under
+  `Source/ShintTools/Public/` (the exposed module header `ShintTools.h`) and
+  `Source/ShintTools/Private/` (every internal implementation file, subfolders
+  preserved). `Build.cs` `PrivateIncludePaths` re-rooted under `Private/` so the
+  existing folder-qualified sibling includes keep resolving. *(Fail: "asset types
+  inside respective folders" / Public-Private recommendation.)*
+- **Copyright + year on every source file.** Header changed from
+  `// Copyright ShintTools. All Rights Reserved.` to
+  `// Copyright 2026 ShintTools. All Rights Reserved.` across all 50 `.h/.cpp/.cs`
+  files. *(Fail: "All source and header files contain a commented copyright
+  notice with Publisher name and year of publishing.")*
+- **`.uplugin` metadata.** Added `"EngineVersion": "5.7.0"` (latest UE — Fab
+  requires the latest engine as a Supported Version, 4.2.2.b), added
+  `"PlatformAllowList": [ "Win64" ]` to the `ShintTools` module, and pinned
+  `"VersionName": "1.0.0"`. *(Fails: latest-engine + per-module PlatformAllowList.)*
+- **Documentation folder.** Customer documentation placed in
+  `Documentation/ShintTools_UE5_Documentation.docx` and declared in
+  `Config/FilterPlugin.ini` (`/Documentation/...`). *(Fails: docs must live in a
+  `Docs`/`Documentation` folder declared in FilterPlugin.ini.)*
+- **Source-only submission pack.** New `tools/build_fab_source_pack.py` stages a
+  clean source tree (no `Binaries/Build/Intermediate/Saved`, no dev folders),
+  marks the `.uplugin` `"Installed": false`, and zips the plugin folder at the zip
+  root → `dist_fab/ShintTools-UE5-Fab-Source-UE_5.7.zip`. *(Fail: "no unused or
+  local folders such as Binaries, Build, Intermediate, or Saved".)*
+
+> **Action required before resubmission:** build/compile the plugin on **UE 5.7**
+> (UAT BuildPlugin) to confirm the Public/Private move resolves all includes, and
+> list UE 5.7 as the Supported Engine Version on the Fab product page.
+
+---
+
 ## [Unreleased] — 2026-06-08
 
 ### Bug Fixes

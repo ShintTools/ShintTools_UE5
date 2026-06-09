@@ -1,4 +1,4 @@
-// Copyright ShintTools. All Rights Reserved.
+// Copyright 2026 ShintTools. All Rights Reserved.
 
 using UnrealBuildTool;
 
@@ -8,24 +8,25 @@ public class ShintTools : ModuleRules
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 
+		// Fab compliance: sources follow the standard UE module layout —
+		// Public/ holds the exposed module header, Private/ holds all
+		// internal implementation. The folder-qualified sibling includes
+		// (e.g. "Transport/FShintHttpClient.h", "Security/ShintSecurity.h")
+		// are preserved by re-rooting every include path under Private/.
+		// "Public" is auto-added by UBT so the module header resolves as
+		// "ShintTools.h". Without the Private subfolder roots, UAT
+		// BuildPlugin fails with `C1083: Cannot open include file: 'Transport/…'`.
 		PrivateIncludePaths.AddRange(new string[]
 		{
-			// Root is required so headers can use sibling-folder
-			// include paths like "Transport/FShintHttpClient.h" or
-			// "Security/ShintSecurity.h" — Sprint 1 refactor split the
-			// monolith and the new transport/security folders need to
-			// be addressable from each other, not just from their own
-			// subfolder. Without this, UAT BuildPlugin fails with
-			// `fatal error C1083: Cannot open include file: 'Transport/…'`.
-			"ShintTools",
-			"ShintTools/Api",
-			"ShintTools/Core",
-			"ShintTools/Marketplace",
-			"ShintTools/Security",
-			"ShintTools/Transport",
-			"ShintTools/UI",
-			"ShintTools/UI/Shared",
-			"ShintTools/Utils",
+			"ShintTools/Private",
+			"ShintTools/Private/Api",
+			"ShintTools/Private/Core",
+			"ShintTools/Private/Marketplace",
+			"ShintTools/Private/Security",
+			"ShintTools/Private/Transport",
+			"ShintTools/Private/UI",
+			"ShintTools/Private/UI/Shared",
+			"ShintTools/Private/Utils",
 		});
 
 		// SHINT_FREE_TIER=1 builds the lockdown variant produced by
