@@ -58,7 +58,7 @@ public:
 	/** Image to pull. Published by Genesis's CI to ghcr.io (see
 	 *  .github/workflows/publish-core.yml in the Core repo). ghcr.io
 	 *  public images have no per-puller rate limit, unlike Docker Hub. */
-	FString ImageTag = TEXT("ghcr.io/genesishg1509/shinttools-core:latest");
+	FString ImageTag = TEXT("ghcr.io/shinttoolsdev/shinttools-core:latest");
 
 	/** Container name (so we can `docker start <name>` on subsequent boots). */
 	FString ContainerName = TEXT("shinttools-core");
