@@ -1,5 +1,6 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
 
+using System.IO;
 using UnrealBuildTool;
 
 public class ShintTools : ModuleRules
@@ -8,25 +9,24 @@ public class ShintTools : ModuleRules
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 
-		// Fab compliance: sources follow the standard UE module layout —
-		// Public/ holds the exposed module header, Private/ holds all
-		// internal implementation. The folder-qualified sibling includes
-		// (e.g. "Transport/FShintHttpClient.h", "Security/ShintSecurity.h")
-		// are preserved by re-rooting every include path under Private/.
-		// "Public" is auto-added by UBT so the module header resolves as
-		// "ShintTools.h". Without the Private subfolder roots, UAT
-		// BuildPlugin fails with `C1083: Cannot open include file: 'Transport/…'`.
-		PrivateIncludePaths.AddRange(new string[]
+		// Fab compliance: standard UE module layout — ALL headers live under
+		// Public/, ALL .cpp under Private/. UBT auto-adds only the Public ROOT
+		// (not its subdirectories) for non-legacy modules, so the bare-name
+		// includes used across this module ("ShintCoreClient.h",
+		// "CoreProcessManager.h", "SShintToolsPanel.h", ...) need every Public
+		// subfolder on the include path. Paths are built from ModuleDirectory
+		// (absolute) so resolution does not depend on the include-root base.
+		PublicIncludePaths.AddRange(new string[]
 		{
-			"ShintTools/Private",
-			"ShintTools/Private/Api",
-			"ShintTools/Private/Core",
-			"ShintTools/Private/Marketplace",
-			"ShintTools/Private/Security",
-			"ShintTools/Private/Transport",
-			"ShintTools/Private/UI",
-			"ShintTools/Private/UI/Shared",
-			"ShintTools/Private/Utils",
+			Path.Combine(ModuleDirectory, "Public"),
+			Path.Combine(ModuleDirectory, "Public", "Api"),
+			Path.Combine(ModuleDirectory, "Public", "Core"),
+			Path.Combine(ModuleDirectory, "Public", "Marketplace"),
+			Path.Combine(ModuleDirectory, "Public", "Security"),
+			Path.Combine(ModuleDirectory, "Public", "Transport"),
+			Path.Combine(ModuleDirectory, "Public", "UI"),
+			Path.Combine(ModuleDirectory, "Public", "UI", "Shared"),
+			Path.Combine(ModuleDirectory, "Public", "Utils"),
 		});
 
 		// SHINT_FREE_TIER=1 builds the lockdown variant produced by
