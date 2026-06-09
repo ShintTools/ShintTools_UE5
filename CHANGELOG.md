@@ -2,6 +2,30 @@
 
 ---
 
+## [Unreleased] — 2026-06-09 — autofix UX + Core image owner
+
+### Bug Fixes
+- **Apply-fix recompile gave no feedback (looked like nothing happened).** After
+  a C++ auto-fix the plugin spawns `Build.bat` via `ExecProcess`, which runs
+  **hidden** — so in the marketplace build (no IDE/console) the user saw no
+  window and no compilation, and assumed the fix never applied. Both apply paths
+  (local apply + tree-sitter `/validate/fix`) now show a non-blocking editor
+  notification: *"recompiling project after fix…"* → *"recompiled successfully"*
+  or *"finished with N error(s)"*. (`ShintCoreClient_Validator.cpp`)
+- **Null-check auto-fix broke compilation when the line declared a variable**
+  (Core-side, fixed in ShintTools Core `7d9cd33`). `int32 N = GI->Count();`
+  became `if (IsValid(GI)) { int32 N = GI->Count(); }`, scoping `N` inside the
+  block. The Core now hoists the declaration above the guard
+  (`int32 N{}; if (IsValid(GI)) { N = GI->Count(); }`) and bails to
+  mark-for-review for `auto`/`const`. Reaches marketplace via the republished
+  `ghcr.io/noctxas97dev/shinttools-core:latest` image.
+
+### Changed
+- **Core image owner.** The install wizard now pulls
+  `ghcr.io/noctxas97dev/shinttools-core:latest` (was `genesishg1509`).
+
+---
+
 ## [1.0.0] — 2026-06-09 — Fab Marketplace submission (compliance)
 
 Addresses the Fab Technical Review rejection of *ShintTools AI for Unreal Engine*.

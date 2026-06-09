@@ -18,6 +18,8 @@
 #include "HAL/FileManager.h"
 #include "HAL/PlatformProcess.h"
 #include "Async/Async.h"
+#include "Framework/Notifications/NotificationManager.h"
+#include "Widgets/Notifications/SNotificationList.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -37,6 +39,57 @@
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
+
+namespace
+{
+	// Bug 1 fix: the post-fix recompile (Build.bat) runs hidden via
+	// ExecProcess, so without visible feedback the editor looks frozen / like
+	// the fix never applied — especially in the marketplace build where there
+	// is no IDE/console. These show a non-blocking editor notification while
+	// the incremental build runs and update it with the result.
+	TSharedPtr<SNotificationItem> ShintBeginRecompileNotification()
+	{
+		FNotificationInfo Info(FText::FromString(
+			TEXT("ShintTools: recompiling project after fix…")));
+		Info.bFireAndForget = false;
+		Info.bUseThrobber = true;
+		Info.bUseSuccessFailIcons = true;
+		Info.FadeOutDuration = 1.5f;
+		TSharedPtr<SNotificationItem> Note =
+			FSlateNotificationManager::Get().AddNotification(Info);
+		if (Note.IsValid())
+		{
+			Note->SetCompletionState(SNotificationItem::CS_Pending);
+		}
+		return Note;
+	}
+
+	void ShintEndRecompileNotification(
+		TSharedPtr<SNotificationItem> Note, bool bHasErrors, int32 NumErrors)
+	{
+		if (!Note.IsValid())
+		{
+			return;
+		}
+		if (bHasErrors)
+		{
+			const FString Msg = NumErrors > 0
+				? FString::Printf(
+					TEXT("Recompile finished with %d error(s) — see the Code panel."),
+					NumErrors)
+				: TEXT("Recompile failed — see the Output Log.");
+			Note->SetText(FText::FromString(Msg));
+			Note->SetCompletionState(SNotificationItem::CS_Fail);
+		}
+		else
+		{
+			Note->SetText(FText::FromString(
+				TEXT("Project recompiled successfully.")));
+			Note->SetCompletionState(SNotificationItem::CS_Success);
+		}
+		Note->ExpireAndFadeout();
+	}
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Code Validator — single file
@@ -860,7 +913,9 @@ void FShintCoreClient::ApplyCodeFixes(
 		UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Launching incremental build check: %s %s"),
 			*BuildBat, *BuildArgs);
 
-		Async(EAsyncExecution::Thread, [BuildBat, BuildArgs, Result, OnComplete]() mutable
+		TSharedPtr<SNotificationItem> BuildNote = ShintBeginRecompileNotification();
+
+		Async(EAsyncExecution::Thread, [BuildBat, BuildArgs, Result, OnComplete, BuildNote]() mutable
 		{
 			FString StdOut, StdErr;
 			int32   ExitCode = 0;
@@ -965,8 +1020,10 @@ void FShintCoreClient::ApplyCodeFixes(
 				UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Build succeeded — no compile errors"));
 			}
 
-			AsyncTask(ENamedThreads::GameThread, [Result, OnComplete]() mutable
+			AsyncTask(ENamedThreads::GameThread, [Result, OnComplete, BuildNote]() mutable
 			{
+				ShintEndRecompileNotification(
+					BuildNote, Result.bHasCompileErrors, Result.CompileErrors.Num());
 				OnComplete.ExecuteIfBound(Result);
 			});
 		});
@@ -1203,7 +1260,9 @@ void FShintCoreClient::HandleTreeSitterFixResponse(
 		UE_LOG(LogShintTools, Log, TEXT("HandleTreeSitterFixResponse: launching incremental build: %s %s"),
 			*BuildBat, *BuildArgs);
 
-		Async(EAsyncExecution::Thread, [BuildBat, BuildArgs, LocalResult, OnComplete]() mutable
+		TSharedPtr<SNotificationItem> BuildNote = ShintBeginRecompileNotification();
+
+		Async(EAsyncExecution::Thread, [BuildBat, BuildArgs, LocalResult, OnComplete, BuildNote]() mutable
 		{
 			FString StdOut, StdErr;
 			int32   ExitCode = 0;
@@ -1288,8 +1347,10 @@ void FShintCoreClient::HandleTreeSitterFixResponse(
 				UE_LOG(LogShintTools, Log, TEXT("HandleTreeSitterFixResponse: build succeeded"));
 			}
 
-			AsyncTask(ENamedThreads::GameThread, [LocalResult, OnComplete]() mutable
+			AsyncTask(ENamedThreads::GameThread, [LocalResult, OnComplete, BuildNote]() mutable
 			{
+				ShintEndRecompileNotification(
+					BuildNote, LocalResult.bHasCompileErrors, LocalResult.CompileErrors.Num());
 				OnComplete.ExecuteIfBound(LocalResult);
 			});
 		});
