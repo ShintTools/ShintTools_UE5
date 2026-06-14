@@ -15,6 +15,7 @@
 #include "SShintToolsPanel_Private.h"
 #include "ShintCoreClient.h"
 #include "ShintStyle.h"
+#include "ShintTools.h"  // FShintToolsModule::RefreshTierAsync
 
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -184,6 +185,12 @@ void SShintToolsPanel::SaveConfigOverrides()
 	}
 
 	CoreClient->SaveConfig();
+
+	// Re-resolve the tier with the just-saved key so the License badge +
+	// Indie/Studio gates update live. Without this the badge stayed on the
+	// value resolved at editor startup until the next restart, even though
+	// scans already used the new key (the Core resolves tier per request).
+	FShintToolsModule::RefreshTierAsync();
 }
 
 #undef LOCTEXT_NAMESPACE

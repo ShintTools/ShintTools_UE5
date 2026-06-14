@@ -58,6 +58,15 @@ public:
 	// resolves; widgets should refresh when ``OnLicenseResolved`` fires.
 	static FString GetCachedTier();
 
+	/**
+	 * Re-resolve the cached tier from the current shinttools.config.json via
+	 * an async POST /license/status. Called once at StartupModule and again
+	 * whenever the user saves a new license key in the Config panel, so the
+	 * License badge + Indie/Studio gates update live without an editor
+	 * restart. Updates GCachedTier and fires OnLicenseResolved on completion.
+	 */
+	static void RefreshTierAsync();
+
 	/** Multicast delegate fired once /license/status returns. */
 	DECLARE_MULTICAST_DELEGATE(FOnShintLicenseResolved);
 	static FOnShintLicenseResolved OnLicenseResolved;

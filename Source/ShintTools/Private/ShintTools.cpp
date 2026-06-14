@@ -43,6 +43,35 @@ FString FShintToolsModule::GetCachedTier()
 	return GCachedTier;
 }
 
+void FShintToolsModule::RefreshTierAsync()
+{
+	// Re-resolve the cached tier from the CURRENT shinttools.config.json.
+	// Called at startup and after the Config panel saves a new license key,
+	// so the License badge + Indie/Studio gates update live without an editor
+	// restart. The transport + LicenseApi are kept alive by the lambda
+	// capture for the duration of the async round-trip.
+	FShintCoreClient Tmp;  // reads shinttools.config.json to get base_url
+	const FShintCoreConfig& Cfg = Tmp.GetConfig();
+	const FString BaseUrl = Cfg.GetBaseUrl();
+	const FString ApiKey  = Cfg.ApiKeyMongo;
+
+	const TSharedRef<FShintHttpClient> Transport =
+		MakeShared<FShintHttpClient>(TEXT("license-probe"));
+	TSharedRef<FShintLicenseApi> Api =
+		MakeShared<FShintLicenseApi>(Transport, BaseUrl);
+	Api->RequestStatus(ApiKey, FOnShintLicenseStatusComplete::CreateLambda(
+		[Api](const FShintLicenseStatus& Status)
+		{
+			GCachedTier = Status.bSuccess && !Status.Tier.IsEmpty()
+				? Status.Tier
+				: TEXT("free");
+			UE_LOG(LogShintTools, Display,
+			       TEXT("ShintTools: license probe -> tier=%s (took %.3fs)"),
+			       *GCachedTier, Status.ElapsedSeconds);
+			OnLicenseResolved.Broadcast();
+		}));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // IModuleInterface
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,31 +85,9 @@ void FShintToolsModule::StartupModule()
 	// Studio feature gates resolve before the user runs their first
 	// scan. Previous behaviour: the panel showed License: Free until
 	// /validate/code or /assets/scan responded, even for paid customers.
-	// The transport and the LicenseApi are leaked to the static cache
-	// on purpose — they live for the module's lifetime, no need to
-	// store them on the module instance.
-	FShintCoreClient Tmp;  // reads shinttools.config.json to get base_url
-	const FShintCoreConfig& Cfg = Tmp.GetConfig();
-	const FString BaseUrl = Cfg.GetBaseUrl();
-	const FString ApiKey  = Cfg.ApiKeyMongo;
-
-	const TSharedRef<FShintHttpClient> Transport =
-		MakeShared<FShintHttpClient>(TEXT("license-probe"));
-	TSharedRef<FShintLicenseApi> Api =
-		MakeShared<FShintLicenseApi>(Transport, BaseUrl);
-	// Keep Api alive across the async call by capturing the shared ref
-	// in the lambda below.
-	Api->RequestStatus(ApiKey, FOnShintLicenseStatusComplete::CreateLambda(
-		[Api](const FShintLicenseStatus& Status)
-		{
-			GCachedTier = Status.bSuccess && !Status.Tier.IsEmpty()
-				? Status.Tier
-				: TEXT("free");
-			UE_LOG(LogShintTools, Display,
-			       TEXT("ShintTools: license probe -> tier=%s (took %.3fs)"),
-			       *GCachedTier, Status.ElapsedSeconds);
-			OnLicenseResolved.Broadcast();
-		}));
+	// Shared with the Config panel's save handler (RefreshTierAsync) so a
+	// newly-entered license key updates the badge without an editor restart.
+	RefreshTierAsync();
 
 #if SHINT_MARKETPLACE_BUILD
 	// Marketplace builds own Core install. Probe localhost:18200 on a
