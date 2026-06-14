@@ -149,6 +149,23 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 					Cfg.DashboardUrl,
 					LOCTEXT("CfgDashUrlHint", "https://shint.tools"))
 			]
+
+				// Apply: persist every field (incl. the license key) and re-probe
+				// /license/status so the tier badge + Indie/Studio gates update
+				// immediately, no editor restart. Fields also auto-save on commit
+				// (Enter / focus-out); this button makes it discoverable.
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 14.f, 0.f, 0.f).HAlign(HAlign_Left)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("CfgApply", "Apply"))
+					.ToolTipText(LOCTEXT("CfgApplyTip",
+						"Save settings and re-check the license tier now (no restart)."))
+					.OnClicked_Lambda([this]()
+					{
+						SaveConfigOverrides();
+						return FReply::Handled();
+					})
+				]
 		];
 }
 
