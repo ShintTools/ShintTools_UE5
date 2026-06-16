@@ -513,7 +513,7 @@ void SShintToolsPanel::RefreshApplyCodeLabel()
 		[](const FShintIssueItemPtr& P){ return P->bChecked; });
 	if (ApplyCodeBtnLabel.IsValid())
 		ApplyCodeBtnLabel->SetText(FText::FromString(
-			FString::Printf(TEXT("✓  Apply Selected (%d)"), N)));
+			FString::Printf(TEXT("Apply Selected (%d)"), N)));
 	if (ApplyCodeBtn.IsValid()) ApplyCodeBtn->SetEnabled(N > 0);
 }
 
@@ -523,7 +523,7 @@ void SShintToolsPanel::RefreshApplyAssetLabel()
 		[](const FShintAssetItemPtr& P){ return P->bChecked; });
 	if (ApplyAssetBtnLabel.IsValid())
 		ApplyAssetBtnLabel->SetText(FText::FromString(
-			FString::Printf(TEXT("✓  Apply Corrections (%d)"), N)));
+			FString::Printf(TEXT("Apply Corrections (%d)"), N)));
 	if (ApplyAssetBtn.IsValid()) ApplyAssetBtn->SetEnabled(N > 0);
 }
 
