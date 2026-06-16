@@ -34,7 +34,35 @@
 
 #include "Misc/Paths.h"
 
+#include "ShintIconStyle.h"
+#include "Widgets/Images/SImage.h"
+
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
+
+namespace
+{
+	// Build "icon + label" content for an action button. The registered SVG
+	// glyphs are white masks tinted to match the button's text colour; they
+	// replace the old inline text glyphs. The label widget is passed in so the
+	// SAssignNew'd dynamic labels (Apply/Send counters) keep their member ptr.
+	TSharedRef<SWidget> ShintBtnContent(const FName& Icon,
+		const TSharedRef<SWidget>& Label, const FSlateColor& Tint)
+	{
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			  .Padding(0.f, 0.f, 6.f, 0.f)
+			[
+				SNew(SImage)
+				.Image(FShintIconStyle::GetBrush(Icon))
+				.ColorAndOpacity(Tint)
+				.DesiredSizeOverride(FVector2D(13.f, 13.f))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				Label
+			];
+	}
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Section root
@@ -95,8 +123,10 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 					SNew(SButton).ContentPadding(FMargin(14.f, 7.f))
 					.OnClicked(this, &SShintToolsPanel::OnScanProjectClicked)
 					[
-						SNew(STextBlock).Text(LOCTEXT("ScanSrc", ">  Scan All C++ Source")).Font(F_Small())
-						.ColorAndOpacity(FSlateColor(C_White()))
+						ShintBtnContent(TEXT("ShintTools.Icons.Search"),
+						SNew(STextBlock).Text(LOCTEXT("ScanSrc", "Scan All C++ Source")).Font(F_Small())
+						.ColorAndOpacity(FSlateColor(C_White())),
+						FSlateColor(C_White()))
 					]
 				]
 				+ SWrapBox::Slot()
@@ -104,8 +134,10 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 					SNew(SButton).ContentPadding(FMargin(14.f, 7.f))
 					.OnClicked(this, &SShintToolsPanel::OnScanBlueprintsClicked)
 					[
-						SNew(STextBlock).Text(LOCTEXT("ScanBP", ">  Scan All BP")).Font(F_Small())
-						.ColorAndOpacity(FSlateColor(C_White()))
+						ShintBtnContent(TEXT("ShintTools.Icons.Search"),
+						SNew(STextBlock).Text(LOCTEXT("ScanBP", "Scan All BP")).Font(F_Small())
+						.ColorAndOpacity(FSlateColor(C_White())),
+						FSlateColor(C_White()))
 					]
 				]
 			]
@@ -331,15 +363,17 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			[
 				SNew(SButton).ContentPadding(FMargin(8.f, 4.f))
 				.OnClicked(this, &SShintToolsPanel::OnSelectAllCodeClicked)
-				[ SNew(STextBlock).Text(LOCTEXT("SelAll", "Select All")).Font(F_Label())
-				  .ColorAndOpacity(FSlateColor(C_Blue())) ]
+				[ ShintBtnContent(TEXT("ShintTools.Icons.Tick"),
+				  SNew(STextBlock).Text(LOCTEXT("SelAll", "Select All")).Font(F_Label())
+				  .ColorAndOpacity(FSlateColor(C_Blue())), FSlateColor(C_Blue())) ]
 			]
 			+ SHorizontalBox::Slot().AutoWidth()
 			[
 				SNew(SButton).ContentPadding(FMargin(8.f, 4.f))
 				.OnClicked(this, &SShintToolsPanel::OnDeselectAllCodeClicked)
-				[ SNew(STextBlock).Text(LOCTEXT("DeselAll", "Deselect All")).Font(F_Label())
-				  .ColorAndOpacity(FSlateColor(C_Gray())) ]
+				[ ShintBtnContent(TEXT("ShintTools.Icons.Cross"),
+				  SNew(STextBlock).Text(LOCTEXT("DeselAll", "Deselect All")).Font(F_Label())
+				  .ColorAndOpacity(FSlateColor(C_Gray())), FSlateColor(C_Gray())) ]
 			]
 		];
 }
@@ -444,9 +478,11 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 				.IsEnabled(false).ContentPadding(FMargin(14.f, 7.f))
 				.OnClicked(this, &SShintToolsPanel::OnApplySelectedCodeFixesClicked)
 				[
+					ShintBtnContent(TEXT("ShintTools.Icons.Tick"),
 					SAssignNew(ApplyCodeBtnLabel, STextBlock)
-					.Text(LOCTEXT("ApplyCode", "✓  Apply Selected (0)"))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green()))
+					.Text(LOCTEXT("ApplyCode", "Apply Selected (0)"))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green())),
+					FSlateColor(C_Green()))
 				]
 			]
 			+ SWrapBox::Slot()
@@ -468,9 +504,11 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 				.IsEnabled(false).ContentPadding(FMargin(14.f, 7.f))
 				.OnClicked(this, &SShintToolsPanel::OnSendCodeToDashboardClicked)
 				[
+					ShintBtnContent(TEXT("ShintTools.Icons.Save"),
 					SAssignNew(SendCodeBtnLabel, STextBlock)
-					.Text(LOCTEXT("SendCode", "↑  Send to Dashboard"))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Blue()))
+					.Text(LOCTEXT("SendCode", "Send to Dashboard"))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Blue())),
+					FSlateColor(C_Blue()))
 				]
 			]
 		];
@@ -719,8 +757,10 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 								SNew(SButton).ContentPadding(FMargin(12.f, 5.f))
 								.OnClicked(this, &SShintToolsPanel::OnApplySingleFix, Item)
 								[
-									SNew(STextBlock).Text(LOCTEXT("ApplySingle", "✓  Apply"))
-									.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green()))
+									ShintBtnContent(TEXT("ShintTools.Icons.Tick"),
+									SNew(STextBlock).Text(LOCTEXT("ApplySingle", "Apply"))
+									.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green())),
+									FSlateColor(C_Green()))
 								]
 							]
 							+ SHorizontalBox::Slot().AutoWidth()

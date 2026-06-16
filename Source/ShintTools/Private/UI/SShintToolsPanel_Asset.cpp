@@ -29,7 +29,35 @@
 
 #include "Misc/Paths.h"
 
+#include "ShintIconStyle.h"
+#include "Widgets/Images/SImage.h"
+
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
+
+namespace
+{
+	// Build "icon + label" content for an action button. The registered SVG
+	// glyphs are white masks tinted to match the button's text colour; they
+	// replace the old inline text glyphs. The label widget is passed in so the
+	// SAssignNew'd dynamic labels (Apply/Send counters) keep their member ptr.
+	TSharedRef<SWidget> ShintBtnContent(const FName& Icon,
+		const TSharedRef<SWidget>& Label, const FSlateColor& Tint)
+	{
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			  .Padding(0.f, 0.f, 6.f, 0.f)
+			[
+				SNew(SImage)
+				.Image(FShintIconStyle::GetBrush(Icon))
+				.ColorAndOpacity(Tint)
+				.DesiredSizeOverride(FVector2D(13.f, 13.f))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				Label
+			];
+	}
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Section root
@@ -76,8 +104,10 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 					SNew(SButton).ContentPadding(FMargin(14.f, 7.f))
 					.OnClicked(this, &SShintToolsPanel::OnScanAssetsClicked)
 					[
-						SNew(STextBlock).Text(LOCTEXT("ScanAssets", ">  Scan All Assets")).Font(F_Small())
-						.ColorAndOpacity(FSlateColor(C_White()))
+						ShintBtnContent(TEXT("ShintTools.Icons.Search"),
+						SNew(STextBlock).Text(LOCTEXT("ScanAssets", "Scan All Assets")).Font(F_Small())
+						.ColorAndOpacity(FSlateColor(C_White())),
+						FSlateColor(C_White()))
 					]
 				]
 			]
@@ -234,8 +264,9 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 			[
 				SNew(SButton).ContentPadding(FMargin(10.f, 4.f))
 				.OnClicked(this, &SShintToolsPanel::OnSelectAllAssetsClicked)
-				[ SNew(STextBlock).Text(LOCTEXT("ANBSel", "Select All")).Font(F_Label())
-				  .ColorAndOpacity(FSlateColor(C_Blue())) ]
+				[ ShintBtnContent(TEXT("ShintTools.Icons.Tick"),
+				  SNew(STextBlock).Text(LOCTEXT("ANBSel", "Select All")).Font(F_Label())
+				  .ColorAndOpacity(FSlateColor(C_Blue())), FSlateColor(C_Blue())) ]
 			]
 			// T6 — Deselect All companion button. Lives next to Select All so
 			// users have symmetric controls for the asset rename batch.
@@ -243,8 +274,9 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 			[
 				SNew(SButton).ContentPadding(FMargin(10.f, 4.f))
 				.OnClicked(this, &SShintToolsPanel::OnDeselectAllAssetsClicked)
-				[ SNew(STextBlock).Text(LOCTEXT("ANBDes", "Deselect All")).Font(F_Label())
-				  .ColorAndOpacity(FSlateColor(C_DimGray())) ]
+				[ ShintBtnContent(TEXT("ShintTools.Icons.Cross"),
+				  SNew(STextBlock).Text(LOCTEXT("ANBDes", "Deselect All")).Font(F_Label())
+				  .ColorAndOpacity(FSlateColor(C_DimGray())), FSlateColor(C_DimGray())) ]
 			]
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f) [ Divider() ]
@@ -268,9 +300,11 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 				.IsEnabled(false).ContentPadding(FMargin(14.f, 7.f))
 				.OnClicked(this, &SShintToolsPanel::OnApplySelectedAssetFixesClicked)
 				[
+					ShintBtnContent(TEXT("ShintTools.Icons.Tick"),
 					SAssignNew(ApplyAssetBtnLabel, STextBlock)
-					.Text(LOCTEXT("ApplyAsset", "✓  Apply Corrections (0)"))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green()))
+					.Text(LOCTEXT("ApplyAsset", "Apply Corrections (0)"))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green())),
+					FSlateColor(C_Green()))
 				]
 			]
 			+ SWrapBox::Slot()
@@ -287,9 +321,11 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 				.IsEnabled(false).ContentPadding(FMargin(14.f, 7.f))
 				.OnClicked(this, &SShintToolsPanel::OnSendAssetToDashboardClicked)
 				[
+					ShintBtnContent(TEXT("ShintTools.Icons.Save"),
 					SAssignNew(SendAssetBtnLabel, STextBlock)
-					.Text(LOCTEXT("SendAsset", "↑  Send to Dashboard"))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Blue()))
+					.Text(LOCTEXT("SendAsset", "Send to Dashboard"))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Blue())),
+					FSlateColor(C_Blue()))
 				]
 			]
 		];

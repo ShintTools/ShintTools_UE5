@@ -266,7 +266,7 @@ void SShintToolsPanel::OnCodeDashboardComplete(const FShintWebDashboardResult& R
 
 	if (Result.bSuccess)
 	{
-		SendCodeBtnLabel->SetText(LOCTEXT("SendCodeOk", "✓  Sent!"));
+		SendCodeBtnLabel->SetText(LOCTEXT("SendCodeOk", "Sent!"));
 		SendCodeBtnLabel->SetColorAndOpacity(FSlateColor(C_Green()));
 	}
 	else
@@ -295,7 +295,7 @@ void SShintToolsPanel::OnCodeDashboardComplete(const FShintWebDashboardResult& R
 			{
 				if (Pin->SendCodeBtnLabel.IsValid())
 				{
-					Pin->SendCodeBtnLabel->SetText(LOCTEXT("SendCodeRst", "↑  Send to Dashboard"));
+					Pin->SendCodeBtnLabel->SetText(LOCTEXT("SendCodeRst", "Send to Dashboard"));
 					Pin->SendCodeBtnLabel->SetColorAndOpacity(FSlateColor(C_Blue()));
 				}
 			}
@@ -412,7 +412,7 @@ void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& 
 
 	if (Result.bSuccess)
 	{
-		SendAssetBtnLabel->SetText(LOCTEXT("SendAssetOk", "✓  Sent!"));
+		SendAssetBtnLabel->SetText(LOCTEXT("SendAssetOk", "Sent!"));
 		SendAssetBtnLabel->SetColorAndOpacity(FSlateColor(C_Green()));
 	}
 	else
@@ -439,7 +439,7 @@ void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& 
 			{
 				if (pin->SendAssetBtnLabel.IsValid())
 				{
-					pin->SendAssetBtnLabel->SetText(LOCTEXT("SendAssetRst", "↑  Send to Dashboard"));
+					pin->SendAssetBtnLabel->SetText(LOCTEXT("SendAssetRst", "Send to Dashboard"));
 					pin->SendAssetBtnLabel->SetColorAndOpacity(FSlateColor(C_Blue()));
 				}
 			}
