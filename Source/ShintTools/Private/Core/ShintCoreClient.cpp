@@ -116,6 +116,23 @@ bool FShintCoreClient::LoadConfig()
 			TEXT("ShintCoreClient: migrated dashboard_url to shint.tools"));
 	}
 
+	// Normalise to the site ORIGIN. The public API routes (/api/public/*)
+	// live at the domain root, but users routinely paste the human-facing
+	// dashboard URL (…/dashboard) into the Settings field. Left as-is the
+	// endpoint join produced POSTs to …/dashboard/api/public/* which the
+	// Next.js app answers with an HTML page ("Only HTML requests are
+	// supported here", HTTP 500). Trim a trailing slash and a trailing
+	// "/dashboard" segment so SendCodeValidator / SendAssetNaming always
+	// target the root.
+	Config.DashboardUrl.TrimStartAndEndInline();
+	Config.DashboardUrl.RemoveFromEnd(TEXT("/"));
+	if (Config.DashboardUrl.EndsWith(TEXT("/dashboard")))
+	{
+		Config.DashboardUrl.LeftChopInline(10); // len("/dashboard")
+		UE_LOG(LogShintTools, Display,
+			TEXT("ShintCoreClient: stripped /dashboard suffix from dashboard_url"));
+	}
+
 	UE_LOG(LogShintTools, Verbose,
 		TEXT("ShintCoreClient: Config loaded. Port=%d"), Config.CorePort);
 	return true;
