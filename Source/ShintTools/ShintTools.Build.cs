@@ -29,21 +29,12 @@ public class ShintTools : ModuleRules
 			Path.Combine(ModuleDirectory, "Public", "Utils"),
 		});
 
-		// SHINT_FREE_TIER=1 builds the lockdown variant produced by
-		// tools/minify_plugin.py for distribution to Free-tier users.
-		// minify_plugin.py edits this same file to flip the define on,
-		// commits the stripped tree under payload/ShintTools_UE5_Stripped,
-		// and reverts it for the paid bundle. Default (here) is 0 so
-		// developer / Indie / Studio builds keep the relaxed defaults.
+		// 0 = full build (developer / Indie / Studio). A separate build
+		// sets this to 1 to compile the reduced Free-tier variant.
 		PublicDefinitions.Add("SHINT_FREE_TIER=0");
 
-		// SHINT_MARKETPLACE_BUILD=1 enables the standalone Core install
-		// wizard (Docker pull + container) at module startup. This is the
-		// `develop-marketplace` branch — the Fab SOURCE submission, which
-		// Fab compiles as-is, so the define is baked to 1 here (there is no
-		// launcher to install the Core for marketplace customers). On the
-		// paid `develop`/`main` branches this stays 0 (installer.py owns
-		// Core install).
+		// 1 = enable the standalone Core install wizard at module startup
+		// (used by the marketplace build, which has no external installer).
 		PublicDefinitions.Add("SHINT_MARKETPLACE_BUILD=1");
 
 		PublicDependencyModuleNames.AddRange(new string[]

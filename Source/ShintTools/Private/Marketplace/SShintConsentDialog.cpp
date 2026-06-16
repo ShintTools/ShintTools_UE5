@@ -74,8 +74,8 @@ void SShintConsentDialog::Construct(const FArguments& InArgs)
 		"  - Download a Docker image (~600 MB) from ghcr.io.\n"
 		"  - Start a container named 'shinttools-core'.\n"
 		"  - Bind port 18200 on localhost so the editor plugin can talk to it.\n\n"
-		"What stays local: your project assets, source code, and scan results never leave your machine. The Core Engine runs entirely in the Docker container on localhost.\n\n"
-		"What we contact remotely: only ghcr.io (to download the image) and shinttools-api.com (to validate your license tier, if you provide an API key).\n\n"
+		"What stays local by default: your project assets and source code are analyzed by the Core Engine inside the local Docker container on localhost and are not uploaded.\n\n"
+		"What is sent remotely: ghcr.io (to download the image); shint.tools (to validate your license tier, if you provide an API key); and - only when you explicitly click \"Send to Dashboard\" - the results of a scan (file paths and detected issues) are uploaded to your shint.tools project.\n\n"
 		"By clicking Accept you agree to download and run the Core Engine container.");
 
 	ChildSlot
