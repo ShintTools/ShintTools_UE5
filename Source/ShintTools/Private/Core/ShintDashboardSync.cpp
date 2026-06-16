@@ -116,25 +116,36 @@ void FShintDashboardSync::SendCodeValidator(
 		return;
 	}
 
-	// Deduplicate file paths first (issues may reference the same
-	// file multiple times). Then add every scanned file so the
-	// dashboard sees the full corpus, including files with zero
-	// issues — the dashboard's noise-vs-signal ratio depends on it.
-	TSet<FString> SeenPaths;
+	// Order files so the most valuable ones survive the plan's per-scan
+	// file cap (indie=50): files WITH issues first (deduped), then the
+	// remaining scanned files so the dashboard still gets the full corpus
+	// for its noise-vs-signal ratio when the plan allows it. On HTTP 413
+	// we resend the first <limit> entries — <limit> read from the 413
+	// response body — so the behaviour tracks the server quota without
+	// hardcoding the per-tier number here.
+	TArray<FString> OrderedPaths;
+	TSet<FString> Seen;
 	for (const FShintCodeIssue& Issue : LastResult.Issues)
 	{
-		if (!Issue.FilePath.IsEmpty())
+		if (!Issue.FilePath.IsEmpty() && !Seen.Contains(Issue.FilePath))
 		{
-			SeenPaths.Add(Issue.FilePath);
+			Seen.Add(Issue.FilePath);
+			OrderedPaths.Add(Issue.FilePath);
 		}
 	}
 	for (const FString& AbsPath : LastResult.ScannedFilePaths)
 	{
-		SeenPaths.Add(AbsPath);
+		if (!Seen.Contains(AbsPath))
+		{
+			Seen.Add(AbsPath);
+			OrderedPaths.Add(AbsPath);
+		}
 	}
 
-	TArray<TSharedPtr<FJsonValue>> FilesArr;
-	for (const FString& AbsPath : SeenPaths)
+	// Build every file object once (ordered); a capped resend just takes a
+	// prefix slice, so file contents are never loaded twice.
+	TArray<TSharedPtr<FJsonValue>> AllFiles;
+	for (const FString& AbsPath : OrderedPaths)
 	{
 		FString Content;
 		FFileHelper::LoadFileToString(Content, *AbsPath);
@@ -157,26 +168,76 @@ void FShintDashboardSync::SendCodeValidator(
 		FO->SetStringField(TEXT("type"),        TypeStr);
 		FO->SetStringField(TEXT("content"),     Content);
 		FO->SetNumberField(TEXT("lines_count"), LineCount);
-		FilesArr.Add(MakeShared<FJsonValueObject>(FO));
+		AllFiles.Add(MakeShared<FJsonValueObject>(FO));
 	}
-
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("project_name"), Cfg.ProjectName);
-	Body->SetArrayField (TEXT("files"),        FilesArr);
 
 	const FString Url = Cfg.DashboardUrl
 		/ TEXT("api/public/code-validator/analyze");
-	UE_LOG(LogShintTools, Log,
-		TEXT("Dashboard: sending %d files to %s"),
-		FilesArr.Num(), *Url);
+	const FString ProjectName = Cfg.ProjectName;
+	const TMap<FString, FString> Headers = BuildAuthHeaders(Cfg);
+	const int32 TotalFiles = AllFiles.Num();
 
-	Client.SendRequest(Url, EShintHttpMethod::POST,
-		FShintCoreClient::SerializeJson(Body),
+	// Serialise the body from the first <Take> ordered files (Take<=0 => all).
+	auto BuildBody = [AllFiles, ProjectName](int32 Take) -> FString
+	{
+		const int32 N = (Take <= 0 || Take > AllFiles.Num())
+			? AllFiles.Num() : Take;
+		TArray<TSharedPtr<FJsonValue>> Slice;
+		Slice.Reserve(N);
+		for (int32 i = 0; i < N; ++i) Slice.Add(AllFiles[i]);
+		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+		Body->SetStringField(TEXT("project_name"), ProjectName);
+		Body->SetArrayField (TEXT("files"),        Slice);
+		return FShintCoreClient::SerializeJson(Body);
+	};
+
+	UE_LOG(LogShintTools, Log,
+		TEXT("Dashboard: sending %d files to %s"), TotalFiles, *Url);
+
+	// Weak self so a 413 resend can't deref a destroyed instance if the
+	// panel/tab closes mid-upload (DashboardSync is a panel-owned shared ptr).
+	TWeakPtr<FShintDashboardSync> WeakSelf = AsShared();
+	Client.SendRequest(Url, EShintHttpMethod::POST, BuildBody(0),
 		FOnShintRequestComplete::CreateLambda(
-			[OnComplete](const FShintRequestResult& Raw) mutable {
-				OnComplete.ExecuteIfBound(MakeResultFromRaw(Raw));
-			}),
-		BuildAuthHeaders(Cfg));
+			[WeakSelf, BuildBody, Url, Headers, OnComplete, TotalFiles]
+			(const FShintRequestResult& Raw) mutable
+		{
+			// 413 = over the plan's per-scan file cap. The body carries the
+			// allowed "limit"; resend once trimmed to it (issues already
+			// sort first). Guard limit < TotalFiles to avoid a pointless
+			// second round-trip.
+			if (Raw.StatusCode == 413 && !Raw.ResponseBody.IsEmpty())
+			{
+				int32 Limit = 0;
+				TSharedPtr<FJsonObject> Obj;
+				const TSharedRef<TJsonReader<>> R =
+					TJsonReaderFactory<>::Create(Raw.ResponseBody);
+				if (FJsonSerializer::Deserialize(R, Obj) && Obj.IsValid())
+				{
+					double LimitNum = 0.0;
+					if (Obj->TryGetNumberField(TEXT("limit"), LimitNum))
+						Limit = static_cast<int32>(LimitNum);
+				}
+				TSharedPtr<FShintDashboardSync> Self = WeakSelf.Pin();
+				if (Limit > 0 && Limit < TotalFiles && Self.IsValid())
+				{
+					UE_LOG(LogShintTools, Warning,
+						TEXT("Dashboard: %d files over plan cap; resending "
+						     "%d (issues first)."), TotalFiles, Limit);
+					Self->Client.SendRequest(Url, EShintHttpMethod::POST,
+						BuildBody(Limit),
+						FOnShintRequestComplete::CreateLambda(
+							[OnComplete](const FShintRequestResult& Raw2) mutable
+							{
+								OnComplete.ExecuteIfBound(MakeResultFromRaw(Raw2));
+							}),
+						Headers);
+					return;
+				}
+			}
+			OnComplete.ExecuteIfBound(MakeResultFromRaw(Raw));
+		}),
+		Headers);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
