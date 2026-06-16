@@ -409,13 +409,12 @@ struct FShintCoreConfig
 	bool HasExternalDashboard() const
 	{
 		// External dashboard authenticates via Authorization: Bearer
-		// <ApiKeyDashboard>. ApiKeyMongo is the LOCAL-core license key
-		// used for tier resolution against MongoDB — orthogonal to the
-		// dashboard and required only on /validate/* + /assets/scan
-		// (those call sites send it explicitly). Gating dashboard
-		// sends on ApiKeyMongo blocked every Free-tier user from
-		// uploading scan results even when they had a valid st_<hex>
-		// key pasted from shint.tools.
+		// <ApiKeyDashboard> (the per-project st_<hex> key). session_token is
+		// deliberately NOT used here — the launcher keeps it out of the
+		// project config since it leaked through git. ApiKeyMongo is the
+		// LOCAL-core license key used for tier resolution against MongoDB —
+		// orthogonal to the dashboard and required only on /validate/* +
+		// /assets/scan (those call sites send it explicitly).
 		return !ApiKeyDashboard.IsEmpty() && !DashboardUrl.IsEmpty();
 	}
 };

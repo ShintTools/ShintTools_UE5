@@ -45,7 +45,7 @@ DECLARE_DELEGATE_OneParam(FOnShintWebDashboardComplete,
  * config holder) from the FShintCoreClient passed at construction.
  * Doesn't own the client; the caller (SShintToolsPanel) owns both.
  */
-class FShintDashboardSync
+class FShintDashboardSync : public TSharedFromThis<FShintDashboardSync>
 {
 public:
 	explicit FShintDashboardSync(FShintCoreClient& InClient)
