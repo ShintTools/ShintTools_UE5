@@ -2,6 +2,7 @@
 
 #include "ShintTools.h"
 #include "SShintToolsPanel.h"
+#include "ShintIconStyle.h"
 
 #include "Framework/Docking/TabManager.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
@@ -78,6 +79,10 @@ void FShintToolsModule::RefreshTierAsync()
 
 void FShintToolsModule::StartupModule()
 {
+	// Register our SVG icon library first so the tab spawner + panel render
+	// ShintTools' own glyphs instead of the native editor (Starship) icons.
+	FShintIconStyle::Initialize();
+
 	RegisterTabSpawner();
 	ExtendLevelEditorMenu();
 
@@ -104,6 +109,7 @@ void FShintToolsModule::ShutdownModule()
 {
 	RemoveLevelEditorMenuExtension();
 	UnregisterTabSpawner();
+	FShintIconStyle::Shutdown();
 	UE_LOG(LogShintTools, Verbose, TEXT("ShintTools: Module shut down."));
 }
 
@@ -121,7 +127,7 @@ void FShintToolsModule::RegisterTabSpawner()
 		.SetDisplayName(LOCTEXT("ShintToolsTabTitle", "ShintTools"))
 		.SetTooltipText(LOCTEXT("ShintToolsTabTooltip", "Open the ShintTools Control Panel"))
 		.SetGroup(WorkspaceMenu::GetMenuStructure().GetDeveloperToolsMiscCategory())
-		.SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "LevelEditor.Tabs.Details"));
+		.SetIcon(FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"));
 }
 
 void FShintToolsModule::UnregisterTabSpawner()
@@ -154,7 +160,7 @@ void FShintToolsModule::ExtendLevelEditorMenu()
 			"OpenShintToolsPanel",
 			LOCTEXT("OpenShintToolsPanelLabel", "ShintTools"),
 			LOCTEXT("OpenShintToolsPanelTooltip", "Open the ShintTools automation control panel"),
-			FSlateIcon(FAppStyle::GetAppStyleSetName(), "LevelEditor.Tabs.Details"),
+			FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"),
 			FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintToolsPanel))
 		);
 	}));
