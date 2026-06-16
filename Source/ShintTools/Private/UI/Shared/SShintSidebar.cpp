@@ -2,6 +2,7 @@
 
 #include "SShintSidebar.h"
 #include "ShintStyle.h"
+#include "ShintIconStyle.h"
 
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Layout/SBox.h"
@@ -56,16 +57,16 @@ void SShintSidebar::Construct(const FArguments& InArgs)
 
 	// Nav buttons
 	Stack->AddSlot().AutoHeight()
-		[ BuildNavButton(EShintDestination::Overview, NSLOCTEXT("Sidebar","Overview","Overview"), TEXT("Icons.Info")) ];
+		[ BuildNavButton(EShintDestination::Overview, NSLOCTEXT("Sidebar","Overview","Overview"), TEXT("ShintTools.Icons.Info")) ];
 	Stack->AddSlot().AutoHeight()
-		[ BuildNavButton(EShintDestination::Code,     NSLOCTEXT("Sidebar","Code",    "Code"),     TEXT("Icons.Edit")) ]; 
+		[ BuildNavButton(EShintDestination::Code,     NSLOCTEXT("Sidebar","Code",    "Code"),     TEXT("ShintTools.Icons.Search")) ];
 	Stack->AddSlot().AutoHeight()
-		[ BuildNavButton(EShintDestination::Assets,   NSLOCTEXT("Sidebar","Assets",  "Assets"),   TEXT("Icons.FolderOpen")) ];
+		[ BuildNavButton(EShintDestination::Assets,   NSLOCTEXT("Sidebar","Assets",  "Assets"),   TEXT("ShintTools.Icons.Grid")) ];
 	Stack->AddSlot()
 		.FillHeight(1.f)
 		[ SNew(SSpacer) ];
 	Stack->AddSlot().AutoHeight()
-		[ BuildNavButton(EShintDestination::Settings, NSLOCTEXT("Sidebar","Settings","Settings"), TEXT("Icons.Settings")) ];
+		[ BuildNavButton(EShintDestination::Settings, NSLOCTEXT("Sidebar","Settings","Settings"), TEXT("ShintTools.Icons.Settings")) ];
 
 	ChildSlot
 	[
@@ -124,7 +125,7 @@ TSharedRef<SWidget> SShintSidebar::BuildNavButton(
 				.Padding(FMargin(0.f, 0.f, FShintStyle::Space::S3, 0.f))
 				[
 					SNew(SImage)
-					.Image(FAppStyle::Get().GetBrush(Icon))
+					.Image(FShintIconStyle::GetBrush(Icon))
 					.ColorAndOpacity_Lambda(LabelColor)
 				]
 				+ SHorizontalBox::Slot()
