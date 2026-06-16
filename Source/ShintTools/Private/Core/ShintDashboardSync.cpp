@@ -90,6 +90,9 @@ namespace
 
 	// Both endpoints share the same auth scheme:
 	//   Authorization: Bearer <ApiKeyDashboard>
+	// (the per-project st_<hex> key, NOT the session_token — the launcher
+	// deliberately keeps session_token out of the project config since it
+	// leaked through git; see config_gen._identity_fields.)
 	TMap<FString, FString> BuildAuthHeaders(const FShintCoreConfig& Cfg)
 	{
 		TMap<FString, FString> Headers;
