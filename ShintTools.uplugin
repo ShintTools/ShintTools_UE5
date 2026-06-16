@@ -4,7 +4,7 @@
 	"VersionName": "1.0.0",
 	"EngineVersion": "5.7.0",
 	"FriendlyName": "ShintTools",
-	"Description": "ShintTools - Game Development Automation Platform. Thin client plugin for the ShintTools Core Engine REST API.",
+	"Description": "ShintTools - Applied AI tools infrastructure for Unreal Engine & Unity. Thin client plugin for the ShintTools Core Engine REST API.",
 	"Category": "Developer Tools",
 	"CreatedBy": "ShintTools Team",
 	"CreatedByURL": "",
