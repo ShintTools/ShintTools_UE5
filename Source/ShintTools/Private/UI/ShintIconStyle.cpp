@@ -2,9 +2,8 @@
 
 #include "ShintIconStyle.h"
 
-#include "Interfaces/IPluginManager.h"
-#include "Interfaces/IPlugin.h"
-#include "Styling/SlateStyleSet.h"
+#include "Interfaces/IPluginManager.h"  // also declares the IPlugin interface
+#include "Styling/SlateStyle.h"   // FSlateStyleSet (UE5.7 removed Styling/SlateStyleSet.h)
 #include "Styling/SlateStyleRegistry.h"
 #include "Styling/SlateStyleMacros.h"
 #include "Misc/Paths.h"
