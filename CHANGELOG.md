@@ -2,6 +2,83 @@
 
 ---
 
+## [Unreleased] — 2026-06-09 — autofix UX + Core image owner
+
+### Bug Fixes
+- **Apply-fix recompile gave no feedback (looked like nothing happened).** After
+  a C++ auto-fix the plugin spawns `Build.bat` via `ExecProcess`, which runs
+  **hidden** — so in the marketplace build (no IDE/console) the user saw no
+  window and no compilation, and assumed the fix never applied. Both apply paths
+  (local apply + tree-sitter `/validate/fix`) now show a non-blocking editor
+  notification: *"recompiling project after fix…"* → *"recompiled successfully"*
+  or *"finished with N error(s)"*. (`ShintCoreClient_Validator.cpp`)
+- **Null-check auto-fix broke compilation when the line declared a variable**
+  (Core-side, fixed in ShintTools Core `7d9cd33`). `int32 N = GI->Count();`
+  became `if (IsValid(GI)) { int32 N = GI->Count(); }`, scoping `N` inside the
+  block. The Core now hoists the declaration above the guard
+  (`int32 N{}; if (IsValid(GI)) { N = GI->Count(); }`) and bails to
+  mark-for-review for `auto`/`const`. Reaches marketplace via the republished
+  `ghcr.io/noctxas97dev/shinttools-core:latest` image.
+
+### Changed
+- **Core image owner.** The install wizard now pulls
+  `ghcr.io/noctxas97dev/shinttools-core:latest` (was `genesishg1509`).
+
+---
+
+## [1.0.0] — 2026-06-09 — Fab Marketplace submission (compliance)
+
+Addresses the Fab Technical Review rejection of *ShintTools AI for Unreal Engine*.
+Each item below maps to a failed checklist row. These changes live on
+`develop-marketplace` and ship via `tools/build_fab_source_pack.py`.
+
+### Marketplace / Fab compliance
+- **Standard UE module layout (Public/Private).** All sources moved under
+  `Source/ShintTools/Public/` (the exposed module header `ShintTools.h`) and
+  `Source/ShintTools/Private/` (every internal implementation file, subfolders
+  preserved). `Build.cs` `PrivateIncludePaths` re-rooted under `Private/` so the
+  existing folder-qualified sibling includes keep resolving. *(Fail: "asset types
+  inside respective folders" / Public-Private recommendation.)*
+- **Copyright + year on every source file.** Header changed from
+  `// Copyright ShintTools. All Rights Reserved.` to
+  `// Copyright 2026 ShintTools. All Rights Reserved.` across all 50 `.h/.cpp/.cs`
+  files. *(Fail: "All source and header files contain a commented copyright
+  notice with Publisher name and year of publishing.")*
+- **`.uplugin` metadata.** Added `"EngineVersion": "5.7.0"` (latest UE — Fab
+  requires the latest engine as a Supported Version, 4.2.2.b), added
+  `"PlatformAllowList": [ "Win64" ]` to the `ShintTools` module, and pinned
+  `"VersionName": "1.0.0"`. *(Fails: latest-engine + per-module PlatformAllowList.)*
+- **Documentation folder.** Customer documentation placed in
+  `Documentation/ShintTools_UE5_Documentation.docx` and declared in
+  `Config/FilterPlugin.ini` (`/Documentation/...`). *(Fails: docs must live in a
+  `Docs`/`Documentation` folder declared in FilterPlugin.ini.)*
+- **Source-only submission pack.** New `tools/build_fab_source_pack.py` stages a
+  clean source tree (no `Binaries/Build/Intermediate/Saved`, no dev folders),
+  marks the `.uplugin` `"Installed": false`, and zips the plugin folder at the zip
+  root → `dist_fab/ShintTools-UE5-Fab-Source-UE_5.7.zip`. *(Fail: "no unused or
+  local folders such as Binaries, Build, Intermediate, or Saved".)*
+
+> **Action required before resubmission:** build/compile the plugin on **UE 5.7**
+> (UAT BuildPlugin) to confirm the Public/Private move resolves all includes, and
+> list UE 5.7 as the Supported Engine Version on the Fab product page.
+
+---
+
+## [Unreleased] — 2026-06-08
+
+### Bug Fixes
+- **#28 — Quality score frozen after "Scan All BP".** `OnBlueprintValidateComplete` rebuilds a stripped `QualityResult` (to route `BPB001` naming issues out of the code list) but copied only `bSuccess` + `FilesScanned`, leaving `QualityScoreOverall` at its `-1` default. `HandleValidateResult`'s merge path updates the score only when `QualityScoreOverall >= 0`, so the Overview score badge + per-category breakdown stayed frozen on the previous C++ scan (or "—" if none ran). Now copies `QualityScoreOverall`, `bHasCategoryBreakdown`, the five per-category scores and `Tier` before the merge. (`SShintToolsPanel_Http.cpp`)
+- **#27 — TreeSitter-only auto-fixes silently skipped.** Both apply entry points (`OnApplySelectedCodeFixesClicked`, `OnApplySingleFix`) rejected any non-Blueprint issue with an empty `FixSuggestion`, even when it carried `FileContent` — the prerequisite for the `/validate/fix` AST path that `ApplyCodeFixes` already routes. Clicking **Apply** on such an issue did nothing (no toast when it was the only selection). Guards now reject only when `FixSuggestion` **and** `FileContent` are both empty. (`SShintToolsPanel_Fixes.cpp`)
+
+### Tooling
+- **Daily bug-hunt routine** (`tools/bug_hunt/`, `.github/workflows/bug-hunt.yml`). A headless `claude -p` pass scans `Source/ShintTools/**` once a day, de-dupes against open `bug-hunt` issues, and files one issue in the standard template (Bug / File / Lines / Faulty code / Root cause / Trigger path / Suggested fix). Reviews all three shipped build variants — Marketplace (`SHINT_MARKETPLACE_BUILD=1`), Free (`SHINT_FREE_TIER=1`) and Paid — plus the runtime tier gating, so defects inside `#if` branches the default config compiles out are still caught; each issue tags the affected variant. Schedulable via Windows Task Scheduler (local) or GitHub Actions cron (always-on).
+
+### Bug Reports (addressed)
+- `bug-hunt #28` — score badge frozen after Scan All BP → fixed above.
+- `bug-hunt #27` — "Apply Selected" no-ops for TreeSitter-only C++ issues → fixed above.
+
+---
+
 ## [Unreleased] — 2026-04-09
 
 ### Bug Fixes

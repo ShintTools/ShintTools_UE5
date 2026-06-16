@@ -1,5 +1,6 @@
-// Copyright ShintTools. All Rights Reserved.
+// Copyright 2026 ShintTools. All Rights Reserved.
 
+using System.IO;
 using UnrealBuildTool;
 
 public class ShintTools : ModuleRules
@@ -8,24 +9,24 @@ public class ShintTools : ModuleRules
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 
-		PrivateIncludePaths.AddRange(new string[]
+		// Fab compliance: standard UE module layout — ALL headers live under
+		// Public/, ALL .cpp under Private/. UBT auto-adds only the Public ROOT
+		// (not its subdirectories) for non-legacy modules, so the bare-name
+		// includes used across this module ("ShintCoreClient.h",
+		// "CoreProcessManager.h", "SShintToolsPanel.h", ...) need every Public
+		// subfolder on the include path. Paths are built from ModuleDirectory
+		// (absolute) so resolution does not depend on the include-root base.
+		PublicIncludePaths.AddRange(new string[]
 		{
-			// Root is required so headers can use sibling-folder
-			// include paths like "Transport/FShintHttpClient.h" or
-			// "Security/ShintSecurity.h" — Sprint 1 refactor split the
-			// monolith and the new transport/security folders need to
-			// be addressable from each other, not just from their own
-			// subfolder. Without this, UAT BuildPlugin fails with
-			// `fatal error C1083: Cannot open include file: 'Transport/…'`.
-			"ShintTools",
-			"ShintTools/Api",
-			"ShintTools/Core",
-			"ShintTools/Marketplace",
-			"ShintTools/Security",
-			"ShintTools/Transport",
-			"ShintTools/UI",
-			"ShintTools/UI/Shared",
-			"ShintTools/Utils",
+			Path.Combine(ModuleDirectory, "Public"),
+			Path.Combine(ModuleDirectory, "Public", "Api"),
+			Path.Combine(ModuleDirectory, "Public", "Core"),
+			Path.Combine(ModuleDirectory, "Public", "Marketplace"),
+			Path.Combine(ModuleDirectory, "Public", "Security"),
+			Path.Combine(ModuleDirectory, "Public", "Transport"),
+			Path.Combine(ModuleDirectory, "Public", "UI"),
+			Path.Combine(ModuleDirectory, "Public", "UI", "Shared"),
+			Path.Combine(ModuleDirectory, "Public", "Utils"),
 		});
 
 		// SHINT_FREE_TIER=1 builds the lockdown variant produced by
@@ -37,11 +38,13 @@ public class ShintTools : ModuleRules
 		PublicDefinitions.Add("SHINT_FREE_TIER=0");
 
 		// SHINT_MARKETPLACE_BUILD=1 enables the standalone Core install
-		// wizard (Docker pull + container) at module startup. tools/
-		// build_marketplace_pack.py flips this to 1 when producing the
-		// Fab/Unreal Marketplace bundle; launcher builds keep it at 0
-		// because the launcher's installer.py owns Core install.
-		PublicDefinitions.Add("SHINT_MARKETPLACE_BUILD=0");
+		// wizard (Docker pull + container) at module startup. This is the
+		// `develop-marketplace` branch — the Fab SOURCE submission, which
+		// Fab compiles as-is, so the define is baked to 1 here (there is no
+		// launcher to install the Core for marketplace customers). On the
+		// paid `develop`/`main` branches this stays 0 (installer.py owns
+		// Core install).
+		PublicDefinitions.Add("SHINT_MARKETPLACE_BUILD=1");
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{

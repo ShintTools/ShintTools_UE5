@@ -73,3 +73,9 @@ Plugins/**/Intermediate/*
 
 # Cache files for the editor to use
 DerivedDataCache/*
+
+# Fab source-submission packs (tools/build_fab_source_pack.py output)
+dist_fab/
+# Local tooling caches
+.codegraph/
+mempalace.yaml

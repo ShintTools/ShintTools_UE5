@@ -1,7 +1,8 @@
 {
 	"FileVersion": 3,
 	"Version": 1,
-	"VersionName": "1.8.1",
+	"VersionName": "1.0.0",
+	"EngineVersion": "5.7.0",
 	"FriendlyName": "ShintTools",
 	"Description": "ShintTools - Game Development Automation Platform. Thin client plugin for the ShintTools Core Engine REST API.",
 	"Category": "Developer Tools",
@@ -18,7 +19,8 @@
 		{
 			"Name": "ShintTools",
 			"Type": "Editor",
-			"LoadingPhase": "PostEngineInit"
+			"LoadingPhase": "PostEngineInit",
+			"PlatformAllowList": [ "Win64" ]
 		}
 	]
 }

@@ -1,0 +1,75 @@
+name: Daily Bug Hunt
+
+# Always-on alternative to the local Task Scheduler routine. Runs the same
+# PROMPT.md against the plugin sources and files one `bug-hunt` issue.
+# Requires the ANTHROPIC_API_KEY repo secret (Settings → Secrets → Actions).
+
+on:
+  schedule:
+    - cron: "25 7 * * *"   # 07:25 UTC daily
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Claude model"
+        default: "sonnet"
+        type: choice
+        options: [sonnet, opus, haiku]
+      dry_run:
+        description: "Dry run (print, do not file)"
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  bug-hunt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Ensure bug-hunt label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create bug-hunt --color FBCA04 \
+            --description "Daily automated bug-hunt finding" \
+            --force || true
+
+      - name: Run bug hunt
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MODEL: ${{ inputs.model || 'sonnet' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          # De-dup context: open bug-hunt issue titles.
+          OPEN=$(gh issue list --repo "$REPO" --label bug-hunt --state open \
+                   --limit 100 --json number,title \
+                   --jq '.[] | "  - #\(.number): \(.title)"' || true)
+          [ -z "$OPEN" ] && OPEN="  (none open)"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            MODE="RUN MODE: DRY RUN. Do NOT run \`gh issue create\`. Print the full proposed issue (title + body) to stdout, then stop."
+          else
+            MODE="RUN MODE: LIVE. File the issue with \`gh issue create\` against repo $REPO, label bug-hunt."
+          fi
+
+          {
+            cat tools/bug_hunt/PROMPT.md
+            printf '\n\n---\n\n## Runtime context (injected)\n\n'
+            printf 'REPO: %s\n\n' "$REPO"
+            printf '%s\n\n' "$MODE"
+            printf '### Open bug-hunt issues — do NOT duplicate any of these:\n%s\n' "$OPEN"
+          } > /tmp/runtime_prompt.md
+
+          claude -p "$(cat /tmp/runtime_prompt.md)" \
+            --model "$MODEL" \
+            --allowedTools 'Read,Grep,Glob,Bash'
