@@ -428,7 +428,23 @@ FReply SShintToolsPanel::OnDeselectAllAssetsClicked()
 
 FReply SShintToolsPanel::OnSendAssetToDashboardClicked()
 {
-	DashboardSync->SendAssetNaming(LastAssetResult,
+	// Send only the ticked rows. The per-row checkbox toggles bChecked on the
+	// AllAssetItems UI entries (not on LastAssetResult.Issues), so build a
+	// filtered result keyed by each item's OriginalIndex. AllAssetItems holds
+	// the full set regardless of the active type filter, so hidden-but-ticked
+	// rows are still included.
+	FShintAssetScanResult Selected = LastAssetResult;
+	Selected.Issues.Reset(AllAssetItems.Num());
+	for (const FShintAssetItemPtr& Item : AllAssetItems)
+	{
+		if (Item.IsValid() && Item->bChecked
+			&& LastAssetResult.Issues.IsValidIndex(Item->OriginalIndex))
+		{
+			Selected.Issues.Add(LastAssetResult.Issues[Item->OriginalIndex]);
+		}
+	}
+
+	DashboardSync->SendAssetNaming(Selected,
 		FOnShintWebDashboardComplete::CreateSP(this, &SShintToolsPanel::OnAssetDashboardComplete));
 	return FReply::Handled();
 }
