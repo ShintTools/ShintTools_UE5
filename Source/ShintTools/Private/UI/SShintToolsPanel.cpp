@@ -73,6 +73,7 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 		{
 		case EShintDestination::Code:     return LOCTEXT("TitleCode",     "Code Validator");
 		case EShintDestination::Assets:   return LOCTEXT("TitleAssets",   "Asset Naming Bot");
+		case EShintDestination::LodAudit: return LOCTEXT("TitleLod",      "LOD Auditor");
 		case EShintDestination::Settings: return LOCTEXT("TitleSettings", "Settings");
 		case EShintDestination::Overview:
 		default:                          return LOCTEXT("TitleOverview", "Overview");
@@ -195,7 +196,11 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 					+ SWidgetSwitcher::Slot()
 					[ WrapSection(BuildAssetNamingSection()) ]
 
-					// 3 — Settings (was Config Section, now its own destination)
+					// 3 — LOD Auditor (Studio tier; rail entry hidden on lower tiers)
+					+ SWidgetSwitcher::Slot()
+					[ WrapSection(BuildLodAuditSection()) ]
+
+					// 4 — Settings (was Config Section, now its own destination)
 					+ SWidgetSwitcher::Slot()
 					[ WrapSection(BuildConfigSection()) ]
 				]
@@ -207,8 +212,9 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 void SShintToolsPanel::SetDestinationIndex(int32 Index)
 {
 	// Clamp defensively so an out-of-range value can't crash the switcher.
+	// Range is 0..4 (Overview, Code, Assets, LodAudit, Settings).
 	if (Index < 0) Index = 0;
-	if (Index > 3) Index = 3;
+	if (Index > 4) Index = 4;
 	CurrentDestinationIndex = Index;
 	// The switcher's WidgetIndex_Lambda will read the new value on the next
 	// tick — no explicit refresh needed.

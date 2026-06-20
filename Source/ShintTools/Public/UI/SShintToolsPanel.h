@@ -106,6 +106,16 @@ struct FShintAssetItem
 };
 using FShintAssetItemPtr = TSharedPtr<FShintAssetItem>;
 
+// One LOD audit finding row. Wraps FShintLodFinding (the client/transport
+// struct) with display-only state. Guidance + AiGuidance are rendered in an
+// expandable detail block under the row.
+struct FShintLodFindingItem
+{
+	FShintLodFinding Finding;     // server result, copied verbatim
+	bool bDetailExpanded = false; // user toggled the guidance panel open
+};
+using FShintLodFindingPtr = TSharedPtr<FShintLodFindingItem>;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Panel widget
 // ─────────────────────────────────────────────────────────────────────────────
@@ -164,6 +174,12 @@ private:
 	TSharedRef<SWidget> BuildAssetResultsPanel();
 	TSharedRef<SWidget> BuildAssetTypeMenuContent();
 
+	// ── LOD Auditor (Studio tier) ─────────────────────────────────────────────
+	TSharedRef<SWidget> BuildLodAuditSection();
+	TSharedRef<SWidget> BuildLodResultsPanel();
+	TSharedRef<ITableRow> GenerateLodFindingRow(
+		FShintLodFindingPtr Item, const TSharedRef<STableViewBase>& Owner);
+
 	// ── Row generators for SListView ──────────────────────────────────────────
 	TSharedRef<ITableRow> GenerateCodeIssueRow(
 		FShintIssueItemPtr Item, const TSharedRef<STableViewBase>& Owner);
@@ -208,6 +224,12 @@ private:
 	FReply OnDeselectAllAssetsClicked();   // T6
 	FReply OnApplySelectedAssetFixesClicked();
 	FReply OnSendAssetToDashboardClicked();
+
+	// ── LOD Auditor handlers ──────────────────────────────────────────────────
+	FReply OnAuditLodsClicked();
+	void   OnLodAuditComplete(const FShintLodAuditResult& Result);
+	void   PopulateLodFindingList(const FShintLodAuditResult& Result);
+	void   RefreshLodStats();
 
 	// ── HTTP callbacks ────────────────────────────────────────────────────────
 	void OnHealthCheckComplete(const FShintRequestResult& Result);
@@ -275,14 +297,21 @@ private:
 
 	FShintValidateResult  LastCodeResult;
 	FShintAssetScanResult LastAssetResult;
+	FShintLodAuditResult  LastLodResult;       // LOD Auditor (Studio)
 	FShintQualityScoreSnapshot LastQualityScore;  // Slice B
 
 	// All issues from last scan
 	TArray<FShintIssueItemPtr> AllCodeItems;
 	TArray<FShintAssetItemPtr> AllAssetItems;
+	TArray<FShintLodFindingPtr> LodFindingItems;  // LOD findings (no filtering yet)
 	// Currently visible (after filter)
 	TArray<FShintIssueItemPtr> CodeIssueItems;
 	TArray<FShintAssetItemPtr> AssetIssueItems;
+
+	// LOD Auditor UI state
+	EModuleState LodState        = EModuleState::Idle;
+	bool         bLodExplainTop  = false;     // "Explain top issues" toggle
+	FString      LodProfile      = TEXT("default"); // "default" | "mobile"
 
 	EIssueFilter         CurrentFilter            = EIssueFilter::All;
 	EIssueCategoryFilter CurrentCategoryFilter    = EIssueCategoryFilter::All;
@@ -308,6 +337,14 @@ private:
 	// ── Slate refs ────────────────────────────────────────────────────────────
 	TSharedPtr<SListView<FShintIssueItemPtr>> CodeIssueListView;
 	TSharedPtr<SListView<FShintAssetItemPtr>> AssetIssueListView;
+	TSharedPtr<SListView<FShintLodFindingPtr>> LodFindingListView;
+
+	TSharedPtr<STextBlock> LodAudited_Label;     // assets audited
+	TSharedPtr<STextBlock> LodIssues_Label;      // issues found
+	TSharedPtr<STextBlock> LodVramSaved_Label;   // estimated VRAM saved
+	TSharedPtr<SButton>    AuditLodBtn;
+	TSharedPtr<STextBlock> AuditLodBtnLabel;
+	TSharedPtr<SWidget>    LodEmptyState;
 
 	TSharedPtr<STextBlock> CodeFiles_Label;
 	TSharedPtr<STextBlock> CodeErrors_Label;

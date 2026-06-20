@@ -3,6 +3,7 @@
 #include "SShintSidebar.h"
 #include "ShintStyle.h"
 #include "ShintIconStyle.h"
+#include "ShintTools.h"   // FShintToolsModule::GetCachedTier — tier-gates LOD
 
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Layout/SBox.h"
@@ -62,6 +63,9 @@ void SShintSidebar::Construct(const FArguments& InArgs)
 		[ BuildNavButton(EShintDestination::Code,     NSLOCTEXT("Sidebar","Code",    "Code"),     TEXT("ShintTools.Icons.Search")) ];
 	Stack->AddSlot().AutoHeight()
 		[ BuildNavButton(EShintDestination::Assets,   NSLOCTEXT("Sidebar","Assets",  "Assets"),   TEXT("ShintTools.Icons.Grid")) ];
+	// LOD Auditor — Studio-tier only; the button hides itself for Free/Indie.
+	Stack->AddSlot().AutoHeight()
+		[ BuildNavButton(EShintDestination::LodAudit, NSLOCTEXT("Sidebar","LodAudit","LOD Auditor"), TEXT("ShintTools.Icons.Grid"), /*bStudioOnly*/ true) ];
 	Stack->AddSlot()
 		.FillHeight(1.f)
 		[ SNew(SSpacer) ];
@@ -84,11 +88,28 @@ void SShintSidebar::Construct(const FArguments& InArgs)
 }
 
 TSharedRef<SWidget> SShintSidebar::BuildNavButton(
-	EShintDestination Dest, const FText& Label, const FName& Icon)
+	EShintDestination Dest, const FText& Label, const FName& Icon,
+	bool bStudioOnly)
 {
 	// Visibility of the active-state highlight strip — bound so it updates
 	// instantly when the parent flips destinations.
 	auto IsActive = [this, Dest]() { return ActiveAttr.Get() == Dest; };
+
+	// Tier gate. Studio-only entries (LOD Auditor) stay collapsed until the
+	// license probe resolves to studio/enterprise. Bound (not evaluated once)
+	// so the rail updates live when the user pastes a Studio key in Settings
+	// and the Apply handler re-runs RefreshTierAsync().
+	auto RowVisibility = [bStudioOnly]() -> EVisibility
+	{
+		if (!bStudioOnly)
+		{
+			return EVisibility::Visible;
+		}
+		const FString Tier = FShintToolsModule::GetCachedTier().ToLower();
+		return (Tier == TEXT("studio") || Tier == TEXT("enterprise"))
+			? EVisibility::Visible
+			: EVisibility::Collapsed;
+	};
 
 	auto OnClick = [this, Dest]() -> FReply
 	{
@@ -112,6 +133,7 @@ TSharedRef<SWidget> SShintSidebar::BuildNavButton(
 	return SNew(SButton)
 		.ButtonStyle(FAppStyle::Get(), "NoBorder")
 		.ContentPadding(0.f)
+		.Visibility_Lambda(RowVisibility)
 		.OnClicked_Lambda(OnClick)
 		[
 			SNew(SBorder)

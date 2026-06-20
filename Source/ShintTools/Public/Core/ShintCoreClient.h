@@ -204,6 +204,48 @@ struct FShintAssetFixResult
 DECLARE_DELEGATE_OneParam(FOnShintAssetFixComplete, const FShintAssetFixResult&);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// LOD Auditor (Studio tier) — mesh/texture/material optimisation audit.
+// Mirrors the core Finding shape from /assets/lod/audit. The plugin extracts
+// per-asset metadata (LOD counts, triangles, texture sizes, material slots)
+// via the editor APIs and POSTs them; the server returns one finding per
+// violation plus an aggregate summary. ai_guidance is only present when the
+// request opted into bounded LLM enrichment (explain=true).
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct FShintLodFinding
+{
+	FString AssetPath;
+	FString RuleId;            // e.g. "LD003"
+	FString RuleName;          // humanised title from the server
+	FString Category;          // "Mesh" | "Texture" | "Material" | ...
+	FString Severity;          // "warning" | "info" | "error"
+	FString Message;
+	FString Guidance;          // deterministic, engine-aware fix guidance
+	FString AiGuidance;        // optional LLM guidance (top-N when explain=true)
+	bool    bAutoFixable = false;
+
+	// Estimated saving if the fix is applied — drives the summary + sort order.
+	double  VramMb             = 0.0;
+	int32   ShaderInstructions = 0;
+};
+
+struct FShintLodAuditResult
+{
+	bool    bSuccess        = false;
+	int32   StatusCode      = 0;
+	FString ErrorMessage;
+
+	int32   AssetsAudited   = 0;
+	int32   IssuesFound     = 0;
+	int32   AutoFixable     = 0;
+	double  EstimatedVramSavedMb            = 0.0;
+	int32   EstimatedShaderInstructionsSaved = 0;
+
+	TArray<FShintLodFinding> Findings;
+};
+DECLARE_DELEGATE_OneParam(FOnShintLodAuditComplete, const FShintLodAuditResult&);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Quality Score (Slice B) — full breakdown fetched via /metrics/score/latest
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -474,6 +516,20 @@ public:
 	void ReportAssetFixesToServer(const TArray<FShintAssetIssue>& Fixed,
 	                              FOnShintAssetFixComplete OnComplete);
 
+	// ── LOD Auditor (Studio tier) — local engine ─────────────────────────────
+	/**
+	 * Audits every mesh / texture / material under /Game for LOD and
+	 * optimisation issues. Loads each asset, extracts the metadata the core
+	 * rules need (LOD counts + per-LOD triangles, texture dimensions +
+	 * compression, material slot counts), and POSTs to /assets/lod/audit.
+	 *
+	 * @param Profile     "default" | "mobile" — selects the threshold set.
+	 * @param bExplainTop When true, asks the server to attach LLM ai_guidance
+	 *                    to the top findings (Studio only; ~30s/finding on CPU).
+	 */
+	void AuditLods(const FString& Profile, bool bExplainTop,
+	               FOnShintLodAuditComplete OnComplete);
+
 	// ── Asset Naming Bot — external web dashboard ────────────────────────────
 	//   Moved to FShintDashboardSync::SendAssetNaming
 	//   (see Core/ShintDashboardSync.h).
@@ -531,6 +587,7 @@ private:
 	static FString MethodToString(EShintHttpMethod Method);
 	static FShintValidateResult  ParseValidateResponse (const FShintRequestResult& Raw);
 	static FShintAssetScanResult ParseAssetScanResponse(const FShintRequestResult& Raw);
+	static FShintLodAuditResult  ParseLodAuditResponse (const FShintRequestResult& Raw);
 	static FShintFixResult       ParseFixResponse      (const FShintRequestResult& Raw);
 	static FShintFixResult       ParseTreeSitterFixResponse(const FShintRequestResult& Raw);
 	// Slice B helpers — populate one snapshot from a JSON object that matches

@@ -35,6 +35,7 @@ enum class EShintDestination : uint8
 	Overview,
 	Code,
 	Assets,
+	LodAudit,   // Studio tier — hidden from the rail on lower tiers
 	Settings,
 };
 
@@ -59,7 +60,11 @@ private:
 	TAttribute<EShintDestination> ActiveAttr;
 	FOnSidebarSelected            OnSelectedDelegate;
 
-	/** Build a single nav button bound to the given destination. */
+	/** Build a single nav button bound to the given destination.
+	 *  When bStudioOnly is true the button only shows once the resolved
+	 *  license tier is Studio/Enterprise — used to gate the LOD Auditor
+	 *  (a Studio-tier module) out of the rail for Free/Indie users. */
 	TSharedRef<SWidget> BuildNavButton(
-		EShintDestination Dest, const FText& Label, const FName& Icon);
+		EShintDestination Dest, const FText& Label, const FName& Icon,
+		bool bStudioOnly = false);
 };
