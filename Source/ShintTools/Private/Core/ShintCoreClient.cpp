@@ -112,7 +112,7 @@ bool FShintCoreClient::LoadConfig()
 		|| Config.DashboardUrl.Contains(TEXT("app.shinttools.io")))
 	{
 		Config.DashboardUrl = TEXT("https://shint.tools");
-		UE_LOG(LogShintTools, Display,
+		UE_LOG(LogShintTools, Verbose,
 			TEXT("ShintCoreClient: migrated dashboard_url to shint.tools"));
 	}
 
@@ -129,7 +129,7 @@ bool FShintCoreClient::LoadConfig()
 	if (Config.DashboardUrl.EndsWith(TEXT("/dashboard")))
 	{
 		Config.DashboardUrl.LeftChopInline(10); // len("/dashboard")
-		UE_LOG(LogShintTools, Display,
+		UE_LOG(LogShintTools, Verbose,
 			TEXT("ShintCoreClient: stripped /dashboard suffix from dashboard_url"));
 	}
 

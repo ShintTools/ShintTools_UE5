@@ -191,7 +191,7 @@ void FShintDashboardSync::SendCodeValidator(
 		return FShintCoreClient::SerializeJson(Body);
 	};
 
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("Dashboard: sending %d files to %s"), TotalFiles, *Url);
 
 	// Weak self so a 413 resend can't deref a destroyed instance if the
@@ -276,7 +276,7 @@ void FShintDashboardSync::SendAssetNaming(
 
 	const FString Url = Cfg.DashboardUrl
 		/ TEXT("api/public/naming-bot/analyze");
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("Dashboard: sending %d asset items to %s"),
 		ItemsArr.Num(), *Url);
 

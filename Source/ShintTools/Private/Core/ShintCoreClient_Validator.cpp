@@ -142,12 +142,12 @@ void FShintCoreClient::ValidateProject(
 			}
 			return false;
 		});
-		UE_LOG(LogShintTools, Log,
+		UE_LOG(LogShintTools, Verbose,
 			TEXT("ShintCoreClient: excluded_paths filtered %d/%d files"),
 			PreCount - AbsFiles.Num(), PreCount);
 	}
 
-	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Scanning %d source files from %s"), AbsFiles.Num(), *SourceDir);
+	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Scanning %d source files from %s"), AbsFiles.Num(), *SourceDir);
 
 	TMap<FString, FString> FilenameLookup;
 	TArray<TSharedPtr<FJsonValue>> FilesArr;
@@ -195,7 +195,7 @@ void FShintCoreClient::ValidateProject(
 	TArray<FString> CapturedFiles = AbsFiles;
 
 	const FString BodyStr = SerializeJson(Body);
-	UE_LOG(LogShintTools, Log, TEXT("Validate Project JSON size: %d chars"), BodyStr.Len());
+	UE_LOG(LogShintTools, Verbose, TEXT("Validate Project JSON size: %d chars"), BodyStr.Len());
 
 	const int32 LogChunkSize = 1000;
 	for (int32 i = 0; i < BodyStr.Len(); i += LogChunkSize)
@@ -226,7 +226,7 @@ void FShintCoreClient::ValidateProject(
 				}
 
 				const double BenchEnd = FPlatformTime::Seconds();
-				UE_LOG(LogShintTools, Log,
+				UE_LOG(LogShintTools, Verbose,
 					TEXT("[BENCH] ValidateProject: %.2f s, %d files, %d issues"),
 					BenchEnd - BenchStart, CapturedFiles.Num(), Result.Issues.Num());
 
@@ -255,7 +255,7 @@ void FShintCoreClient::ValidateBlueprints(
 	TArray<FAssetData> BlueprintAssets;
 	AR.GetAssets(Filter, BlueprintAssets);
 
-	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Found %d project blueprints under /Game/"), BlueprintAssets.Num());
+	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Found %d project blueprints under /Game/"), BlueprintAssets.Num());
 
 	TArray<TSharedPtr<FJsonValue>> FilesArr;
 
@@ -473,7 +473,7 @@ void FShintCoreClient::ValidateBlueprints(
 		FilesArr.Add(MakeShared<FJsonValueObject>(FO));
 	}
 
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("ShintCoreClient: %d/%d blueprints loaded (%d skipped), sending to /validate/blueprints"),
 		LoadedCount, BlueprintAssets.Num(), SkippedCount);
 
@@ -486,7 +486,7 @@ void FShintCoreClient::ValidateBlueprints(
 	SendRequest(Config.GetBaseUrl() + TEXT("/validate/blueprints"), EShintHttpMethod::POST, SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda([OnComplete, BenchStart, LoadedCount](const FShintRequestResult& Raw) mutable {
 			FShintValidateResult R = FShintCoreClient::ParseValidateResponse(Raw);
-			UE_LOG(LogShintTools, Log,
+			UE_LOG(LogShintTools, Verbose,
 				TEXT("[BENCH] ValidateBlueprints: %.2f s, %d BPs loaded, %d issues"),
 				FPlatformTime::Seconds() - BenchStart, LoadedCount, R.Issues.Num());
 			OnComplete.ExecuteIfBound(R);
@@ -631,7 +631,7 @@ void FShintCoreClient::ApplyCodeFixes(
 				}
 				CDO->PrimaryActorTick.bCanEverTick          = false;
 				CDO->PrimaryActorTick.bStartWithTickEnabled = false;
-				UE_LOG(LogShintTools, Log,
+				UE_LOG(LogShintTools, Verbose,
 					TEXT("ApplyFix: [BPP001] Disabled tick on '%s'"), *BPPath);
 				++BPApplied;
 				bAnyApplied = true;
@@ -640,7 +640,7 @@ void FShintCoreClient::ApplyCodeFixes(
 			{
 				if (bIsCR)
 				{
-					UE_LOG(LogShintTools, Log,
+					UE_LOG(LogShintTools, Verbose,
 						TEXT("ApplyFix: [BPM001] Skipped ControlRigBlueprint '%s'"), *BPPath);
 					++BPSkipped;
 					continue;
@@ -668,7 +668,7 @@ void FShintCoreClient::ApplyCodeFixes(
 				}
 				if (!bExists)
 				{
-					UE_LOG(LogShintTools, Log,
+					UE_LOG(LogShintTools, Verbose,
 						TEXT("ApplyFix: [BPM001] '%s' not on '%s' — already removed?"),
 						*VarName, *BPPath);
 					++BPSkipped;
@@ -676,7 +676,7 @@ void FShintCoreClient::ApplyCodeFixes(
 				}
 
 				FBlueprintEditorUtils::RemoveMemberVariable(BP, VarFName);
-				UE_LOG(LogShintTools, Log,
+				UE_LOG(LogShintTools, Verbose,
 					TEXT("ApplyFix: [BPM001] Removed variable '%s' from '%s'"),
 					*VarName, *BPPath);
 				++BPApplied;
@@ -686,7 +686,7 @@ void FShintCoreClient::ApplyCodeFixes(
 			{
 				if (bIsCR)
 				{
-					UE_LOG(LogShintTools, Log,
+					UE_LOG(LogShintTools, Verbose,
 						TEXT("ApplyFix: [BPM002] Skipped ControlRigBlueprint '%s'"), *BPPath);
 					++BPSkipped;
 					continue;
@@ -730,7 +730,7 @@ void FShintCoreClient::ApplyCodeFixes(
 
 				if (RemovedNodes > 0)
 				{
-					UE_LOG(LogShintTools, Log,
+					UE_LOG(LogShintTools, Verbose,
 						TEXT("ApplyFix: [BPM002] Removed %d disconnected node(s) from '%s'"),
 						RemovedNodes, *BPPath);
 					++BPApplied;
@@ -763,7 +763,7 @@ void FShintCoreClient::ApplyCodeFixes(
 				}
 				if (bFound)
 				{
-					UE_LOG(LogShintTools, Log,
+					UE_LOG(LogShintTools, Verbose,
 						TEXT("ApplyFix: [BPB007] Set category 'Default' on '%s' in '%s'"),
 						*VarName, *BPPath);
 					++BPApplied;
@@ -881,11 +881,11 @@ void FShintCoreClient::ApplyCodeFixes(
 
 		for (const FShintCodeIssue& DbgIssue : TreeSitterIssues)
 		{
-			UE_LOG(LogShintTools, Log,
+			UE_LOG(LogShintTools, Verbose,
 				TEXT("ApplyFix [TS]: rule=%s file=%s line=%d contentLen=%d"),
 				*DbgIssue.RuleId, *DbgIssue.FilePath, DbgIssue.Line, DbgIssue.FileContent.Len());
 		}
-		UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Sending %d issue(s) to tree-sitter /validate/fix"),
+		UE_LOG(LogShintTools, Verbose, TEXT("ApplyFix: Sending %d issue(s) to tree-sitter /validate/fix"),
 			TreeSitterIssues.Num());
 
 		SendRequest(Config.GetBaseUrl() + TEXT("/validate/fix"),
@@ -895,7 +895,7 @@ void FShintCoreClient::ApplyCodeFixes(
 		return;
 	}
 
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("[BENCH] ApplyCodeFixes (local): %.3f s, %d applied, %d skipped"),
 		FPlatformTime::Seconds() - BenchFixStart, Result.TotalFixesApplied, Result.TotalFixesSkipped);
 
@@ -910,7 +910,7 @@ void FShintCoreClient::ApplyCodeFixes(
 			TEXT("%s Win64 Development -project=\"%s\" -NoHotReloadFromIDE"),
 			*TargetName, *UProjectPath);
 
-		UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Launching incremental build check: %s %s"),
+		UE_LOG(LogShintTools, Verbose, TEXT("ApplyFix: Launching incremental build check: %s %s"),
 			*BuildBat, *BuildArgs);
 
 		TSharedPtr<SNotificationItem> BuildNote = ShintBeginRecompileNotification();
@@ -1017,7 +1017,7 @@ void FShintCoreClient::ApplyCodeFixes(
 			}
 			else
 			{
-				UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Build succeeded — no compile errors"));
+				UE_LOG(LogShintTools, Verbose, TEXT("ApplyFix: Build succeeded — no compile errors"));
 			}
 
 			AsyncTask(ENamedThreads::GameThread, [Result, OnComplete, BuildNote]() mutable
@@ -1031,7 +1031,7 @@ void FShintCoreClient::ApplyCodeFixes(
 		return;
 	}
 
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("[BENCH] ApplyCodeFixes (no build): %.3f s, %d applied, %d skipped"),
 		FPlatformTime::Seconds() - BenchFixStart, Result.TotalFixesApplied, Result.TotalFixesSkipped);
 	OnComplete.ExecuteIfBound(Result);
@@ -1088,7 +1088,7 @@ FShintFixResult FShintCoreClient::ParseTreeSitterFixResponse(const FShintRequest
 		return Result;
 	}
 
-	UE_LOG(LogShintTools, Log, TEXT("TreeSitterFix response (first 1000): %s"), *Raw.ResponseBody.Left(1000));
+	UE_LOG(LogShintTools, Verbose, TEXT("TreeSitterFix response (first 1000): %s"), *Raw.ResponseBody.Left(1000));
 
 	TSharedPtr<FJsonObject> Root;
 	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Raw.ResponseBody);
@@ -1228,7 +1228,7 @@ void FShintCoreClient::HandleTreeSitterFixResponse(
 			}
 			else
 			{
-				UE_LOG(LogShintTools, Log,
+				UE_LOG(LogShintTools, Verbose,
 					TEXT("HandleTreeSitterFixResponse: wrote fixed file '%s'"), *FF.FilePath);
 			}
 		}
@@ -1242,7 +1242,7 @@ void FShintCoreClient::HandleTreeSitterFixResponse(
 		LocalResult.ErrorMessage = TSResult.ErrorMessage;
 	}
 
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("HandleTreeSitterFixResponse: merged — %d applied, %d skipped, %d fixed files"),
 		LocalResult.TotalFixesApplied, LocalResult.TotalFixesSkipped, LocalResult.FixedFiles.Num());
 
@@ -1257,7 +1257,7 @@ void FShintCoreClient::HandleTreeSitterFixResponse(
 			TEXT("%s Win64 Development -project=\"%s\" -NoHotReloadFromIDE"),
 			*TargetName, *UProjectPath);
 
-		UE_LOG(LogShintTools, Log, TEXT("HandleTreeSitterFixResponse: launching incremental build: %s %s"),
+		UE_LOG(LogShintTools, Verbose, TEXT("HandleTreeSitterFixResponse: launching incremental build: %s %s"),
 			*BuildBat, *BuildArgs);
 
 		TSharedPtr<SNotificationItem> BuildNote = ShintBeginRecompileNotification();
@@ -1344,7 +1344,7 @@ void FShintCoreClient::HandleTreeSitterFixResponse(
 			}
 			else
 			{
-				UE_LOG(LogShintTools, Log, TEXT("HandleTreeSitterFixResponse: build succeeded"));
+				UE_LOG(LogShintTools, Verbose, TEXT("HandleTreeSitterFixResponse: build succeeded"));
 			}
 
 			AsyncTask(ENamedThreads::GameThread, [LocalResult, OnComplete, BuildNote]() mutable
@@ -1378,7 +1378,7 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 
 	R.bSuccess = true;
 
-	UE_LOG(LogShintTools, Log, TEXT("ParseValidate: Response length=%d, first 500 chars: %s"),
+	UE_LOG(LogShintTools, Verbose, TEXT("ParseValidate: Response length=%d, first 500 chars: %s"),
 		Raw.ResponseBody.Len(), *Raw.ResponseBody.Left(500));
 
 	const TSharedPtr<FJsonObject>* Sum = nullptr;
@@ -1394,7 +1394,7 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 		(*Sum)->TryGetNumberField(TEXT("limit_value"),     R.LimitValue);
 		(*Sum)->TryGetNumberField(TEXT("total_available"), R.TotalAvailable);
 
-		UE_LOG(LogShintTools, Log, TEXT("ParseValidate: summary total=%d errors=%d warnings=%d files=%d (limit_applied=%d %s %d/%d)"),
+		UE_LOG(LogShintTools, Verbose, TEXT("ParseValidate: summary total=%d errors=%d warnings=%d files=%d (limit_applied=%d %s %d/%d)"),
 			R.TotalIssues, R.TotalErrors, R.TotalWarnings, R.FilesScanned,
 			R.bLimitApplied ? 1 : 0, *R.LimitKind, R.LimitValue, R.TotalAvailable);
 	}
@@ -1404,7 +1404,7 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 		if (J->TryGetNumberField(TEXT("quality_score"), Q))
 		{
 			R.QualityScoreOverall = static_cast<float>(Q);
-			UE_LOG(LogShintTools, Log, TEXT("ParseValidate: quality_score=%.1f"), R.QualityScoreOverall);
+			UE_LOG(LogShintTools, Verbose, TEXT("ParseValidate: quality_score=%.1f"), R.QualityScoreOverall);
 		}
 
 		// Inline per-category breakdown. The /metrics/score/latest endpoint
@@ -1470,7 +1470,7 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 			Issue.bChecked = Issue.bIsAutoFixable;
 			R.Issues.Add(MoveTemp(Issue));
 		}
-		UE_LOG(LogShintTools, Log, TEXT("ParseValidate: Parsed %d issues from 'issues' array (array had %d entries)"),
+		UE_LOG(LogShintTools, Verbose, TEXT("ParseValidate: Parsed %d issues from 'issues' array (array had %d entries)"),
 			R.Issues.Num(), IssArr->Num());
 	}
 	else

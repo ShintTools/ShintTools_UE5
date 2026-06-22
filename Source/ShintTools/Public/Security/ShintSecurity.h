@@ -57,7 +57,7 @@
 		UE_LOG(LogShintTools, Verbose, Fmt, ##__VA_ARGS__)
 #else
 	#define SHINT_LOG_SECURE(Fmt, ...) \
-		UE_LOG(LogShintTools, Log, Fmt, ##__VA_ARGS__)
+		UE_LOG(LogShintTools, Verbose, Fmt, ##__VA_ARGS__)
 #endif
 
 // Helper: mask an api_key / license key for the few places it MUST be

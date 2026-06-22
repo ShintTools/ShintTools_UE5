@@ -204,7 +204,7 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result,
 	if (SendCodeBtn.IsValid())  SendCodeBtn->SetEnabled(true);
 	RefreshApplyCodeLabel();
 
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("[BENCH] PopulateCodeIssueList: %.3f s, AllCodeItems=%d (raw issues=%d, fingerprints suppressed=%d), CodeIssueItems=%d after filter "
 		     "[CodeType=%d Severity=%d Category=%d Fixable=%d]"),
 		FPlatformTime::Seconds() - PopStart,
@@ -256,7 +256,7 @@ void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Resul
 	if (AllAssetItems.IsEmpty() && AssetEmptyText.IsValid())
 		AssetEmptyText->SetText(LOCTEXT("ANBNoIssues", "✓  No naming violations found."));
 
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("[BENCH] PopulateAssetIssueList: %.3f s, %d items"),
 		FPlatformTime::Seconds() - PopStart, AllAssetItems.Num());
 }

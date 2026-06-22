@@ -167,7 +167,7 @@ void SShintCoreInstallerWindow::OpenIfNeededAsync(int32 Port)
 		const bool bHealthy = FShintCoreInstaller::IsCoreHealthy(Port);
 		if (bHealthy)
 		{
-			UE_LOG(LogShintTools, Display,
+			UE_LOG(LogShintTools, Verbose,
 				TEXT("[CoreInstaller] Core already healthy on %d"
 				     " -- skipping setup wizard."), Port);
 			return;
