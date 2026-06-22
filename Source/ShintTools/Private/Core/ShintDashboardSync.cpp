@@ -116,59 +116,57 @@ void FShintDashboardSync::SendCodeValidator(
 		return;
 	}
 
-	// Order files so the most valuable ones survive the plan's per-scan
-	// file cap (indie=50): files WITH issues first (deduped), then the
-	// remaining scanned files so the dashboard still gets the full corpus
-	// for its noise-vs-signal ratio when the plan allows it. On HTTP 413
-	// we resend the first <limit> entries — <limit> read from the 413
-	// response body — so the behaviour tracks the server quota without
-	// hardcoding the per-tier number here.
-	TArray<FString> OrderedPaths;
-	TSet<FString> Seen;
-	for (const FShintCodeIssue& Issue : LastResult.Issues)
-	{
-		if (!Issue.FilePath.IsEmpty() && !Seen.Contains(Issue.FilePath))
-		{
-			Seen.Add(Issue.FilePath);
-			OrderedPaths.Add(Issue.FilePath);
-		}
-	}
-	for (const FString& AbsPath : LastResult.ScannedFilePaths)
-	{
-		if (!Seen.Contains(AbsPath))
-		{
-			Seen.Add(AbsPath);
-			OrderedPaths.Add(AbsPath);
-		}
-	}
-
-	// Build every file object once (ordered); a capped resend just takes a
-	// prefix slice, so file contents are never loaded twice.
+	// Privacy (issue #314): the dashboard receives METRICS ONLY — per-file
+	// findings, counts and file metadata — never raw source. The plugin has
+	// already run the validator locally, so we transmit the resulting issues
+	// (rule id, severity, category, line, message) instead of file content.
+	// `content`, snippets and source context are deliberately never sent — the
+	// file is not even read from disk here. The dashboard's noise-vs-signal
+	// ratio is preserved by the `totals.files_scanned` aggregate below.
+	//
+	// Files with issues are emitted in first-seen order; a capped resend (HTTP
+	// 413) takes a prefix slice — the plan's `limit` comes from the 413 body so
+	// the behaviour tracks the server quota without hardcoding a per-tier number.
 	TArray<TSharedPtr<FJsonValue>> AllFiles;
-	for (const FString& AbsPath : OrderedPaths)
 	{
-		FString Content;
-		FFileHelper::LoadFileToString(Content, *AbsPath);
+		TArray<FString> FileOrder;
+		TMap<FString, TArray<TSharedPtr<FJsonValue>>> IssuesByFile;
+		TMap<FString, int32> LinesByFile;
+		for (const FShintCodeIssue& Issue : LastResult.Issues)
+		{
+			if (Issue.FilePath.IsEmpty()) continue;
+			TArray<TSharedPtr<FJsonValue>>& Arr = IssuesByFile.FindOrAdd(Issue.FilePath);
+			if (Arr.Num() == 0) FileOrder.Add(Issue.FilePath);
+			if (Issue.LinesCount > 0 && !LinesByFile.Contains(Issue.FilePath))
+				LinesByFile.Add(Issue.FilePath, Issue.LinesCount);
 
-		const FString Filename = FPaths::GetCleanFilename(AbsPath);
-		const FString RelPath  = FPaths::GetPath(AbsPath);
-		const FString Ext      = FPaths::GetExtension(AbsPath).ToLower();
-		const FString TypeStr  =
-			(Ext == TEXT("h") || Ext == TEXT("hpp"))
-				? TEXT("header")
-				: TEXT("cpp");
-		TArray<FString> Lines;
-		const int32 LineCount = Content.IsEmpty()
-			? 0
-			: Content.ParseIntoArray(Lines, TEXT("\n"), false);
+			// Findings only — never Issue.Snippet / FileContent / fix text.
+			TSharedRef<FJsonObject> IO = MakeShared<FJsonObject>();
+			IO->SetStringField(TEXT("rule_id"),   Issue.RuleId);
+			IO->SetStringField(TEXT("rule_name"), Issue.RuleName);
+			IO->SetStringField(TEXT("severity"),  Issue.Severity);
+			IO->SetStringField(TEXT("category"),  Issue.Category);
+			IO->SetNumberField(TEXT("line"),      Issue.Line);
+			IO->SetStringField(TEXT("message"),   Issue.Message);
+			Arr.Add(MakeShared<FJsonValueObject>(IO));
+		}
 
-		TSharedRef<FJsonObject> FO = MakeShared<FJsonObject>();
-		FO->SetStringField(TEXT("name"),        Filename);
-		FO->SetStringField(TEXT("path"),        RelPath);
-		FO->SetStringField(TEXT("type"),        TypeStr);
-		FO->SetStringField(TEXT("content"),     Content);
-		FO->SetNumberField(TEXT("lines_count"), LineCount);
-		AllFiles.Add(MakeShared<FJsonValueObject>(FO));
+		for (const FString& AbsPath : FileOrder)
+		{
+			const FString Ext = FPaths::GetExtension(AbsPath).ToLower();
+			const FString TypeStr =
+				(Ext == TEXT("h") || Ext == TEXT("hpp")) ? TEXT("header") : TEXT("cpp");
+
+			TArray<TSharedPtr<FJsonValue>>& FileIssues = IssuesByFile[AbsPath];
+			TSharedRef<FJsonObject> FO = MakeShared<FJsonObject>();
+			FO->SetStringField(TEXT("name"),        FPaths::GetCleanFilename(AbsPath));
+			FO->SetStringField(TEXT("path"),        FPaths::GetPath(AbsPath));
+			FO->SetStringField(TEXT("type"),        TypeStr);
+			FO->SetNumberField(TEXT("lines_count"), LinesByFile.FindRef(AbsPath));
+			FO->SetNumberField(TEXT("issue_count"), FileIssues.Num());
+			FO->SetArrayField (TEXT("issues"),      FileIssues);
+			AllFiles.Add(MakeShared<FJsonValueObject>(FO));
+		}
 	}
 
 	const FString Url = Cfg.DashboardUrl
@@ -177,17 +175,37 @@ void FShintDashboardSync::SendCodeValidator(
 	const TMap<FString, FString> Headers = BuildAuthHeaders(Cfg);
 	const int32 TotalFiles = AllFiles.Num();
 
-	// Serialise the body from the first <Take> ordered files (Take<=0 => all).
-	auto BuildBody = [AllFiles, ProjectName](int32 Take) -> FString
+	// Project-level metrics travel with every (re)send so the dashboard can
+	// show totals even when the per-file list is capped by the plan.
+	const int32 FilesScanned  = LastResult.FilesScanned;
+	const int32 TotalIssues   = LastResult.TotalIssues;
+	const int32 TotalErrors   = LastResult.TotalErrors;
+	const int32 TotalWarnings = LastResult.TotalWarnings;
+	const float QualityScore  = LastResult.QualityScoreOverall;
+
+	// Serialise the body from the first <Take> files (Take<=0 => all).
+	auto BuildBody =
+		[AllFiles, ProjectName, FilesScanned, TotalIssues, TotalErrors,
+		 TotalWarnings, QualityScore](int32 Take) -> FString
 	{
 		const int32 N = (Take <= 0 || Take > AllFiles.Num())
 			? AllFiles.Num() : Take;
 		TArray<TSharedPtr<FJsonValue>> Slice;
 		Slice.Reserve(N);
 		for (int32 i = 0; i < N; ++i) Slice.Add(AllFiles[i]);
+
+		TSharedRef<FJsonObject> Totals = MakeShared<FJsonObject>();
+		Totals->SetNumberField(TEXT("files_scanned"),  FilesScanned);
+		Totals->SetNumberField(TEXT("total_issues"),   TotalIssues);
+		Totals->SetNumberField(TEXT("total_errors"),   TotalErrors);
+		Totals->SetNumberField(TEXT("total_warnings"), TotalWarnings);
+		if (QualityScore >= 0.f)
+			Totals->SetNumberField(TEXT("quality_score"), QualityScore);
+
 		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 		Body->SetStringField(TEXT("project_name"), ProjectName);
 		Body->SetArrayField (TEXT("files"),        Slice);
+		Body->SetObjectField(TEXT("totals"),       Totals);
 		return FShintCoreClient::SerializeJson(Body);
 	};
 

@@ -52,9 +52,16 @@ public:
 		: Client(InClient) {}
 
 	/**
-	 * Sends the full project scan to the dashboard.
+	 * Sends the project scan RESULTS (metrics only) to the dashboard.
+	 * Privacy (issue #314): findings + counts + file metadata are sent; raw
+	 * source `content`/snippets are NEVER transmitted (nor read from disk).
 	 * Endpoint: POST {DashboardUrl}/api/public/code-validator/analyze
-	 * Body: { project_name, files: [{name, path, type, content, lines_count}] }
+	 * Body: { project_name,
+	 *         files:  [{name, path, type, lines_count, issue_count,
+	 *                   issues: [{rule_id, rule_name, severity, category,
+	 *                             line, message}]}],
+	 *         totals: {files_scanned, total_issues, total_errors,
+	 *                  total_warnings, quality_score?} }
 	 * Auth:  Authorization: Bearer <ApiKeyDashboard>
 	 */
 	void SendCodeValidator(const FShintValidateResult& LastResult,

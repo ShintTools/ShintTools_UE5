@@ -42,6 +42,17 @@
 
 namespace
 {
+	// Re-entrancy guard for the post-fix recompile (issue #313). The Apply
+	// button stays interactive while the 10-60s `Build.bat <Project>Editor`
+	// runs, so a second Apply is easy — and two concurrent builds contend over
+	// the same UBT/linker locks + output DLL, so the second fails ("recompile
+	// fails after recompile"). This process-global flag — touched only on the
+	// game thread (launch + the AsyncTask completion) so it needs no atomics —
+	// makes an overlapping Apply skip the redundant build; the applied source
+	// fixes are still written and are picked up by the in-flight build (or the
+	// next one).
+	static bool GPostFixRecompileInFlight = false;
+
 	// Bug 1 fix: the post-fix recompile (Build.bat) runs hidden via
 	// ExecProcess, so without visible feedback the editor looks frozen / like
 	// the fix never applied — especially in the marketplace build where there
@@ -509,7 +520,18 @@ void FShintCoreClient::ApplyCodeFixes(
 	for (const FShintCodeIssue& Issue : AcceptedIssues)
 	{
 		if (Issue.FilePath.IsEmpty()) continue;
-		if (Issue.FilePath.StartsWith(TEXT("/Game/")) || Issue.FilePath.StartsWith(TEXT("/Engine/")))
+
+		// Classify exactly as the UI does (SShintToolsPanel_State.cpp): the
+		// rule-id prefix is the authoritative signal — BP* rules are produced
+		// only by Blueprint scanning — with the /Game//Engine package path as a
+		// fallback. Routing BP issues by FilePath ALONE used to misroute any BP
+		// finding whose path wasn't a /Game/ package path (BP items also carry
+		// FileContent) into the C++ tree-sitter branch below, where the fixer
+		// can't touch a Blueprint — so the BP fix silently vanished whenever it
+		// was applied alongside a C++ fix (issue #312).
+		if (Issue.RuleId.StartsWith(TEXT("BP"))
+			|| Issue.FilePath.StartsWith(TEXT("/Game/"))
+			|| Issue.FilePath.StartsWith(TEXT("/Engine/")))
 		{
 			BPIssues.Add(&Issue);
 			continue;
@@ -901,6 +923,20 @@ void FShintCoreClient::ApplyCodeFixes(
 
 	if (Result.FixedFiles.Num() > 0)
 	{
+		// #313: never spawn a second build over an in-flight one — it would fail
+		// on the shared UBT/linker locks. The fixes are already on disk, so just
+		// report them; the running build (or the next Apply) compiles them.
+		if (GPostFixRecompileInFlight)
+		{
+			UE_LOG(LogShintTools, Warning,
+				TEXT("ApplyFix: recompile already in progress — applied %d fix(es); "
+				     "skipping the overlapping build (issue #313)."),
+				Result.TotalFixesApplied);
+			OnComplete.ExecuteIfBound(Result);
+			return;
+		}
+		GPostFixRecompileInFlight = true;
+
 		const FString BuildBat = FPaths::ConvertRelativePathToFull(
 			FPaths::EngineDir() / TEXT("Build/BatchFiles/Build.bat"));
 		const FString UProjectPath = FPaths::ConvertRelativePathToFull(
@@ -1022,6 +1058,7 @@ void FShintCoreClient::ApplyCodeFixes(
 
 			AsyncTask(ENamedThreads::GameThread, [Result, OnComplete, BuildNote]() mutable
 			{
+				GPostFixRecompileInFlight = false;
 				ShintEndRecompileNotification(
 					BuildNote, Result.bHasCompileErrors, Result.CompileErrors.Num());
 				OnComplete.ExecuteIfBound(Result);
@@ -1248,6 +1285,18 @@ void FShintCoreClient::HandleTreeSitterFixResponse(
 
 	if (LocalResult.FixedFiles.Num() > 0)
 	{
+		// #313: skip an overlapping build (see ApplyCodeFixes for the rationale).
+		if (GPostFixRecompileInFlight)
+		{
+			UE_LOG(LogShintTools, Warning,
+				TEXT("HandleTreeSitterFixResponse: recompile already in progress — "
+				     "applied %d fix(es); skipping the overlapping build (issue #313)."),
+				LocalResult.TotalFixesApplied);
+			OnComplete.ExecuteIfBound(LocalResult);
+			return;
+		}
+		GPostFixRecompileInFlight = true;
+
 		const FString BuildBat = FPaths::ConvertRelativePathToFull(
 			FPaths::EngineDir() / TEXT("Build/BatchFiles/Build.bat"));
 		const FString UProjectPath = FPaths::ConvertRelativePathToFull(
@@ -1349,6 +1398,7 @@ void FShintCoreClient::HandleTreeSitterFixResponse(
 
 			AsyncTask(ENamedThreads::GameThread, [LocalResult, OnComplete, BuildNote]() mutable
 			{
+				GPostFixRecompileInFlight = false;
 				ShintEndRecompileNotification(
 					BuildNote, LocalResult.bHasCompileErrors, LocalResult.CompileErrors.Num());
 				OnComplete.ExecuteIfBound(LocalResult);
