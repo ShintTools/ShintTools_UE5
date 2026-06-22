@@ -2,6 +2,7 @@
 
 #include "ShintTools.h"
 #include "SShintToolsPanel.h"
+#include "SShintWelcomeDialog.h"
 #include "ShintIconStyle.h"
 
 #include "Framework/Docking/TabManager.h"
@@ -183,6 +184,12 @@ void FShintToolsModule::OpenShintToolsPanel()
 
 TSharedRef<SDockTab> FShintToolsModule::SpawnShintToolsTab(const FSpawnTabArgs& SpawnTabArgs)
 {
+	// First-launch onboarding for paid tiers. Idempotent (persisted marker) and
+	// a no-op for the free tier, so it's safe to call on every tab spawn. Placed
+	// here rather than in StartupModule so the editor UI is fully up and the tier
+	// probe has had time to resolve before we decide whether to greet the user.
+	SShintWelcomeDialog::MaybeShowForTier(GetCachedTier());
+
 	return SNew(SDockTab)
 		.TabRole(ETabRole::NomadTab)
 		[
