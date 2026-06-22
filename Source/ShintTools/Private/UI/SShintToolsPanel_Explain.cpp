@@ -87,6 +87,10 @@ FReply SShintToolsPanel::OnExplainIssueClicked(FShintIssueItemPtr Item)
 
 	ExplainStatusIndex = 0;
 
+	// Token this request so a stale, slow answer for a previously-clicked row
+	// can't overwrite the modal that's now showing a different issue.
+	const uint64 ThisRequestId = ++ExplainRequestId;
+
 	SAssignNew(ExplainWindow, SWindow)
 		.Title(LOCTEXT("ExplainTitle", "Issue Explanation — ShintTools"))
 		.ClientSize(FVector2D(680.f, 460.f))
@@ -164,6 +168,10 @@ FReply SShintToolsPanel::OnExplainIssueClicked(FShintIssueItemPtr Item)
 					{
 						if (TSharedPtr<SShintToolsPanel> Pin = WeakThis.Pin())
 						{
+							// Invalidate the in-flight request so a slow answer
+							// arriving after Close is dropped, not written into a
+							// reopened modal.
+							++Pin->ExplainRequestId;
 							if (Pin->ExplainTickerHandle.IsValid())
 							{
 								FTSTicker::GetCoreTicker().RemoveTicker(Pin->ExplainTickerHandle);
@@ -197,11 +205,11 @@ FReply SShintToolsPanel::OnExplainIssueClicked(FShintIssueItemPtr Item)
 	// game thread (UE's HTTP module dispatches there).
 	FOnShintAgentExplainComplete OnDone =
 		FOnShintAgentExplainComplete::CreateLambda(
-			[WeakThis = TWeakPtr<SShintToolsPanel>(SharedThis(this)), Item]
+			[WeakThis = TWeakPtr<SShintToolsPanel>(SharedThis(this)), Item, ThisRequestId]
 			(const FShintAgentExplainResponse& Resp)
 			{
 				if (TSharedPtr<SShintToolsPanel> Pinned = WeakThis.Pin())
-					Pinned->OnExplainComplete(Resp, Item);
+					Pinned->OnExplainComplete(Resp, Item, ThisRequestId);
 			});
 
 	CoreClient->RequestExplainIssue(Issue, OnDone);
@@ -210,8 +218,15 @@ FReply SShintToolsPanel::OnExplainIssueClicked(FShintIssueItemPtr Item)
 
 void SShintToolsPanel::OnExplainComplete(
 	const FShintAgentExplainResponse& Result,
-	FShintIssueItemPtr                Item)
+	FShintIssueItemPtr                Item,
+	uint64                            RequestId)
 {
+	// Ignore a stale response: the user clicked Explain on another row (or
+	// closed the modal) while this one was still generating. Writing its text
+	// now would show the wrong issue's explanation in the current modal.
+	if (RequestId != ExplainRequestId)
+		return;
+
 	// Stop the rotating ticker and hide the spinner; the wait is over.
 	if (ExplainTickerHandle.IsValid())
 	{

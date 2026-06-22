@@ -189,13 +189,19 @@ private:
 	// a spinner with rotating status text until the response arrives.
 	FReply OnExplainIssueClicked(FShintIssueItemPtr Item);
 	void   OnExplainComplete(const FShintAgentExplainResponse& Result,
-	                         FShintIssueItemPtr                Item);
+	                         FShintIssueItemPtr                Item,
+	                         uint64                            RequestId);
 	bool   TickExplainStatus(float DeltaTime); // rotates ExplainStatusIndex
 	TSharedPtr<class SWindow>                         ExplainWindow;
 	TSharedPtr<class SMultiLineEditableTextBox>       ExplainResultBox;
 	TSharedPtr<class SCircularThrobber>               ExplainSpinner;
 	TSharedPtr<class STextBlock>                      ExplainStatusLine;
 	int32                                             ExplainStatusIndex = 0;
+	// Monotonic token for the in-flight explain request. Bumped on every
+	// click; OnExplainComplete ignores any response whose token is stale, so
+	// a slow answer for issue A can't write into the modal now showing issue
+	// B (the per-row "wrong explanation" race).
+	uint64                                            ExplainRequestId = 0;
 	FTSTicker::FDelegateHandle                        ExplainTickerHandle;
 	FReply OnScanAssetsClicked();
 	FReply OnApplySingleFix(FShintIssueItemPtr Item);

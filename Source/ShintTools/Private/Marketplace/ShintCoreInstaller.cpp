@@ -306,7 +306,7 @@ void FShintCoreInstaller::EmitDiagnostics()
 void FShintCoreInstaller::Emit(
 	EShintInstallStep Step, int32 Percent, const FString& Message)
 {
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("[CoreInstaller] step=%d pct=%d %s"),
 		static_cast<int32>(Step), Percent, *Message);
 	if (OnProgress)

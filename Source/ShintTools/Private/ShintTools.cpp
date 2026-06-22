@@ -66,7 +66,7 @@ void FShintToolsModule::RefreshTierAsync()
 			GCachedTier = Status.bSuccess && !Status.Tier.IsEmpty()
 				? Status.Tier
 				: TEXT("free");
-			UE_LOG(LogShintTools, Display,
+			UE_LOG(LogShintTools, Verbose,
 			       TEXT("ShintTools: license probe -> tier=%s (took %.3fs)"),
 			       *GCachedTier, Status.ElapsedSeconds);
 			OnLicenseResolved.Broadcast();

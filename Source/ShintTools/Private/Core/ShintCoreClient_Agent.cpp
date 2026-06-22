@@ -58,7 +58,7 @@ void FShintCoreClient::RequestExplainIssue(
 
 	const FString Url = Config.GetBaseUrl() / TEXT("agent/explain");
 
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("RequestExplainIssue: POST /agent/explain rule=%s line=%d"),
 		*Issue.RuleId, Issue.Line);
 
@@ -158,7 +158,7 @@ void FShintCoreClient::RequestAgentPlan(
 			TEXT("RequestAgentPlan: dropped %d issue(s) with empty rule_id or severity"),
 			SkippedEmpty);
 	}
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("RequestAgentPlan: sending %d issue(s) to /agent/plan"), IssArr.Num());
 
 	if (Config.ApiKeyMongo.IsEmpty())
