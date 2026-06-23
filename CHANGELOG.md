@@ -2,9 +2,30 @@
 
 ---
 
-## [Unreleased] — 2026-06-09 — autofix UX + Core image owner
+## [1.1.0] — 2026-06-23 — privacy, apply-fix & recompile hardening
+
+### Privacy / Security
+- **#314 — Send to Dashboard is metrics-only.** The code-validator upload now
+  carries per-file findings + counts + project totals; raw source `content`/
+  snippets are never transmitted (and not read from disk), and paths are
+  project-relative, not absolute (no OS-username leak). The dashboard endpoint
+  must ingest findings instead of re-analysing source. (`ShintDashboardSync.cpp`)
+- **#311 — Security audit** of the marketplace plugin (`SECURITY_AUDIT.md`):
+  source-bearing requests stay on the loopback Core, no hardcoded secrets, no
+  device/user fingerprint or telemetry, and `SessionToken` is never transmitted.
 
 ### Bug Fixes
+- **#312 — Blueprint fixes dropped when applied alongside C++.** `ApplyCodeFixes`
+  classified Blueprints by file path only, so a BP finding carrying `FileContent`
+  was misrouted into the C++ tree-sitter fixer and silently skipped. Now routed
+  by RuleId prefix (matching the UI). (`ShintCoreClient_Validator.cpp`)
+- **#313 — Recompile fails after recompile.** The Apply button stayed live during
+  the hidden `Build.bat`, so a second Apply spawned a contending build that failed
+  on the shared UBT/linker locks. A game-thread re-entrancy guard now skips the
+  overlapping build (fixes still apply). (`ShintCoreClient_Validator.cpp`)
+- **#310 / #306 — Marketplace logs.** The remaining `Log`/`Display` lines are now
+  `Verbose`, so the end-user Output Log shows only warnings/errors; verified the
+  plugin writes no log files to disk.
 - **Apply-fix recompile gave no feedback (looked like nothing happened).** After
   a C++ auto-fix the plugin spawns `Build.bat` via `ExecProcess`, which runs
   **hidden** — so in the marketplace build (no IDE/console) the user saw no
