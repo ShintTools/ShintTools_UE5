@@ -157,10 +157,18 @@ void FShintDashboardSync::SendCodeValidator(
 			const FString TypeStr =
 				(Ext == TEXT("h") || Ext == TEXT("hpp")) ? TEXT("header") : TEXT("cpp");
 
+			// Project-relative path only — never leak the absolute local layout
+			// (e.g. C:/Users/<name>/...) to the external dashboard. Validator
+			// targets live under the project, so this resolves to e.g.
+			// "Source/MyGame"; anything outside falls back to the folder name.
+			FString RelDir = FPaths::GetPath(AbsPath);
+			if (!FPaths::MakePathRelativeTo(RelDir, *FPaths::ProjectDir()))
+				RelDir = FPaths::GetCleanFilename(FPaths::GetPath(AbsPath));
+
 			TArray<TSharedPtr<FJsonValue>>& FileIssues = IssuesByFile[AbsPath];
 			TSharedRef<FJsonObject> FO = MakeShared<FJsonObject>();
 			FO->SetStringField(TEXT("name"),        FPaths::GetCleanFilename(AbsPath));
-			FO->SetStringField(TEXT("path"),        FPaths::GetPath(AbsPath));
+			FO->SetStringField(TEXT("path"),        RelDir);
 			FO->SetStringField(TEXT("type"),        TypeStr);
 			FO->SetNumberField(TEXT("lines_count"), LinesByFile.FindRef(AbsPath));
 			FO->SetNumberField(TEXT("issue_count"), FileIssues.Num());

@@ -57,7 +57,19 @@ ever become config-driven, validate against `^[A-Za-z0-9_.-]+$` before use.
   snippets, and source context are never transmitted, and the files are no
   longer even read from disk during the send. (`ShintDashboardSync.cpp`)
 - The Asset-Naming upload already sent metadata only (`name`, `path`, `type`,
-  `category`).
+  `category`); asset paths are virtual `/Game/...` package paths, not filesystem
+  paths, so they carry no local layout.
+- **Finding (LOW, remediated — data-exposure pass):** the code-validator upload
+  sent each file's directory as an **absolute** path
+  (`FPaths::GetPath` → `C:/Users/<name>/...`), leaking the OS username and local
+  layout to the dashboard. Fixed: the `path` field is now **project-relative**
+  (`MakePathRelativeTo(ProjectDir)`), e.g. `Source/MyGame`.
+- **Confirmed clean:** the plugin sends **no device/user fingerprint** — no
+  username, machine id, hardware id, Epic account id, or telemetry anywhere in
+  `Source/`. Source-bearing requests (`/validate/*`, `/agent/explain`, the
+  `content`/`snippet` fields) go **only to the loopback Core** (`127.0.0.1`,
+  hard-coded in the free build). `SessionToken` is parsed for back-compat but
+  **never transmitted** (the dashboard uses the scoped `st_` key).
 - The dashboard upload is **opt-in** (a button) and **paid-tier gated**.
 
 ## 4. Secrets handling
@@ -101,6 +113,8 @@ ever become config-driven, validate against `^[A-Za-z0-9_.-]+$` before use.
 | # | Severity | Status |
 |---|---|---|
 | Source code sent to external dashboard | HIGH | ✅ Remediated (#314 — metrics only) |
+| Absolute local paths (OS username) sent to dashboard | LOW | ✅ Remediated (project-relative paths) |
+| No device/user fingerprint or telemetry | INFO | ✅ Confirmed (no username / machine-id / analytics) |
 | `st_` api key stored plaintext in config | LOW | Accepted (per-project, limited scope); OS keychain is a future option |
 | Diagnostics uses `cmd.exe` | INFO | Safe (plugin-constant args, user-triggered) |
 | No on-disk logs; console logs `Verbose` | INFO | ✅ (#306 / #310) |
