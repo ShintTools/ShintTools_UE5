@@ -33,9 +33,6 @@ DEFINE_LOG_CATEGORY(LogShintTools);
 // Static tab name identifier
 const FName FShintToolsModule::ShintToolsTabName = FName("ShintTools");
 
-// Module-wide cached license. Default "free" so anything that reads it
-// before /license/status returns gets a safe baseline. Updated on the
-// game thread by the StartupModule probe.
 static FString GCachedTier = TEXT("free");
 FShintToolsModule::FOnShintLicenseResolved
     FShintToolsModule::OnLicenseResolved;
@@ -47,11 +44,6 @@ FString FShintToolsModule::GetCachedTier()
 
 void FShintToolsModule::RefreshTierAsync()
 {
-	// Re-resolve the cached tier from the CURRENT shinttools.config.json.
-	// Called at startup and after the Config panel saves a new license key,
-	// so the License badge + Indie/Studio gates update live without an editor
-	// restart. The transport + LicenseApi are kept alive by the lambda
-	// capture for the duration of the async round-trip.
 	FShintCoreClient Tmp;  // reads shinttools.config.json to get base_url
 	const FShintCoreConfig& Cfg = Tmp.GetConfig();
 	const FString BaseUrl = Cfg.GetBaseUrl();
@@ -86,20 +78,12 @@ void FShintToolsModule::StartupModule()
 
 	RegisterTabSpawner();
 	ExtendLevelEditorMenu();
-
-	// Probe the tier once at startup so the License badge and Indie/
-	// Studio feature gates resolve before the user runs their first
-	// scan. Previous behaviour: the panel showed License: Free until
-	// /validate/code or /assets/scan responded, even for paid customers.
-	// Shared with the Config panel's save handler (RefreshTierAsync) so a
-	// newly-entered license key updates the badge without an editor restart.
+	
 	RefreshTierAsync();
 
 #if SHINT_MARKETPLACE_BUILD
-	// Marketplace builds own Core install. Probe localhost:18200 on a
-	// worker thread; if Core isn't healthy, open the install wizard.
-	// Launcher builds skip this -- the launcher's installer.py path
-	// installs Core before the editor opens.
+	// Marketplace builds own Core install. Probe the local Core on a
+	// worker thread; if it isn't healthy, open the install wizard.
 	SShintCoreInstallerWindow::OpenIfNeededAsync(18200);
 #endif
 
@@ -184,10 +168,6 @@ void FShintToolsModule::OpenShintToolsPanel()
 
 TSharedRef<SDockTab> FShintToolsModule::SpawnShintToolsTab(const FSpawnTabArgs& SpawnTabArgs)
 {
-	// First-launch onboarding for paid tiers. Idempotent (persisted marker) and
-	// a no-op for the free tier, so it's safe to call on every tab spawn. Placed
-	// here rather than in StartupModule so the editor UI is fully up and the tier
-	// probe has had time to resolve before we decide whether to greet the user.
 	SShintWelcomeDialog::MaybeShowForTier(GetCachedTier());
 
 	return SNew(SDockTab)

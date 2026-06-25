@@ -78,7 +78,7 @@ struct FShintValidateResult
 	TArray<FString> ScannedFilePaths;  // absolute paths of all scanned files
 
 	// Slice B: Quality Score overall echoed by /validate/project and /validate/blueprints.
-	// -1.f = not present (older server, free SKU, or fix endpoint).
+	// -1.f = not present (older server or fix endpoint).
 	float   QualityScoreOverall = -1.f;
 
 	// Per-category breakdown echoed inline (when the server is new enough).
@@ -289,12 +289,11 @@ DECLARE_DELEGATE_OneParam(FOnShintQualityScoreHistoryComplete, const FShintQuali
 
 // External web dashboard types (FShintWebDashboardResult,
 // FOnShintWebDashboardComplete) moved to Core/ShintDashboardSync.h.
-// The "Send to Dashboard" feature is a paid-tier-only POST to
-// shint.tools and lives in its own translation unit so the free SKU
-// can skip the code path entirely.
+// The "Send to Dashboard" feature is a paid-tier-only POST that lives in
+// its own translation unit so other builds can skip the code path.
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Agent — Auto-Fix Plan (Indie tier; free SKU never builds the UI button)
+// Agent — Auto-Fix Plan (Indie tier)
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct FShintAgentPlanStep
@@ -347,7 +346,7 @@ DECLARE_DELEGATE_OneParam(FOnShintAgentExplainComplete, const FShintAgentExplain
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Local dashboard report (legacy — keeps local MongoDB sync)
+// Local dashboard report (legacy — keeps a local sync)
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct FShintDashboardReport
@@ -400,8 +399,8 @@ struct FShintCoreConfig
 	//     Sent to /validate/*, /assets/scan, /agent/*. Distinct from
 	//     the dashboard auth path — do not mix them.
 	//
-	// The default DashboardUrl points at production shint.tools (the
-	// previous default "https://app.shinttools.io" was a dead host that
+	// The default DashboardUrl points at the current dashboard host (the
+	// previous default was a dead host that
 	// swallowed every request silently). Override from
 	// shinttools.config.json's `dashboard_url` field for staging.
 	FString ApiKeyDashboard = TEXT("");
@@ -426,11 +425,11 @@ struct FShintCoreConfig
 	FString GetBaseUrl() const
 	{
 #if SHINT_FREE_TIER
-		// Free tier: ignore any host/port override from shinttools.config.json.
-		// A customer who edits the config to point at a rogue local proxy
-		// could otherwise make the plugin believe their fake server's
-		// tier=indie response. Loopback is hardcoded; the IDE/dev only
-		// flexibility lives in paid builds.
+		// Free tier: host/port come from hardcoded loopback values;
+		// overrides from the config are ignored in this tier so the plugin
+		// always targets the local loopback core. Override
+		// flexibility is available in
+		// paid builds.
 		return FString::Printf(TEXT("http://%s:%d"),
 			SHINT_HARDCODED_CORE_HOST, SHINT_HARDCODED_CORE_PORT);
 #else
@@ -451,10 +450,10 @@ struct FShintCoreConfig
 	bool HasExternalDashboard() const
 	{
 		// External dashboard authenticates via Authorization: Bearer
-		// <ApiKeyDashboard> (the per-project st_<hex> key). session_token is
-		// deliberately NOT used here — the launcher keeps it out of the
-		// project config since it leaked through git. ApiKeyMongo is the
-		// LOCAL-core license key used for tier resolution against MongoDB —
+		// <ApiKeyDashboard>, a per-project credential. session_token is
+		// deliberately NOT used here — it is not stored in the
+		// project config. ApiKeyMongo is the
+		// local-core license key used for tier resolution —
 		// orthogonal to the dashboard and required only on /validate/* +
 		// /assets/scan (those call sites send it explicitly).
 		return !ApiKeyDashboard.IsEmpty() && !DashboardUrl.IsEmpty();
@@ -534,7 +533,7 @@ public:
 	//   Moved to FShintDashboardSync::SendAssetNaming
 	//   (see Core/ShintDashboardSync.h).
 
-	// ── Local MongoDB dashboard report (legacy) ───────────────────────────────
+	// ── Local dashboard report (legacy) ───────────────────────────────
 	void SendDashboardReport(const FShintDashboardReport& Report,
 	                         FOnShintDashboardComplete OnComplete);
 
@@ -591,7 +590,7 @@ private:
 	static FShintFixResult       ParseFixResponse      (const FShintRequestResult& Raw);
 	static FShintFixResult       ParseTreeSitterFixResponse(const FShintRequestResult& Raw);
 	// Slice B helpers — populate one snapshot from a JSON object that matches
-	// the score document shape persisted in MongoDB by the core engine.
+	// the score document shape returned by the core engine.
 	static bool                  ParseScoreObject(const TSharedPtr<class FJsonObject>& Obj,
 	                                              FShintQualityScoreSnapshot& Out);
 	static FShintQualityScoreSnapshot         ParseLatestScoreResponse (const FShintRequestResult& Raw);

@@ -88,11 +88,7 @@ namespace
 		return false;
 	}
 
-	// Both endpoints share the same auth scheme:
-	//   Authorization: Bearer <ApiKeyDashboard>
-	// (the per-project st_<hex> key, NOT the session_token — the launcher
-	// deliberately keeps session_token out of the project config since it
-	// leaked through git; see config_gen._identity_fields.)
+	// Both endpoints share the same auth scheme: a per-project bearer key.
 	TMap<FString, FString> BuildAuthHeaders(const FShintCoreConfig& Cfg)
 	{
 		TMap<FString, FString> Headers;
@@ -116,7 +112,7 @@ void FShintDashboardSync::SendCodeValidator(
 		return;
 	}
 
-	// Privacy (issue #314): the dashboard receives METRICS ONLY — per-file
+	// Privacy: the dashboard receives METRICS ONLY — per-file
 	// findings, counts and file metadata — never raw source. The plugin has
 	// already run the validator locally, so we transmit the resulting issues
 	// (rule id, severity, category, line, message) instead of file content.

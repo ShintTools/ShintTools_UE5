@@ -1,6 +1,6 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
 //
-// Asset Naming Bot endpoints + legacy MongoDB dashboard report
+// Asset Naming Bot endpoints + dashboard report,
 // split out of ShintCoreClient.cpp.
 
 #include "ShintCoreClient.h"
@@ -81,7 +81,7 @@ void FShintCoreClient::ScanAssetNaming(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Asset Naming Bot — report server-side (the actual rename happens in the
-// panel via IAssetTools; this just records it for MongoDB / local history)
+// panel via IAssetTools; this just records it for local history)
 // ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreClient::ReportAssetFixesToServer(
@@ -112,7 +112,7 @@ void FShintCoreClient::ReportAssetFixesToServer(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Local MongoDB dashboard (legacy)
+// Local dashboard (legacy)
 // ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreClient::SendDashboardReport(

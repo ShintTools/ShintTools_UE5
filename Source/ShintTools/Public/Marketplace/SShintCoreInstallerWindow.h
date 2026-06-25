@@ -19,8 +19,7 @@ class SProgressBar;
  * wizard. Owns a worker thread that runs FShintCoreInstaller::Run() and
  * marshals progress events to the Game Thread for rendering.
  *
- * Marketplace-only. The launcher distribution installs Core via the
- * Python installer.py path and never opens this window.
+ * Opens only when no local Core is detected at startup.
  *
  * Lifecycle:
  *   - OpenIfNeededAsync(): static entrypoint, called from StartupModule.
