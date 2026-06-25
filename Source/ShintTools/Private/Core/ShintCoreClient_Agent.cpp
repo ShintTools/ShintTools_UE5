@@ -203,19 +203,16 @@ FShintAgentPlanResult FShintCoreClient::ParseAgentPlanResponse(
 		{
 			R.ErrorMessage = TEXT(
 				"Auto-Fix Plan requires the Indie core engine. "
-				"The connected server (free SKU) doesn't expose /agent/plan — "
+				"The connected server (free tier) doesn't expose /agent/plan — "
 				"upgrade your subscription at https://shint.tools to enable it.");
 		}
 		else if (Raw.StatusCode == 403)
 		{
 			R.ErrorMessage = TEXT(
-				"Auto-Fix Plan is an indie feature. "
-				"Core engine resolved your api_key as tier 'free'. Verify:\n"
-				"  1) api_key is defined on shinttools.config.json\n"
-				"  2) MongoDB is running \n"
-				"  3) There is a document {\"api_key\":\"<tu-key>\",\"tier\":\"indie\","
-				"\"active\":true} on Mongo DB collection licenses\n"
-				"  Run: python core/scripts/seed_license.py --key <your-key> to make a new one.");
+				"Auto-Fix Plan is an Indie-tier feature. "
+				"The connected core engine resolved your api_key as tier 'free'. "
+				"Verify that api_key is set correctly on shinttools.config.json, that "
+				"your license is active, and restart the core engine.");
 		}
 		else
 		{

@@ -2,6 +2,23 @@
 
 ---
 
+## [1.1.1] — 2026-06-25 — Fab source-pack sanitization
+
+### Security / Privacy
+- **Internal infra leaking through `Source/` comments and user-facing error
+  strings.** `Source/` ships verbatim to Fab reviewers/buyers, so several
+  comments and error messages disclosed backend internals: dashboard auth key
+  format + a past credential leak, `MongoDB`/license-document schema details,
+  the internal `core/scripts/seed_license.py` path, "free SKU" build jargon,
+  and roadmap/version-history notes. All neutralized to user-meaningful text
+  with no code or behaviour change. Hardened `tools/build_fab_source_pack.py`
+  to also strip any `*.md` under the staged plugin (dev docs must never ship).
+
+### Bug Reports
+- None this cycle (proactive Fab-compliance pass, not user/bug-hunt sourced).
+
+---
+
 ## [1.1.0] — 2026-06-23 — privacy, apply-fix & recompile hardening
 
 ### Privacy / Security
