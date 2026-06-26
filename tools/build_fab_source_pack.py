@@ -81,6 +81,12 @@ def build() -> Path:
             if path.is_dir() and path.name in _STRIP_DIRS:
                 shutil.rmtree(path, ignore_errors=True)
 
+        # Dev docs (README.md, refactor/roadmap notes, ...) must never ship to
+        # Fab — they can leak internal architecture. Strip every *.md anywhere
+        # under the staged plugin. The shipped Documentation/ uses .docx.
+        for md in plugin.rglob("*.md"):
+            md.unlink(missing_ok=True)
+
         # Fab compiles the source -> the plugin is not pre-installed.
         uplugin = plugin / "ShintTools.uplugin"
         data = json.loads(uplugin.read_text(encoding="utf-8"))
