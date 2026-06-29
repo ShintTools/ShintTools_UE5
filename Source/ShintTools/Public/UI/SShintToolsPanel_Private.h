@@ -63,6 +63,21 @@ TSharedRef<SWidget> StatBadge(
 	const FLinearColor&     Clr);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Action-button content — SVG icon glyph + label row.
+//
+// Builds the "icon + text" content used inside SButtons across the Code and
+// Asset sections. Shared here (not file-local) because it is used by two TUs:
+// when each kept its own anonymous-namespace copy they collided under UE5
+// unity builds ("ShintBtnContent already has a body"), which Fab's clean
+// full-unity compile hit even though adaptive unity hid it locally. The label
+// widget is passed in so SAssignNew'd dynamic labels keep their member ptr.
+// ─────────────────────────────────────────────────────────────────────────────
+TSharedRef<SWidget> ShintBtnContent(
+	const FName&               Icon,
+	const TSharedRef<SWidget>& Label,
+	const FSlateColor&         Tint);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CoreRedirects writer — DefaultEngine.ini patcher.
 //
 // One entry per logical redirect; the writer dedupes by exact textual match
