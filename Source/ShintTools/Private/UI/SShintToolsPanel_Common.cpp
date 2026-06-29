@@ -19,11 +19,13 @@
 // Shared design-system widgets
 #include "ShintStyle.h"
 #include "SShintCard.h"
+#include "ShintIconStyle.h"   // FShintIconStyle::GetBrush — ShintBtnContent glyphs
 
 // Slate layout / widgets
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Images/SImage.h"   // ShintBtnContent icon
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -138,6 +140,32 @@ TSharedRef<SWidget> StatBadge(
 			[
 				OutLabel.ToSharedRef()
 			]
+		];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Action-button content — SVG icon + label.
+//
+// Single definition shared by the Code and Asset sections. Previously each TU
+// kept its own anonymous-namespace copy, which collided under UE5 unity builds
+// (the same blob defined ShintBtnContent twice). Defining it once here with
+// external linkage removes the collision while keeping both call-sites intact.
+// ─────────────────────────────────────────────────────────────────────────────
+TSharedRef<SWidget> ShintBtnContent(
+	const FName& Icon, const TSharedRef<SWidget>& Label, const FSlateColor& Tint)
+{
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		  .Padding(0.f, 0.f, 6.f, 0.f)
+		[
+			SNew(SImage)
+			.Image(FShintIconStyle::GetBrush(Icon))
+			.ColorAndOpacity(Tint)
+			.DesiredSizeOverride(FVector2D(13.f, 13.f))
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			Label
 		];
 }
 

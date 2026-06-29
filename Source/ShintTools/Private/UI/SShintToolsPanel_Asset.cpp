@@ -29,35 +29,7 @@
 
 #include "Misc/Paths.h"
 
-#include "ShintIconStyle.h"
-#include "Widgets/Images/SImage.h"
-
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
-
-namespace
-{
-	// Build "icon + label" content for an action button. The registered SVG
-	// glyphs are white masks tinted to match the button's text colour; they
-	// replace the old inline text glyphs. The label widget is passed in so the
-	// SAssignNew'd dynamic labels (Apply/Send counters) keep their member ptr.
-	TSharedRef<SWidget> ShintBtnContent(const FName& Icon,
-		const TSharedRef<SWidget>& Label, const FSlateColor& Tint)
-	{
-		return SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			  .Padding(0.f, 0.f, 6.f, 0.f)
-			[
-				SNew(SImage)
-				.Image(FShintIconStyle::GetBrush(Icon))
-				.ColorAndOpacity(Tint)
-				.DesiredSizeOverride(FVector2D(13.f, 13.f))
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				Label
-			];
-	}
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Section root
