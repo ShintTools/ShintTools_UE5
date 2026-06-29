@@ -253,6 +253,13 @@ struct FShintLodAuditResult
 	double  EstimatedVramSavedMb            = 0.0;
 	int32   EstimatedShaderInstructionsSaved = 0;
 
+	// Client-computed during the collection pass (not from the server) — drive
+	// the Asset Optimizer KPI tiles (per-category file counts + total VRAM).
+	int32   TexturesAudited  = 0;
+	int32   MeshesAudited     = 0;
+	int32   MaterialsAudited  = 0;
+	double  TotalVramMb       = 0.0;   // sum of resident texture VRAM
+
 	TArray<FShintLodFinding> Findings;
 };
 DECLARE_DELEGATE_OneParam(FOnShintLodAuditComplete, const FShintLodAuditResult&);

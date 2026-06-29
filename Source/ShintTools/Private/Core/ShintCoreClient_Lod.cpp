@@ -188,6 +188,7 @@ void FShintCoreClient::AuditLods(
 
 	TArray<TSharedPtr<FJsonValue>> Arr;
 	TMap<FString, FLodAssetMeta>   MetaByPath;   // joined onto findings post-parse
+	int64 TotalVramBytes = 0;                    // resident texture VRAM (KPI tile)
 	for (const FAssetData& AD : AllAssets)
 	{
 		TSharedRef<FJsonObject> Obj = MakeShared<FJsonObject>();
@@ -205,6 +206,7 @@ void FShintCoreClient::AuditLods(
 			bUnderstood = ExtractTexture(T, Obj);
 			if (bUnderstood)
 			{
+				TotalVramBytes += (int64)T->CalcTextureMemorySizeEnum(TMC_AllMips);
 				FLodAssetMeta Meta;
 				Meta.Width  = T->GetSizeX();
 				Meta.Height = T->GetSizeY();
@@ -235,6 +237,18 @@ void FShintCoreClient::AuditLods(
 		}
 	}
 
+	// Per-category file counts for the KPI breakdowns (textures vs meshes).
+	int32 NumTextures = 0, NumMeshes = 0, NumMaterials = 0;
+	for (const TSharedPtr<FJsonValue>& V : Arr)
+	{
+		const TSharedPtr<FJsonObject> O = V->AsObject();
+		FString T;
+		if (O.IsValid()) O->TryGetStringField(TEXT("asset_type"), T);
+		if (T == TEXT("Texture2D")) ++NumTextures;
+		else if (T == TEXT("StaticMesh") || T == TEXT("SkeletalMesh")) ++NumMeshes;
+		else if (T == TEXT("Material") || T == TEXT("MaterialInstance")) ++NumMaterials;
+	}
+
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
 	Body->SetStringField(TEXT("engine"),       TEXT("unreal"));
@@ -254,10 +268,15 @@ void FShintCoreClient::AuditLods(
 	SendRequest(Config.GetBaseUrl() + TEXT("/assets/lod/audit"),
 		EShintHttpMethod::POST, BodyStr,
 		FOnShintRequestComplete::CreateLambda(
-			[OnComplete, BenchStart, SentAssets, MetaByPath = MoveTemp(MetaByPath)]
+			[OnComplete, BenchStart, SentAssets, NumTextures, NumMeshes,
+			 NumMaterials, TotalVramBytes, MetaByPath = MoveTemp(MetaByPath)]
 			(const FShintRequestResult& Raw) mutable
 		{
 			FShintLodAuditResult R = ParseLodAuditResponse(Raw);
+			R.TexturesAudited  = NumTextures;
+			R.MeshesAudited    = NumMeshes;
+			R.MaterialsAudited = NumMaterials;
+			R.TotalVramMb      = (double)TotalVramBytes / (1024.0 * 1024.0);
 
 			// Join the collection-pass metadata onto each finding so the Asset
 			// Optimizer table has resolution / group / format without a server
