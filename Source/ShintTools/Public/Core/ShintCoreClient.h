@@ -239,6 +239,12 @@ struct FShintLodFinding
 	FString Format;            // current compression (e.g. "BC7")
 	double  CurrentVramMb   = 0.0;
 	double  PotentialVramMb = 0.0;
+
+	// ── Auto-fix targets (parsed from the finding's "recommended" dict) ──────
+	// Drive the per-row "Fix" flow, which writes an optimised *duplicate* and
+	// leaves the original untouched. Absent for non-size rules (left 0/empty).
+	int32   RecMaxSize = 0;     // recommended.max_texture_size  (LT003 oversized)
+	FString RecCompression;    // recommended.compression       (LT001/LT007)
 };
 
 struct FShintLodAuditResult

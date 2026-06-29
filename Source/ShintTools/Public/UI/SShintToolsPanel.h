@@ -114,6 +114,10 @@ struct FShintLodFindingItem
 	FShintLodFinding Finding;     // server result, copied verbatim
 	bool bDetailExpanded = false; // user toggled the guidance panel open
 	bool bChecked        = false; // row checkbox — drives the bulk "Fix (N)"
+	// Kept alive for the lifetime of the row so the thumbnail widget it backs
+	// stays valid (FAssetThumbnail must outlive the widget MakeThumbnailWidget
+	// returns). Created lazily in GenerateLodFindingRow.
+	TSharedPtr<class FAssetThumbnail> Thumbnail;
 };
 using FShintLodFindingPtr = TSharedPtr<FShintLodFindingItem>;
 
@@ -249,6 +253,11 @@ private:
 	FReply OnLodFixRow(FShintLodFindingPtr Item);
 	FReply OnLodFixSelected();
 	FReply OnLodExport();
+	// Writes an optimised *duplicate* of the finding's texture (original left
+	// untouched), applying the server's recommended max-size / compression.
+	// Returns false + fills OutError on failure; OutNewPath = new asset path.
+	bool   ApplyLodFixDuplicate(const FShintLodFinding& Finding,
+	                            FString& OutNewPath, FString& OutError);
 
 	// ── HTTP callbacks ────────────────────────────────────────────────────────
 	void OnHealthCheckComplete(const FShintRequestResult& Result);
@@ -324,6 +333,10 @@ private:
 	TArray<FShintAssetItemPtr> AllAssetItems;
 	TArray<FShintLodFindingPtr> LodFindingItems;    // all findings from last audit
 	TArray<FShintLodFindingPtr> LodFilteredItems;   // visible rows (tab + filters)
+	// Shared thumbnail renderer pool for the Asset Optimizer table (Stage 2b).
+	// Lazily created on first row generation; one pool backs every row's 34px
+	// thumbnail so the editor renders real asset previews instead of a swatch.
+	TSharedPtr<class FAssetThumbnailPool> LodThumbnailPool;
 	// Currently visible (after filter)
 	TArray<FShintIssueItemPtr> CodeIssueItems;
 	TArray<FShintAssetItemPtr> AssetIssueItems;

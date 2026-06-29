@@ -393,6 +393,10 @@ FShintLodAuditResult FShintCoreClient::ParseLodAuditResponse(
 			{
 				(*Recommended)->TryGetNumberField(
 					TEXT("vram_mb"), Finding.PotentialVramMb);
+				(*Recommended)->TryGetNumberField(
+					TEXT("max_texture_size"), Finding.RecMaxSize);
+				(*Recommended)->TryGetStringField(
+					TEXT("compression"), Finding.RecCompression);
 			}
 
 			Out.Findings.Add(MoveTemp(Finding));

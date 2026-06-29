@@ -2,6 +2,36 @@
 
 ---
 
+## [Unreleased — develop-paid] — Studio LOD Auditor: Asset Optimizer completion
+
+### Added (Studio / paid-only)
+- **Real asset thumbnails in the Asset Optimizer table (Stage 2b).** Each finding
+  row now renders the actual `FAssetThumbnail` (shared `FAssetThumbnailPool`)
+  instead of a neutral swatch; falls back to the swatch when the asset can't be
+  resolved. (`SShintToolsPanel_Lod.cpp`, `SShintToolsPanel.h`)
+- **Per-row + bulk auto-fix as an optimized *duplicate* (Stage 3).** "Fix" writes
+  `<Name>_Optimized` next to the original (original never modified), applying the
+  server's recommended `max_texture_size` / compression, then rebuilds + saves the
+  new asset. Bulk "Fix (N)" applies to all checked rows and reports a success/fail
+  summary. New plumbing parses `recommended.max_texture_size` + `recommended.compression`
+  from the audit response into `FShintLodFinding`. (`ShintCoreClient.h`,
+  `ShintCoreClient_Lod.cpp`, `SShintToolsPanel_Lod.cpp`)
+- **Findings export.** "Export" writes a CSV of all findings to
+  `Saved/ShintTools/lod_audit_<timestamp>.csv`.
+- **Frame-time savings estimate.** The KPI tile now shows a transparent `~X.XX ms`
+  estimate derived from the resident-VRAM reduction (texture-bandwidth-weighted
+  fraction of a 60fps budget), prefixed `~` and clearly an estimate until real
+  profiling telemetry exists.
+
+Verified: clean `BuildPlugin` under forced full-unity (`bForceUnityBuild` +
+`bUseAdaptiveUnityBuild=false`), the condition that surfaces jumbo-TU symbol
+collisions.
+
+### Bug Reports
+- None this cycle (planned Studio feature work, not user/bug-hunt sourced).
+
+---
+
 ## [1.1.1] — 2026-06-25 — Fab source-pack sanitization
 
 ### Security / Privacy

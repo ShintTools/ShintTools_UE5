@@ -9,8 +9,9 @@
 //
 // Data: findings come from /assets/lod/audit; resolution/group/format and
 // current/potential size are joined onto each finding client-side (see
-// ShintCoreClient_Lod.cpp). The auto-fix flow is staged separately — the Fix
-// buttons currently surface a "coming soon" toast.
+// ShintCoreClient_Lod.cpp). Per-row + bulk Fix write an optimised *duplicate*
+// (<Name>_Optimized) with the server's recommended max-size/compression applied,
+// leaving the original untouched; Export writes a CSV of all findings.
 
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
@@ -19,6 +20,20 @@
 
 #include "ShintStyle.h"
 #include "ShintIconStyle.h"
+
+// Stage 2b (thumbnails) + Stage 3 (optimised-duplicate auto-fix + export).
+#include "AssetThumbnail.h"                            // FAssetThumbnail / pool
+#include "Engine/Texture2D.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
+#include "UObject/SavePackage.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Misc/PackageName.h"
+#include "Framework/Notifications/NotificationManager.h"
+#include "Widgets/Notifications/SNotificationList.h"
 
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -504,6 +519,25 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateLodFindingRow(
 		? FString::Printf(TEXT("%.0f%%"), (F.VramMb / F.CurrentVramMb) * 100.0)
 		: FString();
 
+	// Stage 2b: render the real asset thumbnail (falls back to a neutral swatch
+	// when the asset can't be resolved). The FAssetThumbnail is stored on the
+	// item so it outlives the widget; one shared pool backs every row.
+	if (!LodThumbnailPool.IsValid())
+		LodThumbnailPool = MakeShared<FAssetThumbnailPool>(48);
+	TSharedRef<SWidget> ThumbWidget =
+		SNew(SBorder).BorderImage(ST4::Solid(C_Surface()))[ SNew(SBox) ];
+	{
+		IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
+			TEXT("AssetRegistry")).Get();
+		TArray<FAssetData> Found;
+		AR.GetAssetsByPackageName(FName(*F.AssetPath), Found);
+		if (Found.Num() > 0)
+		{
+			Item->Thumbnail = MakeShared<FAssetThumbnail>(Found[0], 34, 34, LodThumbnailPool);
+			ThumbWidget = Item->Thumbnail->MakeThumbnailWidget(FAssetThumbnailConfig());
+		}
+	}
+
 	return SNew(STableRow<FShintLodFindingPtr>, Owner)
 		.Padding(FMargin(0.f, 1.f))
 		[
@@ -538,10 +572,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateLodFindingRow(
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
 					[
 						SNew(SBox).WidthOverride(34.f).HeightOverride(34.f)
-						[
-							SNew(SBorder).BorderImage(ST4::Solid(C_Surface()))
-							[ SNew(SBox) ]   // TODO Stage 2b: real FAssetThumbnail
-						]
+						[ ThumbWidget ]
 					]
 					+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 					[
@@ -778,7 +809,21 @@ void SShintToolsPanel::RefreshLodStats()
 	}
 
 	if (LodFrameTime_Label.IsValid())
-		LodFrameTime_Label->SetText(FText::FromString(TEXT("—")));  // TODO: model
+	{
+		// Heuristic estimate (no GPU telemetry is available client-side): the
+		// resident texture VRAM we free relieves per-frame sampler bandwidth.
+		// Approximate the relief as a fraction of a 60fps (16.67ms) budget,
+		// weighted by how much of a typical frame is texture-bandwidth-bound
+		// (~25%). Conservative and clearly prefixed "~" as an estimate — swap in
+		// real profiling telemetry when we have it.
+		const double FrameMs            = 1000.0 / 60.0;
+		const double TexBandwidthWeight = 0.25;
+		const double ReductionFrac      = R.TotalVramMb > 0.0
+			? FMath::Clamp(R.EstimatedVramSavedMb / R.TotalVramMb, 0.0, 1.0) : 0.0;
+		const double SavedMs = FrameMs * ReductionFrac * TexBandwidthWeight;
+		LodFrameTime_Label->SetText(FText::FromString(
+			SavedMs > 0.0 ? FString::Printf(TEXT("~%.2f ms"), SavedMs) : TEXT("—")));
+	}
 
 	if (LodIssues_Label.IsValid())
 		LodIssues_Label->SetText(FText::FromString(FmtN(R.IssuesFound)));
@@ -787,26 +832,167 @@ void SShintToolsPanel::RefreshLodStats()
 			TEXT("Textures: %d   Meshes: %d"), TexIssues, MeshIssues)));
 }
 
-// Auto-fix flow is staged separately (Stage 3). Until it lands, surface a clear
-// notice rather than silently doing nothing.
-FReply SShintToolsPanel::OnLodFixRow(FShintLodFindingPtr /*Item*/)
+// ─────────────────────────────────────────────────────────────────────────────
+// Stage 3 — auto-fix (optimised duplicate) + export
+// ─────────────────────────────────────────────────────────────────────────────
+namespace
 {
-	ShintShowErrorToast(TEXT("Auto-fix coming soon"),
-		TEXT("In-editor texture optimization lands in the next update. For now, apply the recommendation manually."));
+	// Map the server's recommended compression string to a UE setting.
+	// Returns TC_MAX for unknown values (caller then skips the compression change).
+	TextureCompressionSettings LodMapRecCompression(const FString& In)
+	{
+		const FString S = In.TrimStartAndEnd().ToUpper();
+		if (S == TEXT("BC7"))                                   return TC_BC7;
+		if (S == TEXT("BC5")  || S == TEXT("NORMALMAP"))        return TC_Normalmap;
+		if (S == TEXT("BC4")  || S == TEXT("GRAYSCALE"))        return TC_Grayscale;
+		if (S == TEXT("BC6H") || S == TEXT("BC6") || S == TEXT("HDR")) return TC_HDR;
+		if (S == TEXT("BC1")  || S == TEXT("BC3") || S == TEXT("DXT1") ||
+		    S == TEXT("DXT5") || S == TEXT("DEFAULT"))          return TC_Default;
+		return TC_MAX;
+	}
+
+	void LodShowSuccessToast(const FString& Title, const FString& Detail)
+	{
+		FNotificationInfo Info(FText::FromString(Title));
+		Info.SubText              = FText::FromString(Detail);
+		Info.ExpireDuration       = 6.0f;
+		Info.bUseSuccessFailIcons = true;
+		TSharedPtr<SNotificationItem> N = FSlateNotificationManager::Get().AddNotification(Info);
+		if (N.IsValid()) N->SetCompletionState(SNotificationItem::CS_Success);
+		UE_LOG(LogShintTools, Log, TEXT("%s — %s"), *Title, *Detail);
+	}
+}
+
+// Writes an optimised *duplicate* (<Name>_Optimized) of the finding's texture
+// with the server's recommended max-size / compression applied; the original is
+// never modified. Returns false + OutError on failure.
+bool SShintToolsPanel::ApplyLodFixDuplicate(
+	const FShintLodFinding& F, FString& OutNewPath, FString& OutError)
+{
+	const TextureCompressionSettings RecTC =
+		F.RecCompression.IsEmpty() ? TC_MAX : LodMapRecCompression(F.RecCompression);
+	if (F.RecMaxSize <= 0 && RecTC == TC_MAX)
+	{
+		OutError = TEXT("This finding has no auto-applicable texture size/compression change.");
+		return false;
+	}
+
+	IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
+		TEXT("AssetRegistry")).Get();
+	TArray<FAssetData> Found;
+	AR.GetAssetsByPackageName(FName(*F.AssetPath), Found);
+	UTexture2D* Src = nullptr;
+	for (const FAssetData& AD : Found)
+	{
+		if ((Src = Cast<UTexture2D>(AD.GetAsset())) != nullptr) break;
+	}
+	if (!Src)
+	{
+		OutError = FString::Printf(TEXT("Could not load a Texture2D at '%s'."), *F.AssetPath);
+		return false;
+	}
+
+	const FString PackagePath = FPackageName::GetLongPackagePath(F.AssetPath);
+	const FString NewName     = FPaths::GetBaseFilename(F.AssetPath) + TEXT("_Optimized");
+	FAssetToolsModule& ATM = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
+	UObject* Dup = ATM.Get().DuplicateAsset(NewName, PackagePath, Src);
+	UTexture2D* NewTex = Cast<UTexture2D>(Dup);
+	if (!NewTex)
+	{
+		OutError = FString::Printf(TEXT("Could not create '%s/%s' (it may already exist)."),
+			*PackagePath, *NewName);
+		return false;
+	}
+
+	NewTex->Modify();
+	if (F.RecMaxSize > 0) NewTex->MaxTextureSize      = F.RecMaxSize;
+	if (RecTC != TC_MAX)  NewTex->CompressionSettings = RecTC;
+	NewTex->PostEditChange();   // rebuild the platform data with the new settings
+
+	UPackage* Pkg = NewTex->GetOutermost();
+	Pkg->MarkPackageDirty();
+	const FString FileName = FPackageName::LongPackageNameToFilename(
+		Pkg->GetName(), FPackageName::GetAssetPackageExtension());
+	FSavePackageArgs SaveArgs;
+	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+	SaveArgs.SaveFlags     = SAVE_NoError;
+	UPackage::SavePackage(Pkg, NewTex, *FileName, SaveArgs);
+
+	OutNewPath = NewTex->GetPathName();
+	return true;
+}
+
+FReply SShintToolsPanel::OnLodFixRow(FShintLodFindingPtr Item)
+{
+	if (!Item.IsValid()) return FReply::Handled();
+	FString NewPath, Err;
+	if (ApplyLodFixDuplicate(Item->Finding, NewPath, Err))
+		LodShowSuccessToast(TEXT("Optimized copy created"),
+			FString::Printf(TEXT("Wrote %s — original untouched."), *NewPath));
+	else
+		ShintShowErrorToast(TEXT("Auto-fix failed"), Err);
 	return FReply::Handled();
 }
 
 FReply SShintToolsPanel::OnLodFixSelected()
 {
-	ShintShowErrorToast(TEXT("Auto-fix coming soon"),
-		TEXT("Bulk optimization lands in the next update."));
+	int32 Ok = 0, Failed = 0;
+	FString LastErr;
+	for (const FShintLodFindingPtr& It : LodFilteredItems)
+	{
+		if (!It.IsValid() || !It->bChecked) continue;
+		FString NewPath, Err;
+		if (ApplyLodFixDuplicate(It->Finding, NewPath, Err)) ++Ok;
+		else { ++Failed; LastErr = Err; }
+	}
+	if (Ok == 0 && Failed == 0)
+		ShintShowErrorToast(TEXT("Nothing selected"),
+			TEXT("Tick one or more rows, then press Fix."));
+	else if (Failed == 0)
+		LodShowSuccessToast(TEXT("Optimized copies created"),
+			FString::Printf(TEXT("%d optimised %s written; originals untouched."),
+				Ok, Ok == 1 ? TEXT("copy") : TEXT("copies")));
+	else
+		ShintShowErrorToast(
+			FString::Printf(TEXT("Fixed %d, %d failed"), Ok, Failed), LastErr);
 	return FReply::Handled();
 }
 
 FReply SShintToolsPanel::OnLodExport()
 {
-	ShintShowErrorToast(TEXT("Export coming soon"),
-		TEXT("Findings export lands in the next update."));
+	if (LodFindingItems.Num() == 0)
+	{
+		ShintShowErrorToast(TEXT("Nothing to export"),
+			TEXT("Run a scan first, then Export."));
+		return FReply::Handled();
+	}
+
+	auto Esc = [](const FString& In) -> FString {
+		FString S = In; S.ReplaceInline(TEXT("\""), TEXT("\"\""));
+		return (S.Contains(TEXT(",")) || S.Contains(TEXT("\"")))
+			? FString::Printf(TEXT("\"%s\""), *S) : S;
+	};
+
+	FString Csv = TEXT("Asset,Rule,Category,Severity,Group,Width,Height,Format,"
+		"CurrentVRAM_MB,PotentialVRAM_MB,Saving_MB,Recommendation\n");
+	for (const FShintLodFindingPtr& It : LodFindingItems)
+	{
+		if (!It.IsValid()) continue;
+		const FShintLodFinding& F = It->Finding;
+		Csv += FString::Printf(TEXT("%s,%s,%s,%s,%s,%d,%d,%s,%.2f,%.2f,%.2f,%s\n"),
+			*Esc(F.AssetPath), *Esc(F.RuleId), *Esc(F.Category), *Esc(F.Severity),
+			*Esc(F.Group), F.Width, F.Height, *Esc(F.Format),
+			F.CurrentVramMb, F.PotentialVramMb, F.VramMb, *Esc(F.Guidance));
+	}
+
+	const FString OutPath = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("ShintTools"),
+		FString::Printf(TEXT("lod_audit_%s.csv"),
+			*FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S"))));
+	if (FFileHelper::SaveStringToFile(Csv, *OutPath))
+		LodShowSuccessToast(TEXT("Export complete"), OutPath);
+	else
+		ShintShowErrorToast(TEXT("Export failed"),
+			FString::Printf(TEXT("Could not write %s"), *OutPath));
 	return FReply::Handled();
 }
 
