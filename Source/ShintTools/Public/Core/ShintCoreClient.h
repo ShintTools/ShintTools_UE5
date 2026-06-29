@@ -227,6 +227,18 @@ struct FShintLodFinding
 	// Estimated saving if the fix is applied — drives the summary + sort order.
 	double  VramMb             = 0.0;
 	int32   ShaderInstructions = 0;
+
+	// ── Asset Optimizer table display fields ────────────────────────────────
+	// Width/Height/Group/Format are joined client-side from the collection pass
+	// (the server findings don't echo them back). Current/PotentialVramMb are
+	// parsed from the finding's current/recommended dicts (present only for the
+	// size-changing rules — others leave them 0 and the table shows "—").
+	int32   Width           = 0;
+	int32   Height          = 0;
+	FString Group;             // texture LOD group (e.g. "World")
+	FString Format;            // current compression (e.g. "BC7")
+	double  CurrentVramMb   = 0.0;
+	double  PotentialVramMb = 0.0;
 };
 
 struct FShintLodAuditResult

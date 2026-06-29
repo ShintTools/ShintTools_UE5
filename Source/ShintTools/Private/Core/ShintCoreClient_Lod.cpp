@@ -59,6 +59,23 @@ namespace
 		}
 	}
 
+	// Per-asset display metadata retained from the collection pass and joined
+	// onto findings client-side (the server findings don't echo width/height/
+	// group/format back). Drives the Asset Optimizer table columns.
+	struct FLodAssetMeta
+	{
+		int32   Width  = 0;
+		int32   Height = 0;
+		FString Group;
+		FString Format;
+	};
+
+	// Display cleanup: "TC_BC7" -> "BC7", "TEXTUREGROUP_World" -> "World".
+	FString StripPrefix(const FString& In, const TCHAR* Prefix)
+	{
+		return In.StartsWith(Prefix) ? In.RightChop(FCString::Strlen(Prefix)) : In;
+	}
+
 	bool ExtractStaticMesh(UStaticMesh* Mesh, const TSharedRef<FJsonObject>& Obj)
 	{
 		if (!Mesh) return false;
@@ -170,10 +187,12 @@ void FShintCoreClient::AuditLods(
 	AR.GetAssets(Filter, AllAssets);
 
 	TArray<TSharedPtr<FJsonValue>> Arr;
+	TMap<FString, FLodAssetMeta>   MetaByPath;   // joined onto findings post-parse
 	for (const FAssetData& AD : AllAssets)
 	{
 		TSharedRef<FJsonObject> Obj = MakeShared<FJsonObject>();
-		Obj->SetStringField(TEXT("asset_path"), AD.PackageName.ToString());
+		const FString AssetPath = AD.PackageName.ToString();
+		Obj->SetStringField(TEXT("asset_path"), AssetPath);
 
 		UObject* Loaded = AD.GetAsset();
 		bool bUnderstood = false;
@@ -184,6 +203,19 @@ void FShintCoreClient::AuditLods(
 		else if (UTexture2D* T = Cast<UTexture2D>(Loaded))
 		{
 			bUnderstood = ExtractTexture(T, Obj);
+			if (bUnderstood)
+			{
+				FLodAssetMeta Meta;
+				Meta.Width  = T->GetSizeX();
+				Meta.Height = T->GetSizeY();
+				Meta.Group  = StaticEnum<TextureGroup>()
+					? StripPrefix(StaticEnum<TextureGroup>()
+						->GetNameStringByValue(T->LODGroup), TEXT("TEXTUREGROUP_"))
+					: TEXT("World");
+				Meta.Format = StripPrefix(
+					CompressionToString(T->CompressionSettings), TEXT("TC_"));
+				MetaByPath.Add(AssetPath, MoveTemp(Meta));
+			}
 		}
 		else if (UMaterialInterface* M = Cast<UMaterialInterface>(Loaded))
 		{
@@ -222,9 +254,26 @@ void FShintCoreClient::AuditLods(
 	SendRequest(Config.GetBaseUrl() + TEXT("/assets/lod/audit"),
 		EShintHttpMethod::POST, BodyStr,
 		FOnShintRequestComplete::CreateLambda(
-			[OnComplete, BenchStart, SentAssets](const FShintRequestResult& Raw) mutable
+			[OnComplete, BenchStart, SentAssets, MetaByPath = MoveTemp(MetaByPath)]
+			(const FShintRequestResult& Raw) mutable
 		{
 			FShintLodAuditResult R = ParseLodAuditResponse(Raw);
+
+			// Join the collection-pass metadata onto each finding so the Asset
+			// Optimizer table has resolution / group / format without a server
+			// round-trip. Parse already filled Format from current.compression
+			// when present; only fall back to the collected value if it didn't.
+			for (FShintLodFinding& F : R.Findings)
+			{
+				if (const FLodAssetMeta* M = MetaByPath.Find(F.AssetPath))
+				{
+					F.Width  = M->Width;
+					F.Height = M->Height;
+					if (F.Group.IsEmpty())  F.Group  = M->Group;
+					if (F.Format.IsEmpty()) F.Format = M->Format;
+				}
+			}
+
 			UE_LOG(LogShintTools, Verbose,
 				TEXT("[BENCH] AuditLods: %.2f s, %d assets sent, %d findings"),
 				FPlatformTime::Seconds() - BenchStart, SentAssets, R.Findings.Num());
@@ -308,6 +357,23 @@ FShintLodAuditResult FShintCoreClient::ParseLodAuditResponse(
 				(*Saving)->TryGetNumberField(TEXT("vram_mb"), Finding.VramMb);
 				(*Saving)->TryGetNumberField(
 					TEXT("shader_instructions"), Finding.ShaderInstructions);
+			}
+
+			// current/recommended carry vram_mb + compression for the size-
+			// changing rules — drives the table's CURRENT/POTENTIAL/FORMAT
+			// columns. Absent for non-size rules (left 0 / empty → shown as "—").
+			const TSharedPtr<FJsonObject>* Current;
+			if (F->TryGetObjectField(TEXT("current"), Current) && Current->IsValid())
+			{
+				(*Current)->TryGetNumberField(TEXT("vram_mb"), Finding.CurrentVramMb);
+				(*Current)->TryGetStringField(TEXT("compression"), Finding.Format);
+			}
+			const TSharedPtr<FJsonObject>* Recommended;
+			if (F->TryGetObjectField(TEXT("recommended"), Recommended) &&
+			    Recommended->IsValid())
+			{
+				(*Recommended)->TryGetNumberField(
+					TEXT("vram_mb"), Finding.PotentialVramMb);
 			}
 
 			Out.Findings.Add(MoveTemp(Finding));
