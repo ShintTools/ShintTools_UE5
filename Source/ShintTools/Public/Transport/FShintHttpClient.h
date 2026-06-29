@@ -1,20 +1,13 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
 //
-// Pure HTTP transport for ShintTools — Sprint 1 of the plugin refactor.
+// Pure HTTP transport for ShintTools.
 //
-// Goal: extract the HTTP plumbing (method enum, result struct, send + dispatch
-// callback, JSON helper, timeout policy) out of FShintCoreClient so that:
+// Holds the HTTP plumbing (method enum, result struct, send + dispatch
+// callback, JSON helper, timeout policy) so per-endpoint API classes can
+// depend on this transport alone, and tests can substitute a fake transport
+// without touching reflection or Slate.
 //
-//   * Per-endpoint Api/* classes (Sprint 2+) depend on this transport only,
-//     never on the 2000-line FShintCoreClient monolith.
-//   * Tests can substitute a fake transport without touching reflection or
-//     Slate.
-//   * Adding mTLS / cert pinning (security Capa B) lands here once instead
-//     of in every endpoint method.
-//
-// Identical wire behaviour to the previous FShintCoreClient::SendRequest:
-// same headers, same User-Agent, same timeout policy (180s for /agent/explain,
-// 90s for the rest). Sprint 1 is a refactor, not a behaviour change.
+// Timeout policy: 180s for /agent/explain, 90s for the rest.
 
 #pragma once
 

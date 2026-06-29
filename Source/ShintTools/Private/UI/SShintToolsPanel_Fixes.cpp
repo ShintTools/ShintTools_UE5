@@ -100,7 +100,7 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 		if (Item->bChecked && !Item->bIsAutoFixable)        ++TotalNotFixable;
 		if (Item->bChecked && Item->FixSuggestion.IsEmpty()) ++TotalNoFixSuggestion;
 	}
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("ApplyFix: Checked=%d, NotAutoFixable=%d, NoFixSuggestion=%d, Accepted=%d"),
 		TotalChecked, TotalNotFixable, TotalNoFixSuggestion, Accepted.Num());
 
@@ -110,7 +110,7 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 		return FReply::Handled();
 	}
 
-	UE_LOG(LogShintTools, Log, TEXT("ApplyFix: Applying %d fix(es) locally."), Accepted.Num());
+	UE_LOG(LogShintTools, Verbose, TEXT("ApplyFix: Applying %d fix(es) locally."), Accepted.Num());
 
 	PendingCodeFixes = Accepted;
 
@@ -525,7 +525,7 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 	if (SkippedCircular + SkippedCollision + SkippedLoadFail > 0)
 	{
-		UE_LOG(LogShintTools, Log,
+		UE_LOG(LogShintTools, Verbose,
 			TEXT("ShintPanel: asset rename pre-check skipped %d circular, %d collision(s), %d load-fail"),
 			SkippedCircular, SkippedCollision, SkippedLoadFail);
 	}
@@ -589,7 +589,7 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 			if (!DescendantBPsToRecompile.IsEmpty())
 			{
-				UE_LOG(LogShintTools, Log,
+				UE_LOG(LogShintTools, Verbose,
 					TEXT("ShintPanel: %d descendant BP(s) queued for recompile after parent rename"),
 					DescendantBPsToRecompile.Num());
 			}
@@ -620,7 +620,7 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 		}
 		if (!Redirectors.IsEmpty())
 		{
-			UE_LOG(LogShintTools, Log,
+			UE_LOG(LogShintTools, Verbose,
 				TEXT("ShintPanel: fixing %d redirector(s) after asset rename"), Redirectors.Num());
 			AssetTools.FixupReferencers(Redirectors);
 		}
@@ -634,7 +634,7 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 		const int32 Added = WriteShintCoreRedirects(RedirectEntries);
 		if (Added > 0)
 		{
-			UE_LOG(LogShintTools, Log,
+			UE_LOG(LogShintTools, Verbose,
 				TEXT("ShintPanel: wrote %d new entr(ies) to [CoreRedirects] in DefaultEngine.ini"),
 				Added);
 		}
@@ -653,7 +653,7 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 			FKismetEditorUtilities::CompileBlueprint(Child);
 			++Recompiled;
 		}
-		UE_LOG(LogShintTools, Log,
+		UE_LOG(LogShintTools, Verbose,
 			TEXT("ShintPanel: recompiled %d descendant BP(s) after parent rename"),
 			Recompiled);
 	}
@@ -671,7 +671,7 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 				DirtyPackages,
 				/*bCheckDirty=*/true,
 				/*bPromptToSave=*/false) == FEditorFileUtils::EPromptReturnCode::PR_Success;
-			UE_LOG(LogShintTools, Log,
+			UE_LOG(LogShintTools, Verbose,
 				TEXT("ShintPanel: auto-saved %d dirty package(s) post-rename (success=%d)"),
 				DirtyPackages.Num(), bSaved ? 1 : 0);
 		}

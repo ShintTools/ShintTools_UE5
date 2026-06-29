@@ -143,7 +143,7 @@ FReply SShintConsentDialog::OnAcceptClicked()
 
 FReply SShintConsentDialog::OnDeclineClicked()
 {
-	UE_LOG(LogShintTools, Display,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("[Consent] user declined Core Engine setup."));
 	if (ParentWindow.IsValid())
 	{

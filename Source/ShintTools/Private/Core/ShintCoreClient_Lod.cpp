@@ -215,7 +215,7 @@ void FShintCoreClient::AuditLods(
 	const FString BodyStr = SerializeJson(Body);
 	const int32 SentAssets = Arr.Num();
 
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("ShintCoreClient: LOD audit of %d assets (profile=%s explain=%s)"),
 		SentAssets, *Profile, bExplainTop ? TEXT("true") : TEXT("false"));
 
@@ -225,7 +225,7 @@ void FShintCoreClient::AuditLods(
 			[OnComplete, BenchStart, SentAssets](const FShintRequestResult& Raw) mutable
 		{
 			FShintLodAuditResult R = ParseLodAuditResponse(Raw);
-			UE_LOG(LogShintTools, Log,
+			UE_LOG(LogShintTools, Verbose,
 				TEXT("[BENCH] AuditLods: %.2f s, %d assets sent, %d findings"),
 				FPlatformTime::Seconds() - BenchStart, SentAssets, R.Findings.Num());
 			OnComplete.ExecuteIfBound(R);

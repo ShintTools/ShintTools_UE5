@@ -36,16 +36,12 @@ struct FShintInstallProgress
 /**
  * FShintCoreInstaller
  *
- * Marketplace-exclusive: first-time Core Engine setup wizard. Triggered
- * when the plugin loads and finds no Core listening on localhost:18200.
+ * First-time Core Engine setup wizard. Triggered when the plugin loads
+ * and finds no Core listening on the local port.
  *
- * Detects Docker, pulls the `shinttools/core:<tag>` image from Docker
- * Hub, creates a named container, waits for /health to respond. Each
- * step emits to the OnProgress callback so the UI can render a log.
- *
- * NOT shipped on the launcher distribution: the launcher already owns
- * Core install via the Python installer.py path. This class only
- * exists on the develop-marketplace branch.
+ * Detects Docker, pulls the Core image, creates a named container, and
+ * waits for /health to respond. Each step emits to the OnProgress
+ * callback so the UI can render a log.
  *
  * Thread safety: Run() blocks; call from a background thread. The
  * callback is invoked from that thread -- marshal to Game Thread in
@@ -55,9 +51,7 @@ class SHINTTOOLS_API FShintCoreInstaller
 {
 public:
 
-	/** Image to pull. Published by Genesis's CI to ghcr.io (see
-	 *  .github/workflows/publish-core.yml in the Core repo). ghcr.io
-	 *  public images have no per-puller rate limit, unlike Docker Hub. */
+	/** Public image pulled for the Core engine. */
 	FString ImageTag = TEXT("ghcr.io/noctxas97dev/shinttools-core:latest");
 
 	/** Container name (so we can `docker start <name>` on subsequent boots). */

@@ -1,6 +1,6 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
 //
-// Asset Naming Bot endpoints + legacy MongoDB dashboard report
+// Asset Naming Bot endpoints + dashboard report,
 // split out of ShintCoreClient.cpp.
 
 #include "ShintCoreClient.h"
@@ -65,14 +65,14 @@ void FShintCoreClient::ScanAssetNaming(
 
 	const FString BodyStr = SerializeJson(Body);
 
-	UE_LOG(LogShintTools, Log, TEXT("ShintCoreClient: Scanning %d assets from /Game/"), AllAssets.Num());
-	UE_LOG(LogShintTools, Log, TEXT("AssetScan REQUEST JSON (first 3000 chars):\n%s"), *BodyStr.Left(3000));
+	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Scanning %d assets from /Game/"), AllAssets.Num());
+	UE_LOG(LogShintTools, Verbose, TEXT("AssetScan REQUEST JSON (first 3000 chars):\n%s"), *BodyStr.Left(3000));
 
 	const int32 SentAssets = Arr.Num();
 	SendRequest(Config.GetBaseUrl() + TEXT("/assets/scan"), EShintHttpMethod::POST, BodyStr,
 		FOnShintRequestComplete::CreateLambda([OnComplete, BenchStart, SentAssets](const FShintRequestResult& Raw) mutable {
 			FShintAssetScanResult R = ParseAssetScanResponse(Raw);
-			UE_LOG(LogShintTools, Log,
+			UE_LOG(LogShintTools, Verbose,
 				TEXT("[BENCH] ScanAssetNaming: %.2f s, %d assets sent, %d violations"),
 				FPlatformTime::Seconds() - BenchStart, SentAssets, R.Issues.Num());
 			OnComplete.ExecuteIfBound(R);
@@ -81,7 +81,7 @@ void FShintCoreClient::ScanAssetNaming(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Asset Naming Bot — report server-side (the actual rename happens in the
-// panel via IAssetTools; this just records it for MongoDB / local history)
+// panel via IAssetTools; this just records it for local history)
 // ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreClient::ReportAssetFixesToServer(
@@ -112,7 +112,7 @@ void FShintCoreClient::ReportAssetFixesToServer(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Local MongoDB dashboard (legacy)
+// Local dashboard (legacy)
 // ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreClient::SendDashboardReport(
@@ -167,7 +167,7 @@ FShintAssetScanResult FShintCoreClient::ParseAssetScanResponse(const FShintReque
 
 	R.bSuccess = true;
 
-	UE_LOG(LogShintTools, Log, TEXT("AssetScan: Raw response: %s"),
+	UE_LOG(LogShintTools, Verbose, TEXT("AssetScan: Raw response: %s"),
 		*Raw.ResponseBody.Left(2000));
 
 	const TSharedPtr<FJsonObject>* Sum = nullptr;
@@ -206,7 +206,7 @@ FShintAssetScanResult FShintCoreClient::ParseAssetScanResponse(const FShintReque
 
 	if (IssArr)
 	{
-		UE_LOG(LogShintTools, Log, TEXT("AssetScan: Found %d issue entries in response"), IssArr->Num());
+		UE_LOG(LogShintTools, Verbose, TEXT("AssetScan: Found %d issue entries in response"), IssArr->Num());
 
 		for (const TSharedPtr<FJsonValue>& V : *IssArr)
 		{
@@ -233,7 +233,7 @@ FShintAssetScanResult FShintCoreClient::ParseAssetScanResponse(const FShintReque
 		UE_LOG(LogShintTools, Warning, TEXT("AssetScan: No 'issues', 'violations', or 'results' array found in response"));
 	}
 
-	UE_LOG(LogShintTools, Log, TEXT("AssetScan: Parsed %d issues, TotalAssets=%d, InvalidAssets=%d"),
+	UE_LOG(LogShintTools, Verbose, TEXT("AssetScan: Parsed %d issues, TotalAssets=%d, InvalidAssets=%d"),
 		R.Issues.Num(), R.TotalAssets, R.InvalidAssets);
 
 	return R;

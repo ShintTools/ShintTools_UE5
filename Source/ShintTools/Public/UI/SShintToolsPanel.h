@@ -205,13 +205,19 @@ private:
 	// a spinner with rotating status text until the response arrives.
 	FReply OnExplainIssueClicked(FShintIssueItemPtr Item);
 	void   OnExplainComplete(const FShintAgentExplainResponse& Result,
-	                         FShintIssueItemPtr                Item);
+	                         FShintIssueItemPtr                Item,
+	                         uint64                            RequestId);
 	bool   TickExplainStatus(float DeltaTime); // rotates ExplainStatusIndex
 	TSharedPtr<class SWindow>                         ExplainWindow;
 	TSharedPtr<class SMultiLineEditableTextBox>       ExplainResultBox;
 	TSharedPtr<class SCircularThrobber>               ExplainSpinner;
 	TSharedPtr<class STextBlock>                      ExplainStatusLine;
 	int32                                             ExplainStatusIndex = 0;
+	// Monotonic token for the in-flight explain request. Bumped on every
+	// click; OnExplainComplete ignores any response whose token is stale, so
+	// a slow answer for issue A can't write into the modal now showing issue
+	// B (the per-row "wrong explanation" race).
+	uint64                                            ExplainRequestId = 0;
 	FTSTicker::FDelegateHandle                        ExplainTickerHandle;
 	FReply OnScanAssetsClicked();
 	FReply OnApplySingleFix(FShintIssueItemPtr Item);
@@ -379,12 +385,9 @@ private:
 	TSharedPtr<STextBlock> AssetEmptyText;
 	int32                  AssetFixesApplied = 0;
 
-	// Config field widgets. ApiKeyMongo stays launcher-managed (license
-	// sync writes it on sign-in). ApiKeyDashboard is user-pasted from
-	// the dashboard's "+ New project" flow — the per-project Bearer
-	// credential the plugin attaches to /api/public/* requests.
-	// ProjectIdField was removed in 1.7.11; the API key identifies the
-	// project implicitly server-side.
+	// Config field widgets. ApiKeyDashboard is the per-project credential the
+	// plugin attaches to dashboard requests; ApiKeyMongo is managed by the
+	// sign-in flow. The API key identifies the project implicitly server-side.
 	TSharedPtr<SEditableTextBox> ApiKeyDashboardField;
 	TSharedPtr<SEditableTextBox> DashboardUrlField;
 	// Added to mirror the Unity Settings tab layout (Core Engine port, API

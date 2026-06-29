@@ -81,6 +81,40 @@ def build() -> Path:
             if path.is_dir() and path.name in _STRIP_DIRS:
                 shutil.rmtree(path, ignore_errors=True)
 
+        # Dev docs (README.md, refactor/roadmap notes, ...) must never ship to
+        # Fab — they can leak internal architecture. Strip every *.md anywhere
+        # under the staged plugin. The shipped Documentation/ uses .docx.
+        for md in plugin.rglob("*.md"):
+            md.unlink(missing_ok=True)
+
+        # Strip "FAB-STRIP" regions from the staged source. A region is the
+        # span between a `[FAB-STRIP-BEGIN]` and `[FAB-STRIP-END]` sentinel
+        # comment (both lines removed with everything in between). This lets
+        # the shared source keep launcher-managed UI (e.g. the License /
+        # Dashboard API-Key Settings fields) for the launcher-distributed
+        # build while the Fab submission omits it — without diverging via
+        # #if. The fields' backing members/config stay declared, so the
+        # remaining code compiles unchanged (the rows simply never build).
+        _STRIP_BEGIN = "[FAB-STRIP-BEGIN]"
+        _STRIP_END = "[FAB-STRIP-END]"
+        for src in plugin.rglob("*"):
+            if not src.is_file() or src.suffix.lower() not in (".cpp", ".h", ".cs"):
+                continue
+            text = src.read_text(encoding="utf-8")
+            if _STRIP_BEGIN not in text:
+                continue
+            kept, stripping = [], False
+            for line in text.splitlines(keepends=True):
+                if _STRIP_BEGIN in line:
+                    stripping = True
+                    continue
+                if _STRIP_END in line:
+                    stripping = False
+                    continue
+                if not stripping:
+                    kept.append(line)
+            src.write_text("".join(kept), encoding="utf-8")
+
         # Fab compiles the source -> the plugin is not pre-installed.
         uplugin = plugin / "ShintTools.uplugin"
         data = json.loads(uplugin.read_text(encoding="utf-8"))

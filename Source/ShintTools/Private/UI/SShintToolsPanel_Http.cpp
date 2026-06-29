@@ -63,7 +63,7 @@ void SShintToolsPanel::OnProjectValidateComplete(const FShintValidateResult& Res
 
 void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& Result)
 {
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("OnBlueprintValidateComplete: bSuccess=%d, %d issues from server (bBlueprintScanActive=%d)"),
 		Result.bSuccess ? 1 : 0, Result.Issues.Num(), bBlueprintScanActive ? 1 : 0);
 
@@ -123,7 +123,7 @@ void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& R
 		RefreshAssetStats();
 	}
 
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("OnBlueprintValidateComplete: routed %d to asset panel, %d kept for code merge"),
 		NamingRouted, QualityResult.Issues.Num());
 
@@ -143,7 +143,7 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 F
 
 	if (Result.bSuccess)
 	{
-		UE_LOG(LogShintTools, Log,
+		UE_LOG(LogShintTools, Verbose,
 			TEXT("ApplyFix: %d fix(es) applied, %d skipped."),
 			Result.TotalFixesApplied, Result.TotalFixesSkipped);
 
@@ -229,7 +229,7 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 F
 		}
 		else if (Result.bHasCompileErrors && FixGeneration != ScanGeneration)
 		{
-			UE_LOG(LogShintTools, Log,
+			UE_LOG(LogShintTools, Verbose,
 				TEXT("OnCodeFixComplete: build errors discarded — scan generation changed (fix=%u current=%u)"),
 				FixGeneration, ScanGeneration);
 		}
@@ -383,7 +383,7 @@ void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
 
 	if (Result.bSuccess)
 	{
-		UE_LOG(LogShintTools, Log, TEXT("AssetFix: %d asset(s) renamed."), Result.AssetsRenamed);
+		UE_LOG(LogShintTools, Verbose, TEXT("AssetFix: %d asset(s) renamed."), Result.AssetsRenamed);
 
 		// Clear both backing store and visible list.
 		AllAssetItems.Reset();

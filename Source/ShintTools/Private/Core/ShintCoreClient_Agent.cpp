@@ -1,7 +1,7 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
 //
 // Agent endpoints (/agent/explain, /agent/plan) split out of
-// ShintCoreClient.cpp. Both are Indie-tier; the free SKU never builds the
+// ShintCoreClient.cpp. Both are Indie-tier; some builds do not surface the
 // UI buttons that drive them, but the symbols stay in the same module so
 // header dependencies don't fork between tiers.
 
@@ -51,14 +51,14 @@ void FShintCoreClient::RequestExplainIssue(
 	IssueJson->SetBoolField  (TEXT("is_auto_fixable"),  Issue.bIsAutoFixable);
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	// /agent/explain (Indie tier) routes through the MongoDB-backed license
+	// /agent/explain (Indie tier) routes through the local license
 	// check, same as /agent/plan — use ApiKeyMongo, not the dashboard key.
 	Body->SetStringField(TEXT("api_key"), Config.ApiKeyMongo);
 	Body->SetObjectField(TEXT("issue"),   IssueJson);
 
 	const FString Url = Config.GetBaseUrl() / TEXT("agent/explain");
 
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("RequestExplainIssue: POST /agent/explain rule=%s line=%d"),
 		*Issue.RuleId, Issue.Line);
 
@@ -158,7 +158,7 @@ void FShintCoreClient::RequestAgentPlan(
 			TEXT("RequestAgentPlan: dropped %d issue(s) with empty rule_id or severity"),
 			SkippedEmpty);
 	}
-	UE_LOG(LogShintTools, Log,
+	UE_LOG(LogShintTools, Verbose,
 		TEXT("RequestAgentPlan: sending %d issue(s) to /agent/plan"), IssArr.Num());
 
 	if (Config.ApiKeyMongo.IsEmpty())
@@ -196,26 +196,23 @@ FShintAgentPlanResult FShintCoreClient::ParseAgentPlanResponse(
 	{
 		R.bSuccess = false;
 		// T2 — A 404 here means the connected core engine doesn't expose the
-		// agent router. The free SKU strips agent.py at build time, so users
-		// running the free Docker image hit this. Translate the HTTP status
+		// agent router. Some core builds do not include it.
+		// Translate the HTTP status
 		// into a user-meaningful message instead of leaking "404 Not Found".
 		if (Raw.StatusCode == 404)
 		{
 			R.ErrorMessage = TEXT(
 				"Auto-Fix Plan requires the Indie core engine. "
-				"The connected server (free SKU) doesn't expose /agent/plan — "
+				"The connected server (free tier) doesn't expose /agent/plan — "
 				"upgrade your subscription at https://shint.tools to enable it.");
 		}
 		else if (Raw.StatusCode == 403)
 		{
 			R.ErrorMessage = TEXT(
-				"Auto-Fix Plan is an indie feature. "
-				"Core engine resolved your api_key as tier 'free'. Verify:\n"
-				"  1) api_key is defined on shinttools.config.json\n"
-				"  2) MongoDB is running \n"
-				"  3) There is a document {\"api_key\":\"<tu-key>\",\"tier\":\"indie\","
-				"\"active\":true} on Mongo DB collection licenses\n"
-				"  Run: python core/scripts/seed_license.py --key <your-key> to make a new one.");
+				"Auto-Fix Plan is an Indie-tier feature. "
+				"The connected core engine resolved your api_key as tier 'free'. "
+				"Verify that api_key is set correctly on shinttools.config.json, that "
+				"your license is active, and restart the core engine.");
 		}
 		else
 		{

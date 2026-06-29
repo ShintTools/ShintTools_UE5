@@ -8,9 +8,9 @@
 //
 //   • Core/ShintCoreClient_Validator.cpp      — /validate/*  + tree-sitter fix
 //   • Core/ShintCoreClient_QualityScore.cpp   — /metrics/score/*
-//   • Core/ShintCoreClient_Asset.cpp          — /assets/*    + legacy dashboard
+//   • Core/ShintCoreClient_Asset.cpp          — /assets/*    + dashboard report
 //   • Core/ShintCoreClient_Agent.cpp          — /agent/explain + /agent/plan
-//   • Core/ShintDashboardSync.cpp             — external shint.tools POSTs
+//   • Core/ShintDashboardSync.cpp             — external dashboard POSTs
 //
 // What stays here:
 //   * Construction / destruction
@@ -69,10 +69,9 @@ bool FShintCoreClient::LoadConfig()
 	FString S;
 	if (Json->TryGetStringField(TEXT("core_host"),    S) && !S.IsEmpty()) Config.CoreHost = S;
 	if (Json->TryGetStringField(TEXT("project_name"), S)) Config.ProjectName = S;
-	// project_id was removed from the config schema in 1.7.11. The
-	// dashboard's per-project API key (st_<hex>, ApiKeyDashboard)
-	// identifies the project implicitly, and the local core only used
-	// project_id for correlation logging. Old configs that still carry
+	// project_id is no longer part of the config schema. The dashboard's
+	// per-project API key identifies the project implicitly. Old configs
+	// that still carry
 	// the field are tolerated — we just don't read it back.
 	if (Json->TryGetStringField(TEXT("api_key"),       S)) Config.ApiKeyDashboard = S;
 	if (Json->TryGetStringField(TEXT("api_key_mongo"), S)) Config.ApiKeyMongo    = S;
@@ -104,24 +103,24 @@ bool FShintCoreClient::LoadConfig()
 		}
 	}
 
-	// Migrate the dead "app.shinttools.io" host — launcher <= 1.7.9 wrote
-	// it as the default and Cloudflare serves an HTML 404 there, which
+	// Migrate a legacy dashboard host — an older build wrote
+	// it as the default and the server returns an HTML page there, which
 	// the plugin used to surface as the cryptic "Only HTML requests are
 	// supported here" error. The new default is the live production host.
 	if (Config.DashboardUrl.IsEmpty()
 		|| Config.DashboardUrl.Contains(TEXT("app.shinttools.io")))
 	{
 		Config.DashboardUrl = TEXT("https://shint.tools");
-		UE_LOG(LogShintTools, Display,
+		UE_LOG(LogShintTools, Verbose,
 			TEXT("ShintCoreClient: migrated dashboard_url to shint.tools"));
 	}
 
-	// Normalise to the site ORIGIN. The public API routes (/api/public/*)
+	// Normalise to the site origin. The public API routes
 	// live at the domain root, but users routinely paste the human-facing
 	// dashboard URL (…/dashboard) into the Settings field. Left as-is the
-	// endpoint join produced POSTs to …/dashboard/api/public/* which the
-	// Next.js app answers with an HTML page ("Only HTML requests are
-	// supported here", HTTP 500). Trim a trailing slash and a trailing
+	// endpoint join produced POSTs to …/dashboard which the
+	// the server answers with an HTML page ("Only HTML requests are
+	// supported here"). Trim a trailing slash and a trailing
 	// "/dashboard" segment so SendCodeValidator / SendAssetNaming always
 	// target the root.
 	Config.DashboardUrl.TrimStartAndEndInline();
@@ -129,7 +128,7 @@ bool FShintCoreClient::LoadConfig()
 	if (Config.DashboardUrl.EndsWith(TEXT("/dashboard")))
 	{
 		Config.DashboardUrl.LeftChopInline(10); // len("/dashboard")
-		UE_LOG(LogShintTools, Display,
+		UE_LOG(LogShintTools, Verbose,
 			TEXT("ShintCoreClient: stripped /dashboard suffix from dashboard_url"));
 	}
 
@@ -153,7 +152,7 @@ bool FShintCoreClient::SaveConfig() const
 	if (!Json.IsValid()) Json = MakeShared<FJsonObject>();
 
 	// Overwrite config fields. project_id is intentionally NOT written —
-	// removed from the schema in 1.7.11; see LoadConfig for the rationale.
+	// no longer part of the schema; see LoadConfig for the rationale.
 	Json->SetStringField(TEXT("core_host"),       Config.CoreHost);
 	Json->SetNumberField(TEXT("core_port"),       Config.CorePort);
 	Json->SetBoolField(TEXT("auto_start_core"),   Config.bAutoStartCore);

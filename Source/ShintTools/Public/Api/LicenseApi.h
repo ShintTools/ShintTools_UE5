@@ -1,13 +1,11 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
 //
-// Sprint 2 — first per-endpoint API class. Owns the /license/status
-// round-trip (resolves the customer api_key to a tier) and exposes a
+// Per-endpoint API class for license/tier resolution. Exposes a
 // module-wide cached result so the License badge and feature gates
 // don't have to wait for the first scan to learn the tier.
 //
 // Depends only on the transport layer (FShintHttpClient + the shared
-// EShintHttpMethod from ShintHttpTypes.h). NO dependency on the
-// FShintCoreClient monolith — that's the whole point of Sprint 2.
+// EShintHttpMethod from ShintHttpTypes.h).
 
 #pragma once
 

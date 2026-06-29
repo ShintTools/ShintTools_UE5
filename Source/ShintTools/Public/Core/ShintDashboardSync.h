@@ -52,10 +52,17 @@ public:
 		: Client(InClient) {}
 
 	/**
-	 * Sends the full project scan to the dashboard.
+	 * Sends the project scan RESULTS (metrics only) to the dashboard.
+	 * Privacy: findings + counts + file metadata are sent; raw
+	 * source `content`/snippets are NEVER transmitted (nor read from disk).
 	 * Endpoint: POST {DashboardUrl}/api/public/code-validator/analyze
-	 * Body: { project_name, files: [{name, path, type, content, lines_count}] }
-	 * Auth:  Authorization: Bearer <ApiKeyDashboard>
+	 * Body: { project_name,
+	 *         files:  [{name, path, type, lines_count, issue_count,
+	 *                   issues: [{rule_id, rule_name, severity, category,
+	 *                             line, message}]}],
+	 *         totals: {files_scanned, total_issues, total_errors,
+	 *                  total_warnings, quality_score?} }
+	 * Auth:  Authorization: Bearer <per-project key>
 	 */
 	void SendCodeValidator(const FShintValidateResult& LastResult,
 		FOnShintWebDashboardComplete OnComplete);
@@ -64,7 +71,7 @@ public:
 	 * Sends the asset-naming violations to the dashboard.
 	 * Endpoint: POST {DashboardUrl}/api/public/naming-bot/analyze
 	 * Body: { project_name, items: [{name, path, type, category}] }
-	 * Auth:  Authorization: Bearer <ApiKeyDashboard>
+	 * Auth:  Authorization: Bearer <per-project key>
 	 */
 	void SendAssetNaming(const FShintAssetScanResult& LastResult,
 		FOnShintWebDashboardComplete OnComplete);

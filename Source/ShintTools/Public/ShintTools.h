@@ -52,18 +52,12 @@ public:
 	static const FName ShintToolsTabName;
 
 	// Cached license status — populated at module startup by an async
-	// POST /license/status. Read with GetCachedTier() so UI code does not
-	// have to wait for the first scan to learn the customer's tier (the
-	// previous behaviour). Defaults to "free" until the round-trip
-	// resolves; widgets should refresh when ``OnLicenseResolved`` fires.
 	static FString GetCachedTier();
 
 	/**
 	 * Re-resolve the cached tier from the current shinttools.config.json via
 	 * an async POST /license/status. Called once at StartupModule and again
-	 * whenever the user saves a new license key in the Config panel, so the
-	 * License badge + Indie/Studio gates update live without an editor
-	 * restart. Updates GCachedTier and fires OnLicenseResolved on completion.
+	 * whenever the user saves a new license key in the Config panel.
 	 */
 	static void RefreshTierAsync();
 

@@ -101,12 +101,9 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 
 			// ── Fields ───────────────────────────────────────────────────────
 			//
-			// Order mirrors the Unity Settings tab + the marketplace docs
-			// table: Core Engine port → API Key → Dashboard API Key →
-			// Excluded Paths → Export Path. The Launcher still owns initial
-			// population of api_key_mongo (license sync on sign-in); the
-			// field is exposed here so users can override or paste a key
-			// manually when offline.
+			// Order mirrors the Unity Settings tab. Values persist to
+			// shinttools.config.json and auto-save on commit (Enter /
+			// focus-out); the Apply button below makes saving discoverable.
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
 			[
 				ConfigRow(LOCTEXT("CfgCorePort", "Core Engine port"),
@@ -114,6 +111,8 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 					CorePortStr,
 					LOCTEXT("CfgCorePortHint", "Local port the Core Engine listens on. Default 18200."))
 			]
+			// [FAB-STRIP-BEGIN] Launcher-managed credential fields — the Fab
+			// build omits them (build_fab_source_pack.py strips this region).
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
 			[
 				ConfigRow(LOCTEXT("CfgApiKeyMongo", "API Key"),
@@ -129,6 +128,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 					LOCTEXT("CfgApiKeyHint",
 						"st_… per-project Bearer for shint.tools uploads."))
 			]
+			// [FAB-STRIP-END]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
 			[
 				MultiLineRow(LOCTEXT("CfgExcluded", "Excluded Paths"),
@@ -143,12 +143,15 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 					Cfg.ExportPath,
 					LOCTEXT("CfgExportPathHint", "Default folder for JSON exports."))
 			]
+			// [FAB-STRIP-BEGIN] Launcher-managed dashboard endpoint — omitted
+			// from the Fab build (build_fab_source_pack.py strips this region).
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
 			[
 				ConfigRow(LOCTEXT("CfgDashUrl", "Dashboard URL"), DashboardUrlField,
 					Cfg.DashboardUrl,
 					LOCTEXT("CfgDashUrlHint", "https://shint.tools"))
 			]
+			// [FAB-STRIP-END]
 
 				// Apply: persist every field (incl. the license key) and re-probe
 				// /license/status so the tier badge + Indie/Studio gates update
