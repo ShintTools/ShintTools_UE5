@@ -17,6 +17,7 @@ enum class EShintInstallStep : uint8
 	WaitingForHealth,
 	Done,
 	Failed,
+	PaidUseLauncher,      // terminal — paid Core installs via the launcher, not here
 };
 
 /**
