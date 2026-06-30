@@ -227,6 +227,24 @@ struct FShintLodFinding
 	// Estimated saving if the fix is applied — drives the summary + sort order.
 	double  VramMb             = 0.0;
 	int32   ShaderInstructions = 0;
+
+	// ── Asset Optimizer table display fields ────────────────────────────────
+	// Width/Height/Group/Format are joined client-side from the collection pass
+	// (the server findings don't echo them back). Current/PotentialVramMb are
+	// parsed from the finding's current/recommended dicts (present only for the
+	// size-changing rules — others leave them 0 and the table shows "—").
+	int32   Width           = 0;
+	int32   Height          = 0;
+	FString Group;             // texture LOD group (e.g. "World")
+	FString Format;            // current compression (e.g. "BC7")
+	double  CurrentVramMb   = 0.0;
+	double  PotentialVramMb = 0.0;
+
+	// ── Auto-fix targets (parsed from the finding's "recommended" dict) ──────
+	// Drive the per-row "Fix" flow, which writes an optimised *duplicate* and
+	// leaves the original untouched. Absent for non-size rules (left 0/empty).
+	int32   RecMaxSize = 0;     // recommended.max_texture_size  (LT003 oversized)
+	FString RecCompression;    // recommended.compression       (LT001/LT007)
 };
 
 struct FShintLodAuditResult
@@ -240,6 +258,13 @@ struct FShintLodAuditResult
 	int32   AutoFixable     = 0;
 	double  EstimatedVramSavedMb            = 0.0;
 	int32   EstimatedShaderInstructionsSaved = 0;
+
+	// Client-computed during the collection pass (not from the server) — drive
+	// the Asset Optimizer KPI tiles (per-category file counts + total VRAM).
+	int32   TexturesAudited  = 0;
+	int32   MeshesAudited     = 0;
+	int32   MaterialsAudited  = 0;
+	double  TotalVramMb       = 0.0;   // sum of resident texture VRAM
 
 	TArray<FShintLodFinding> Findings;
 };

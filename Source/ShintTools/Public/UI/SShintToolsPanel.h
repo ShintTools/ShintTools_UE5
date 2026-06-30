@@ -113,8 +113,16 @@ struct FShintLodFindingItem
 {
 	FShintLodFinding Finding;     // server result, copied verbatim
 	bool bDetailExpanded = false; // user toggled the guidance panel open
+	bool bChecked        = false; // row checkbox — drives the bulk "Fix (N)"
+	// Kept alive for the lifetime of the row so the thumbnail widget it backs
+	// stays valid (FAssetThumbnail must outlive the widget MakeThumbnailWidget
+	// returns). Created lazily in GenerateLodFindingRow.
+	TSharedPtr<class FAssetThumbnail> Thumbnail;
 };
 using FShintLodFindingPtr = TSharedPtr<FShintLodFindingItem>;
+
+// Asset Optimizer result tab — findings are grouped by asset family.
+enum class ELodTab : uint8 { Textures, Meshes, Materials };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Panel widget
@@ -174,9 +182,12 @@ private:
 	TSharedRef<SWidget> BuildAssetResultsPanel();
 	TSharedRef<SWidget> BuildAssetTypeMenuContent();
 
-	// ── LOD Auditor (Studio tier) ─────────────────────────────────────────────
+	// ── LOD Auditor / Asset Optimizer (Studio tier) ───────────────────────────
 	TSharedRef<SWidget> BuildLodAuditSection();
+	TSharedRef<SWidget> BuildLodKpiRow();
+	TSharedRef<SWidget> BuildLodToolbar();      // tabs + filters + bulk actions
 	TSharedRef<SWidget> BuildLodResultsPanel();
+	TSharedRef<SWidget> BuildLodTableHeader();
 	TSharedRef<ITableRow> GenerateLodFindingRow(
 		FShintLodFindingPtr Item, const TSharedRef<STableViewBase>& Owner);
 
@@ -236,6 +247,17 @@ private:
 	void   OnLodAuditComplete(const FShintLodAuditResult& Result);
 	void   PopulateLodFindingList(const FShintLodAuditResult& Result);
 	void   RefreshLodStats();
+	void   RefreshLodFilteredList();        // re-apply tab + filters → visible rows
+	void   SetLodTab(ELodTab Tab);
+	int32  LodCheckedCount() const;         // selected rows (bulk Fix label)
+	FReply OnLodFixRow(FShintLodFindingPtr Item);
+	FReply OnLodFixSelected();
+	FReply OnLodExport();
+	// Writes an optimised *duplicate* of the finding's texture (original left
+	// untouched), applying the server's recommended max-size / compression.
+	// Returns false + fills OutError on failure; OutNewPath = new asset path.
+	bool   ApplyLodFixDuplicate(const FShintLodFinding& Finding,
+	                            FString& OutNewPath, FString& OutError);
 
 	// ── HTTP callbacks ────────────────────────────────────────────────────────
 	void OnHealthCheckComplete(const FShintRequestResult& Result);
@@ -309,15 +331,25 @@ private:
 	// All issues from last scan
 	TArray<FShintIssueItemPtr> AllCodeItems;
 	TArray<FShintAssetItemPtr> AllAssetItems;
-	TArray<FShintLodFindingPtr> LodFindingItems;  // LOD findings (no filtering yet)
+	TArray<FShintLodFindingPtr> LodFindingItems;    // all findings from last audit
+	TArray<FShintLodFindingPtr> LodFilteredItems;   // visible rows (tab + filters)
+	// Shared thumbnail renderer pool for the Asset Optimizer table (Stage 2b).
+	// Lazily created on first row generation; one pool backs every row's 34px
+	// thumbnail so the editor renders real asset previews instead of a swatch.
+	TSharedPtr<class FAssetThumbnailPool> LodThumbnailPool;
 	// Currently visible (after filter)
 	TArray<FShintIssueItemPtr> CodeIssueItems;
 	TArray<FShintAssetItemPtr> AssetIssueItems;
 
-	// LOD Auditor UI state
+	// LOD Auditor / Asset Optimizer UI state
 	EModuleState LodState        = EModuleState::Idle;
 	bool         bLodExplainTop  = false;     // "Explain top issues" toggle
 	FString      LodProfile      = TEXT("default"); // "default" | "mobile"
+	ELodTab      LodActiveTab    = ELodTab::Textures;
+	FString      LodSearchText;
+	FString      LodGroupFilter    = TEXT("All Groups");
+	FString      LodFormatFilter   = TEXT("All Formats");
+	FString      LodSeverityFilter = TEXT("All Severities");
 
 	EIssueFilter         CurrentFilter            = EIssueFilter::All;
 	EIssueCategoryFilter CurrentCategoryFilter    = EIssueCategoryFilter::All;
@@ -345,9 +377,19 @@ private:
 	TSharedPtr<SListView<FShintAssetItemPtr>> AssetIssueListView;
 	TSharedPtr<SListView<FShintLodFindingPtr>> LodFindingListView;
 
-	TSharedPtr<STextBlock> LodAudited_Label;     // assets audited
-	TSharedPtr<STextBlock> LodIssues_Label;      // issues found
-	TSharedPtr<STextBlock> LodVramSaved_Label;   // estimated VRAM saved
+	// KPI tiles (Asset Optimizer): value + colored breakdown subtitle.
+	TSharedPtr<STextBlock> LodFiles_Label;       // FILES — total audited
+	TSharedPtr<STextBlock> LodFilesSub_Label;    //   "Textures: N  Meshes: N"
+	TSharedPtr<STextBlock> LodMemImpact_Label;   // MEMORY IMPACT — total VRAM
+	TSharedPtr<STextBlock> LodMemSavings_Label;  // MEMORY SAVINGS — MB
+	TSharedPtr<STextBlock> LodSavingsPct_Label;  //   "37.8% Reduction"
+	TSharedPtr<STextBlock> LodFrameTime_Label;   // FRAME TIME SAVINGS (stub)
+	TSharedPtr<STextBlock> LodIssues_Label;      // ISSUES — total
+	TSharedPtr<STextBlock> LodIssuesSub_Label;   //   "Textures: N  Meshes: N"
+	TSharedPtr<STextBlock> LodFixSelected_Label; // bulk "Fix (N)"
+	// Retained for back-compat with older stat refs (unused by the new layout).
+	TSharedPtr<STextBlock> LodAudited_Label;
+	TSharedPtr<STextBlock> LodVramSaved_Label;
 	TSharedPtr<SButton>    AuditLodBtn;
 	TSharedPtr<STextBlock> AuditLodBtnLabel;
 	TSharedPtr<SWidget>    LodEmptyState;

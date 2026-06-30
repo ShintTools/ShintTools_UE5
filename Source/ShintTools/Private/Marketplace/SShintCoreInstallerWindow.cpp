@@ -39,6 +39,9 @@ namespace
 			return LOCTEXT("StepDone", "Core Engine is ready.");
 		case EShintInstallStep::Failed:
 			return LOCTEXT("StepFailed", "Installation failed.");
+		case EShintInstallStep::PaidUseLauncher:
+			return LOCTEXT("StepPaidLauncher",
+				"Paid Core installs via the ShintTools launcher.");
 		default:
 			return LOCTEXT("StepIdle", "Ready to install.");
 		}
@@ -230,6 +233,14 @@ FReply SShintCoreInstallerWindow::OnPrimaryClicked()
 			nullptr, nullptr);
 		return FReply::Handled();
 	}
+	if (CurrentStep == EShintInstallStep::PaidUseLauncher)
+	{
+		// Paid Core is launcher-only (license-bound token auth). Send the user
+		// to the download page and close — there's nothing to install here.
+		FPlatformProcess::LaunchURL(TEXT("https://shint.tools"), nullptr, nullptr);
+		if (ParentWindow.IsValid()) { ParentWindow->RequestDestroyWindow(); }
+		return FReply::Handled();
+	}
 	if (CurrentStep == EShintInstallStep::Failed)
 	{
 		// Allow retry: reset state and re-run.
@@ -272,6 +283,7 @@ FReply SShintCoreInstallerWindow::OnCancelClicked()
 void SShintCoreInstallerWindow::RunWorker()
 {
 	FShintCoreInstaller Installer;
+
 	Installer.OnProgress = [this](const FShintInstallProgress& P)
 	{
 		// Marshal to the Game Thread -- Slate is not thread-safe.
@@ -281,6 +293,30 @@ void SShintCoreInstallerWindow::RunWorker()
 			OnProgress(Copy);
 		});
 	};
+
+	// The in-editor wizard installs the FREE public Core only (ImageTag defaults
+	// to :latest). The paid Core (agent + LOD Auditor) lives in a PRIVATE
+	// registry package pulled with a license-bound token that ONLY the launcher
+	// can mint — the wizard has no machine binding, so it cannot authenticate.
+	// Installing the free Core for a paying user would hand them a Core without
+	// the paid routes (LOD audit 404 — the exact bug we chased). So for a paid
+	// tier we stop and direct them to the launcher instead of pulling anything.
+	const FString Tier = FShintToolsModule::GetCachedTier().ToLower();
+	const bool bPaid =
+		Tier == TEXT("indie") || Tier == TEXT("studio") || Tier == TEXT("enterprise");
+	if (bPaid)
+	{
+		FShintInstallProgress P;
+		P.Step    = EShintInstallStep::PaidUseLauncher;
+		P.Percent = 0;
+		P.Message = TEXT("You're on a paid plan. Install the Core Engine with the "
+			"ShintTools launcher — it sets up the agent and LOD Auditor with your "
+			"license. The in-editor installer only provides the free Core, which "
+			"omits those paid features.");
+		Installer.OnProgress(P);
+		return;
+	}
+
 	Installer.Run();
 }
 
@@ -294,7 +330,8 @@ void SShintCoreInstallerWindow::OnProgress(const FShintInstallProgress& P)
 	const bool bTerminal =
 		P.Step == EShintInstallStep::Done ||
 		P.Step == EShintInstallStep::Failed ||
-		P.Step == EShintInstallStep::DockerMissing;
+		P.Step == EShintInstallStep::DockerMissing ||
+		P.Step == EShintInstallStep::PaidUseLauncher;
 	if (bTerminal)
 	{
 		bIsRunning = false;
@@ -332,6 +369,8 @@ void SShintCoreInstallerWindow::RefreshFromState()
 			Label = LOCTEXT("Retry", "Retry"); break;
 		case EShintInstallStep::DockerMissing:
 			Label = LOCTEXT("OpenDocker", "Get Docker Desktop"); break;
+		case EShintInstallStep::PaidUseLauncher:
+			Label = LOCTEXT("OpenLauncher", "Get the Launcher"); break;
 		default:
 			Label = bIsRunning
 				? LOCTEXT("Installing", "Installing...")

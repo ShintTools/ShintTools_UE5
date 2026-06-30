@@ -18,7 +18,7 @@ of the egress, process-exec, secret-handling and file-write call sites.
 |---|---|---|---|
 | `http://127.0.0.1:18200/*` (local Core) | HTTP, loopback only | Every scan / fix / explain | Source of the files being analysed — **stays on `localhost`** |
 | `https://shint.tools/api/public/*` (dashboard) | HTTPS | Only on explicit **"Send to Dashboard"** | **Metrics only** — see §3 |
-| `ghcr.io/noctxas97dev/shinttools-core` | docker CLI (HTTPS) | Marketplace install / update | Nothing (image *pull*) |
+| `ghcr.io/shinttools/shinttools-core` | docker CLI (HTTPS) | Marketplace install / update | Nothing (image *pull*) |
 | License status | via local Core (loopback) | Startup + on key change | The per-project `st_` api key |
 
 - Analysis traffic never leaves the machine — it goes to the loopback Core
