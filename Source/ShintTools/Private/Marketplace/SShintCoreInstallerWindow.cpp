@@ -272,6 +272,20 @@ FReply SShintCoreInstallerWindow::OnCancelClicked()
 void SShintCoreInstallerWindow::RunWorker()
 {
 	FShintCoreInstaller Installer;
+
+	// Pull the Core edition that matches the licensed tier. The wizard
+	// previously always pulled :latest (the FREE image — paid routers stripped),
+	// so a paid user whose launcher wasn't running got the free Core installed
+	// here: no agent / LOD Auditor, and LOD audit 404s. Paid tiers now pull
+	// :paid; free/unknown stay on :latest. (Mirrors the launcher's
+	// constants.core_image_remote(tier).)
+	const FString Tier = FShintToolsModule::GetCachedTier().ToLower();
+	const bool bPaid =
+		Tier == TEXT("indie") || Tier == TEXT("studio") || Tier == TEXT("enterprise");
+	Installer.ImageTag = bPaid
+		? TEXT("ghcr.io/noctxas97dev/shinttools-core:paid")
+		: TEXT("ghcr.io/noctxas97dev/shinttools-core:latest");
+
 	Installer.OnProgress = [this](const FShintInstallProgress& P)
 	{
 		// Marshal to the Game Thread -- Slate is not thread-safe.
