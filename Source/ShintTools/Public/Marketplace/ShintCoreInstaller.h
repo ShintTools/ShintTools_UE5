@@ -53,7 +53,7 @@ class SHINTTOOLS_API FShintCoreInstaller
 public:
 
 	/** Public image pulled for the Core engine. */
-	FString ImageTag = TEXT("ghcr.io/noctxas97dev/shinttools-core:latest");
+	FString ImageTag = TEXT("ghcr.io/shinttools/shinttools-core:latest");
 
 	/** Container name (so we can `docker start <name>` on subsequent boots). */
 	FString ContainerName = TEXT("shinttools-core");
