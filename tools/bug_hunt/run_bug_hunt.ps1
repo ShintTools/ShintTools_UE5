@@ -36,7 +36,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $Repo    = 'Noctxas97Dev/ShintTools_UE5',
+    [string] $Repo    = 'ShintTools/ShintTools_UE5',
     [string] $RepoDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
     [ValidateSet('sonnet','opus','haiku')]
     [string] $Model   = 'sonnet',

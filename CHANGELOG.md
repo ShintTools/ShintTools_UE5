@@ -86,11 +86,11 @@ collisions.
   block. The Core now hoists the declaration above the guard
   (`int32 N{}; if (IsValid(GI)) { N = GI->Count(); }`) and bails to
   mark-for-review for `auto`/`const`. Reaches marketplace via the republished
-  `ghcr.io/noctxas97dev/shinttools-core:latest` image.
+  `ghcr.io/shinttools/shinttools-core:latest` image.
 
 ### Changed
 - **Core image owner.** The install wizard now pulls
-  `ghcr.io/noctxas97dev/shinttools-core:latest` (was `genesishg1509`).
+  `ghcr.io/shinttools/shinttools-core:latest` (was `genesishg1509`).
 
 ---
 
