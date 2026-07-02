@@ -41,7 +41,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -201,20 +200,23 @@ def main() -> int:
     else:
         targets = TIERS
 
+    out_root = REPO / "dist_tier"
+    out_root.mkdir(exist_ok=True)
     ok = True
-    with tempfile.TemporaryDirectory() as tmp:
-        for name, mods in targets.items():
-            print(f"== {name}  (strip: {', '.join(mods)}) ==")
-            hits = build(mods, Path(tmp) / name)
-            if hits:
-                ok = False
-                print(f"   LEAKS ({len(hits)}) — add sentinels:")
-                for h in hits[:60]:
-                    print(f"     - {h}")
-            else:
-                print("   clean: no stripped-module symbols survived.")
-                if args.publish and not args.only:
-                    publish(name, Path(tmp) / name)
+    for name, mods in targets.items():
+        stage = out_root / name
+        print(f"== {name}  (strip: {', '.join(mods)}) ==")
+        hits = build(mods, stage)
+        if hits:
+            ok = False
+            print(f"   LEAKS ({len(hits)}) — add sentinels:")
+            for h in hits[:60]:
+                print(f"     - {h}")
+        else:
+            print(f"   clean: no stripped-module symbols survived.")
+            print(f"   tree staged for BuildPlugin -> {stage}")
+            if args.publish and not args.only:
+                publish(name, stage)
     print("\nAll clean." if ok else "\nLeaks remain — add sentinels.")
     return 0 if ok else 1
 
