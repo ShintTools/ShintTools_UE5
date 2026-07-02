@@ -3,11 +3,13 @@
 
 #include "CoreMinimal.h"
 #include "ShintCoreClient.h"
+// [DASH-STRIP-BEGIN]
 // FShintWebDashboardResult / FOnShintWebDashboardComplete used by the
 // OnCodeDashboardComplete / OnAssetDashboardComplete signatures below.
 // These types moved out of ShintCoreClient.h in the dashboard-sync
 // refactor.
 #include "ShintDashboardSync.h"
+// [DASH-STRIP-END]
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
@@ -204,7 +206,9 @@ private:
 	FReply OnSelectAllCodeClicked();
 	FReply OnDeselectAllCodeClicked();
 	FReply OnApplySelectedCodeFixesClicked();
+	// [DASH-STRIP-BEGIN]
 	FReply OnSendCodeToDashboardClicked();
+	// [DASH-STRIP-END]
 	// OnAutoFixPlanClicked / OnAgentPlanComplete / ShowAgentPlanDialog
 	// were removed in 1.7.11 alongside the Auto-Fix Plan button. The
 	// per-row Explain entry point covers the same UX with focused
@@ -240,7 +244,9 @@ private:
 	FReply OnSelectAllAssetsClicked();
 	FReply OnDeselectAllAssetsClicked();   // T6
 	FReply OnApplySelectedAssetFixesClicked();
+	// [DASH-STRIP-BEGIN]
 	FReply OnSendAssetToDashboardClicked();
+	// [DASH-STRIP-END]
 
 	// ── LOD Auditor handlers ──────────────────────────────────────────────────
 	FReply OnAuditLodsClicked();
@@ -265,12 +271,16 @@ private:
 	void OnBlueprintValidateComplete(const FShintValidateResult& Result);
 	void OnBlueprintNamingScanComplete(const FShintValidateResult& Result); // asset-scan chain: naming only
 	void OnCodeFixComplete(const FShintFixResult& Result, uint32 FixGeneration);
+	// [DASH-STRIP-BEGIN]
 	void OnCodeDashboardComplete(const FShintWebDashboardResult& Result);
+	// [DASH-STRIP-END]
 	void OnAssetScanComplete(const FShintAssetScanResult& Result);
 	/** Asset scan triggered by Scan Blueprints — auto-filters to Blueprints, no BP-naming chain. */
 	void OnAssetScanFromBPComplete(const FShintAssetScanResult& Result);
 	void OnAssetFixComplete(const FShintAssetFixResult& Result);
+	// [DASH-STRIP-BEGIN]
 	void OnAssetDashboardComplete(const FShintWebDashboardResult& Result);
+	// [DASH-STRIP-END]
 
 	// ── UI state helpers ──────────────────────────────────────────────────────
 	void SetStatus(ECoreStatus S);
@@ -316,7 +326,9 @@ private:
 	// transport from CoreClient; lifetime is tied to CoreClient via
 	// the shared_ptr -- DashboardSync holds a reference, never null
 	// for the panel's lifetime.
+	// [DASH-STRIP-BEGIN]
 	TSharedPtr<class FShintDashboardSync> DashboardSync;
+	// [DASH-STRIP-END]
 	TSharedPtr<FCoreProcessManager> ProcessManager;
 
 	ECoreStatus  StatusState = ECoreStatus::Unknown;

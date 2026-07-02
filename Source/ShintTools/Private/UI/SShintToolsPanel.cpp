@@ -28,7 +28,9 @@
 #include "SShintToolsPanel_Private.h"
 #include "ShintTools.h"
 #include "ShintCoreClient.h"
+// [DASH-STRIP-BEGIN]
 #include "ShintDashboardSync.h"
+// [DASH-STRIP-END]
 #include "CoreProcessManager.h"
 
 // Shared design-system widgets (UI redesign foundation)
@@ -48,7 +50,9 @@
 void SShintToolsPanel::Construct(const FArguments& InArgs)
 {
 	CoreClient     = MakeShared<FShintCoreClient>();
+	// [DASH-STRIP-BEGIN]
 	DashboardSync  = MakeShared<FShintDashboardSync>(*CoreClient);
+	// [DASH-STRIP-END]
 	ProcessManager = MakeShared<FCoreProcessManager>();
 
 	// Kick off an initial /health probe so the Settings tab's LED + the

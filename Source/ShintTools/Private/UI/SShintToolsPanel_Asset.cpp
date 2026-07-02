@@ -11,7 +11,9 @@
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
 #include "ShintCoreClient.h"
+// [DASH-STRIP-BEGIN]
 #include "ShintDashboardSync.h"
+// [DASH-STRIP-END]
 
 #include "ShintStyle.h"
 
@@ -279,6 +281,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 					FSlateColor(C_Green()))
 				]
 			]
+			// [DASH-STRIP-BEGIN]
 			+ SWrapBox::Slot()
 			[
 				// Same tier gate as SendCodeBtn — shint.tools dashboard ingest
@@ -300,6 +303,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 					FSlateColor(C_Blue()))
 				]
 			]
+			// [DASH-STRIP-END]
 		];
 
 	return SNew(SVerticalBox)
@@ -434,6 +438,7 @@ FReply SShintToolsPanel::OnDeselectAllAssetsClicked()
 	return FReply::Handled();
 }
 
+// [DASH-STRIP-BEGIN]
 FReply SShintToolsPanel::OnSendAssetToDashboardClicked()
 {
 	// Send only the ticked rows. The per-row checkbox toggles bChecked on the
@@ -456,5 +461,6 @@ FReply SShintToolsPanel::OnSendAssetToDashboardClicked()
 		FOnShintWebDashboardComplete::CreateSP(this, &SShintToolsPanel::OnAssetDashboardComplete));
 	return FReply::Handled();
 }
+// [DASH-STRIP-END]
 
 #undef LOCTEXT_NAMESPACE
