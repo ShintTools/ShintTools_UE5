@@ -107,8 +107,11 @@ void SShintWelcomeDialog::Construct(const FArguments& InArgs)
 	// What the tier unlocks + how to start. Studio adds the Phase-2 modules.
 	FString BodyStr;
 	BodyStr += TEXT("Thanks for activating ShintTools. Your license unlocks:\n\n");
-	BodyStr += TEXT("  - Deep Code Validator (full edition) — every C++ and Blueprint rule,\n");
-	BodyStr += TEXT("    AI \"Explain\" on any finding, and one-click Auto-Fix.\n");
+	BodyStr += TEXT("  - Deep Code Validator (full edition) — every C++ and Blueprint rule\n");
+	BodyStr += TEXT("    and one-click Auto-Fix.\n");
+	// [AGENT-STRIP-BEGIN]
+	BodyStr += TEXT("  - AI \"Explain\" — plain-language rationale on any finding.\n");
+	// [AGENT-STRIP-END]
 	BodyStr += TEXT("  - Asset Naming Bot (full edition) — project-wide naming audit + rename.\n");
 	if (bStudioPlus)
 	{
@@ -118,9 +121,17 @@ void SShintWelcomeDialog::Construct(const FArguments& InArgs)
 	BodyStr += TEXT("\nGetting started:\n");
 	BodyStr += TEXT("  1. Open Window > ShintTools to dock the panel.\n");
 	BodyStr += TEXT("  2. Pick a module and click Scan.\n");
-	BodyStr += TEXT("  3. Use Explain for a plain-language rationale, or Apply for a fix.\n\n");
+	BodyStr += TEXT("  3. Click Apply on a finding to fix it");
+	// [AGENT-STRIP-BEGIN]
+	BodyStr += TEXT(", or Explain for a plain-language rationale");
+	// [AGENT-STRIP-END]
+	BodyStr += TEXT(".\n\n");
 	BodyStr += TEXT("The local Core Engine does the analysis on your machine; nothing leaves\n");
-	BodyStr += TEXT("it unless you click \"Send to Dashboard\".");
+	BodyStr += TEXT("it");
+	// [DASH-STRIP-BEGIN]
+	BodyStr += TEXT(" unless you click \"Send to Dashboard\"");
+	// [DASH-STRIP-END]
+	BodyStr += TEXT(".");
 
 	const FText Body = FText::FromString(BodyStr);
 
