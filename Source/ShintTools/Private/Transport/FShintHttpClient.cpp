@@ -29,10 +29,17 @@ FString FShintHttpClient::SerializeJson(const TSharedRef<FJsonObject>& Obj)
 
 float FShintHttpClient::TimeoutForUrl(const FString& Url)
 {
+	// [AGENT-STRIP-BEGIN]
 	// /agent/explain runs the local LLM and takes 30-45s typical / 60-90s
 	// on slow CPUs. 180s gives the spinner enough headroom not to cut off
-	// mid-stream. Everything else uses 90s, which covers full-project scans.
-	return Url.Contains(TEXT("/agent/explain")) ? 180.0f : 90.0f;
+	// mid-stream.
+	if (Url.Contains(TEXT("/agent/explain")))
+	{
+		return 180.0f;
+	}
+	// [AGENT-STRIP-END]
+	// 90s covers full-project scans.
+	return 90.0f;
 }
 
 void FShintHttpClient::Send(

@@ -47,6 +47,16 @@ REPO = Path(__file__).resolve().parent.parent
 SOURCE_BRANCH = "develop-studio"
 
 # ── Paid modules: files deleted wholesale + sentinel + leak symbols ───────────
+# `symbols` are MANUAL EXTRAS (class/struct/delegate/member names). The bulk of
+# the leak list is AUTO-DERIVED from the module's own files at build time
+# (every `Type FShintX::Method(` definition they contain) — a hand-kept list
+# silently under-checks: it once missed 7 of the 12 methods a module defined.
+# `endpoints` are paid REST paths that must not survive in a stripped tree
+# (catches wiring the symbol pass can't see).
+#
+# NOTE agent ≠ Fixes: SShintToolsPanel_Fixes.cpp (fix preview / safety check /
+# Apply) drives the FREE /validate/fix route and ships in every tier. The paid
+# agent surface is only /agent/explain + /agent/plan (Explain modal + plan).
 MODULES = {
     "lod": {
         "sentinel": ("[LOD-STRIP-BEGIN]", "[LOD-STRIP-END]"),
@@ -59,18 +69,24 @@ MODULES = {
             "BuildLodAuditSection", "OnAuditLodsClicked", "LodAudit", "ELodTab",
             "ApplyLodFixDuplicate", "RefreshLodStats",
         ],
+        "endpoints": ["assets/lod"],
     },
     "agent": {
         "sentinel": ("[AGENT-STRIP-BEGIN]", "[AGENT-STRIP-END]"),
         "files": [
             "Source/ShintTools/Private/Core/ShintCoreClient_Agent.cpp",
             "Source/ShintTools/Private/UI/SShintToolsPanel_Explain.cpp",
-            "Source/ShintTools/Private/UI/SShintToolsPanel_Fixes.cpp",
         ],
         "symbols": [
             "ShintCoreClient_Agent", "SShintToolsPanel_Explain",
-            "SShintToolsPanel_Fixes", "OnExplainIssueClicked", "AgentExplain",
+            "FShintAgentPlanStep", "FShintAgentPlanResult",
+            "FShintAgentExplainResponse", "FOnShintAgentPlanComplete",
+            "FOnShintAgentExplainComplete", "ParseAgentPlanResponse",
+            "ExplainWindow", "ExplainResultBox", "ExplainSpinner",
+            "ExplainStatusLine", "ExplainStatusIndex", "ExplainRequestId",
+            "ExplainTickerHandle",
         ],
+        "endpoints": ["agent/explain", "agent/plan"],
     },
     "dash": {
         "sentinel": ("[DASH-STRIP-BEGIN]", "[DASH-STRIP-END]"),
@@ -83,14 +99,25 @@ MODULES = {
             "SendAssetNaming", "OnSendCodeToDashboard", "OnSendAssetToDashboard",
             "OnCodeDashboardComplete", "OnAssetDashboardComplete",
         ],
+        "endpoints": ["api/public/code-validator/analyze",
+                      "api/public/naming-bot/analyze"],
     },
 }
 
-# Tier = which modules are STRIPPED for that release branch.
+# Tier = which modules are STRIPPED for that release branch, plus how hard the
+# tree is sanitised. `scrub_comments` removes ALL comments from shipped source
+# (free/Fab customers must not receive developer commentary); the copyright
+# header line survives (Fab requires it).
 TIERS = {
-    "release-indie":       ["lod"],
-    "release-marketplace": ["lod", "agent", "dash"],
+    "release-indie":       {"mods": ["lod"],                  "scrub_comments": False},
+    "release-marketplace": {"mods": ["lod", "agent", "dash"], "scrub_comments": True},
 }
+
+# Dev-only / confidential content that never ships in ANY generated release
+# tree: CI, editor config, internal docs, security audits, and the tier/Fab
+# tooling itself (it documents the strip mechanism and module boundaries).
+_DEV_ONLY = ["tools", "docs", ".github", ".vscode", ".editorconfig",
+             "CHANGELOG.md", "SECURITY_AUDIT.md"]
 
 _CODE_EXT = {".cpp", ".h", ".hpp", ".cs", ".inl"}
 
@@ -115,6 +142,79 @@ def _strip_comments(text: str) -> str:
     return text
 
 
+def _scrub_comments_shipped(text: str) -> str:
+    """Remove every // and /* */ comment from SHIPPED source (free tier): no
+    developer commentary or internal notes reach a marketplace customer.
+
+    Unlike the leak-check heuristic above, this must be string-literal-aware —
+    a naive regex truncates every TEXT("https://…") URL at the "//". Small
+    state machine over ", ' and escapes. The leading copyright comment lines
+    are preserved (Fab requires a copyright header). Raw strings R"()" are not
+    handled — the codebase has none."""
+    lines = text.splitlines(keepends=True)
+    head, i = [], 0
+    while i < len(lines) and lines[i].lstrip().startswith("//"):
+        if "copyright" in lines[i].lower():
+            head.append(lines[i])
+        i += 1
+    body = "".join(lines[i:])
+
+    out: list[str] = []
+    j, n = 0, len(body)
+    while j < n:
+        two = body[j:j + 2]
+        if two == "//":                       # line comment → drop to newline
+            k = body.find("\n", j)
+            j = n if k == -1 else k
+        elif two == "/*":                     # block comment → drop to */
+            k = body.find("*/", j + 2)
+            j = n if k == -1 else k + 2
+        elif body[j] in ('"', "'"):           # literal → copy verbatim
+            quote = body[j]
+            out.append(body[j])
+            j += 1
+            while j < n:
+                out.append(body[j])
+                if body[j] == "\\" and j + 1 < n:
+                    out.append(body[j + 1])
+                    j += 2
+                    continue
+                if body[j] == quote:
+                    j += 1
+                    break
+                j += 1
+        else:
+            out.append(body[j])
+            j += 1
+
+    scrubbed = re.sub(r"[ \t]+\n", "\n", "".join(out))   # trailing whitespace
+    scrubbed = re.sub(r"\n{3,}", "\n\n", scrubbed)        # collapse blank runs
+    return "".join(head) + scrubbed
+
+
+# Function DEFINITIONS a module file contains: `Ret FShintX::Method(` anchored
+# at column 0 so shared inline helpers merely *used* by the module (e.g.
+# `SShintToolsPanel::C_BG()` inside an expression) are not claimed.
+_DEF_RE = re.compile(
+    r"^[A-Za-z_][\w<>,*&:\s]*?\b[FSU]Shint\w*::(~?\w+)\s*\(", re.MULTILINE)
+
+
+def _auto_symbols(stage: Path, mods: list[str]) -> set[str]:
+    """Derive leak symbols from the module's own files (pre-deletion): every
+    method they define. A symbol a module defines can then never be missing
+    from its own leak-check — the manual lists are extras, not the source of
+    truth."""
+    syms: set[str] = set()
+    for m in mods:
+        for rel in MODULES[m]["files"]:
+            p = stage / rel
+            if not p.exists():
+                continue
+            txt = _strip_comments(p.read_text(encoding="utf-8", errors="ignore"))
+            syms.update(_DEF_RE.findall(txt))
+    return syms
+
+
 def _strip_regions(text: str, sentinels: list[tuple[str, str]]) -> str:
     """Drop every [BEGIN..END] region (inclusive) for each sentinel pair."""
     begins = {b for b, _ in sentinels}
@@ -132,11 +232,25 @@ def _strip_regions(text: str, sentinels: list[tuple[str, str]]) -> str:
     return "".join(out)
 
 
-def build(mods: list[str], stage: Path) -> list[str]:
+def build(mods: list[str], stage: Path, *,
+          scrub_comments: bool = False,
+          drop_dev: bool = False) -> list[str]:
     """Stage a tree with ``mods`` stripped; return leak hits for those mods."""
     shutil.rmtree(stage, ignore_errors=True)
     stage.mkdir(parents=True)
     _export_source(stage)
+
+    # Derive the leak-symbol set from the module files BEFORE deleting them.
+    symbols = _auto_symbols(stage, mods)
+    symbols.update(s for m in mods for s in MODULES[m]["symbols"])
+
+    if drop_dev:
+        for rel in _DEV_ONLY:
+            p = stage / rel
+            if p.is_dir():
+                shutil.rmtree(p)
+            elif p.exists():
+                p.unlink()
 
     sentinels = [MODULES[m]["sentinel"] for m in mods]
     for m in mods:
@@ -147,21 +261,38 @@ def build(mods: list[str], stage: Path) -> list[str]:
             else:
                 print(f"   note: '{rel}' not present.")
 
+    # Marker lines of ALL modules (kept ones included) are removed from every
+    # shipped tree — a customer must not see the strip machinery in the source.
+    all_markers = [t for m in MODULES.values() for t in m["sentinel"]]
     for src in stage.rglob("*"):
         if src.is_file() and src.suffix.lower() in _CODE_EXT:
             txt = src.read_text(encoding="utf-8", errors="ignore")
+            changed = False
             if any(b in txt for b, _ in sentinels):
-                src.write_text(_strip_regions(txt, sentinels), encoding="utf-8")
+                txt, changed = _strip_regions(txt, sentinels), True
+            if any(mk in txt for mk in all_markers):
+                txt = "".join(ln for ln in txt.splitlines(keepends=True)
+                              if not any(mk in ln for mk in all_markers))
+                changed = True
+            if scrub_comments:
+                txt, changed = _scrub_comments_shipped(txt), True
+            if changed:
+                src.write_text(txt, encoding="utf-8")
 
-    symbols = [s for m in mods for s in MODULES[m]["symbols"]]
+    endpoints = [e for m in mods for e in MODULES[m].get("endpoints", [])]
     hits: list[str] = []
     for src in stage.rglob("*"):
         if not (src.is_file() and src.suffix.lower() in _CODE_EXT):
             continue
         txt = _strip_comments(src.read_text(encoding="utf-8", errors="ignore"))
-        for sym in symbols:
+        for sym in sorted(symbols):
             if re.search(r"\b" + re.escape(sym) + r"\b", txt):
                 hits.append(f"{src.relative_to(stage).as_posix()}: {sym}")
+        # Paid REST paths must not survive either — catches string-level wiring
+        # (URL construction, config defaults) the symbol pass can't see.
+        for ep in endpoints:
+            if ep in txt:
+                hits.append(f"{src.relative_to(stage).as_posix()}: endpoint '{ep}'")
     return hits
 
 
@@ -196,17 +327,25 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.only:
-        targets = {f"_verify-{args.only}": [args.only]}
+        # Verify trees stay minimal-delta (no scrub / no dev-drop) so a
+        # BuildPlugin failure maps 1:1 onto the sentinel edits being tested.
+        targets = {f"_verify-{args.only}": {"mods": [args.only],
+                                            "scrub_comments": False}}
+        drop_dev = False
     else:
         targets = TIERS
+        drop_dev = True
 
     out_root = REPO / "dist_tier"
     out_root.mkdir(exist_ok=True)
     ok = True
-    for name, mods in targets.items():
+    for name, cfg in targets.items():
         stage = out_root / name
-        print(f"== {name}  (strip: {', '.join(mods)}) ==")
-        hits = build(mods, stage)
+        mods = cfg["mods"]
+        print(f"== {name}  (strip: {', '.join(mods)}"
+              f"{', scrubbed' if cfg['scrub_comments'] else ''}) ==")
+        hits = build(mods, stage, scrub_comments=cfg["scrub_comments"],
+                     drop_dev=drop_dev)
         if hits:
             ok = False
             print(f"   LEAKS ({len(hits)}) — add sentinels:")

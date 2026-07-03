@@ -669,6 +669,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 								]
 							]
 						]
+						// [AGENT-STRIP-BEGIN]
 						// LLM pivot — per-issue "Explain" button. Hidden on Free
 						// tier so the user never gets a 403 mid-click; Tier comes
 						// from the validate response's top-level summary.tier.
@@ -695,6 +696,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 								]
 							]
 						]
+						// [AGENT-STRIP-END]
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 						[
 							SNew(STextBlock).Text(FText::FromString(AutoBadge)).Font(F_Label())

@@ -226,6 +226,7 @@ void SShintToolsPanel::SetDestinationIndex(int32 Index)
 
 SShintToolsPanel::~SShintToolsPanel()
 {
+	// [AGENT-STRIP-BEGIN]
 	// Clean up the Explain modal + its rotating-status ticker. Without this,
 	// the SWindow was orphaned in FSlateApplication's window list whenever the
 	// panel was destroyed without the user clicking Close, and the ticker
@@ -241,6 +242,7 @@ SShintToolsPanel::~SShintToolsPanel()
 		ExplainWindow->RequestDestroyWindow();
 		ExplainWindow.Reset();
 	}
+	// [AGENT-STRIP-END]
 }
 
 #undef LOCTEXT_NAMESPACE

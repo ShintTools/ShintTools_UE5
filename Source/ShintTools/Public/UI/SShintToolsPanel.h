@@ -214,6 +214,7 @@ private:
 	// per-row Explain entry point covers the same UX with focused
 	// /agent/explain context.
 
+	// [AGENT-STRIP-BEGIN]
 	// LLM pivot — single-shot /agent/explain modal.
 	// One per-issue "Explain" button on each row; click opens the modal,
 	// the request fires, the server takes 30-45s on CPU and the modal shows
@@ -234,6 +235,7 @@ private:
 	// B (the per-row "wrong explanation" race).
 	uint64                                            ExplainRequestId = 0;
 	FTSTicker::FDelegateHandle                        ExplainTickerHandle;
+	// [AGENT-STRIP-END]
 	FReply OnScanAssetsClicked();
 	FReply OnApplySingleFix(FShintIssueItemPtr Item);
 	FReply OnIgnoreSingleFix(FShintIssueItemPtr Item);

@@ -317,6 +317,7 @@ DECLARE_DELEGATE_OneParam(FOnShintQualityScoreHistoryComplete, const FShintQuali
 // The "Send to Dashboard" feature is a paid-tier-only POST that lives in
 // its own translation unit so other builds can skip the code path.
 
+// [AGENT-STRIP-BEGIN]
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent — Auto-Fix Plan (Indie tier)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -368,6 +369,7 @@ struct FShintAgentExplainResponse
 };
 
 DECLARE_DELEGATE_OneParam(FOnShintAgentExplainComplete, const FShintAgentExplainResponse&);
+// [AGENT-STRIP-END]
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -562,6 +564,7 @@ public:
 	void SendDashboardReport(const FShintDashboardReport& Report,
 	                         FOnShintDashboardComplete OnComplete);
 
+	// [AGENT-STRIP-BEGIN]
 	// ── Agent — Auto-Fix Plan (Indie tier) ────────────────────────────────────
 	/**
 	 * Sends the validator's last result to /agent/plan and receives a
@@ -588,6 +591,7 @@ public:
 	 */
 	void RequestExplainIssue(const FShintCodeIssue&      Issue,
 	                         FOnShintAgentExplainComplete OnComplete);
+	// [AGENT-STRIP-END]
 
 	// ── Generic ───────────────────────────────────────────────────────────────
 	void SendRequest(const FString& FullUrl, EShintHttpMethod Method,
@@ -627,7 +631,9 @@ private:
 	                                 TArray<FShintCodeIssue>     TreeSitterIssues,
 	                                 FOnShintFixComplete         OnComplete);
 
+	// [AGENT-STRIP-BEGIN]
 	static FShintAgentPlanResult ParseAgentPlanResponse(const FShintRequestResult& Raw);
+	// [AGENT-STRIP-END]
 
 	FShintCoreConfig Config;
 };
