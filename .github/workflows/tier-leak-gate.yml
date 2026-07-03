@@ -1,0 +1,64 @@
+# Tier leak gate — proves no paid source can reach a lower tier.
+#
+# Runs the tier-release generator on every push/PR to the source-of-truth
+# branches and fails if any stripped tree still contains a paid module
+# symbol or endpoint string. Release branches are generator-only: this job
+# also regenerates each release branch from the pushed source and fails if
+# someone hand-committed to release-* (tree drift).
+#
+# It does NOT compile (no UE on runners) — BuildPlugin on UE_5.7 remains a
+# local pre-publish step. The gate catches the leak class; the local build
+# catches the compile class.
+name: tier-leak-gate
+
+on:
+  push:
+    branches: [main, develop-studio]
+  pull_request:
+    branches: [main, develop-studio]
+
+jobs:
+  leak-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The generator exports SOURCE_BRANCH (develop-studio); make sure the
+      # local ref exists whatever ref triggered the run.
+      - name: Ensure source branch ref
+        run: |
+          git fetch origin develop-studio:develop-studio || true
+          git rev-parse --verify develop-studio >/dev/null 2>&1 \
+            || git branch develop-studio HEAD
+
+      - name: Generate + leak-check both tier trees
+        run: python tools/build_tier_release.py
+
+      - name: Verify no paid module file survived
+        run: |
+          set -e
+          for f in \
+            "Source/ShintTools/Private/Core/ShintCoreClient_Lod.cpp" \
+            "Source/ShintTools/Private/UI/SShintToolsPanel_Lod.cpp" ; do
+            for t in release-indie release-marketplace; do
+              if [ -e "dist_tier/$t/$f" ]; then
+                echo "::error::$f present in $t"; exit 1
+              fi
+            done
+          done
+          for f in \
+            "Source/ShintTools/Private/Core/ShintCoreClient_Agent.cpp" \
+            "Source/ShintTools/Private/UI/SShintToolsPanel_Explain.cpp" \
+            "Source/ShintTools/Private/Core/ShintDashboardSync.cpp" \
+            "Source/ShintTools/Public/Core/ShintDashboardSync.h" ; do
+            if [ -e "dist_tier/release-marketplace/$f" ]; then
+              echo "::error::$f present in release-marketplace"; exit 1
+            fi
+          done
+          echo "No paid module files in any stripped tree."
