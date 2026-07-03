@@ -28,7 +28,9 @@
 #include "SShintToolsPanel_Private.h"
 #include "ShintTools.h"
 #include "ShintCoreClient.h"
+// [DASH-STRIP-BEGIN]
 #include "ShintDashboardSync.h"
+// [DASH-STRIP-END]
 #include "CoreProcessManager.h"
 
 // Shared design-system widgets (UI redesign foundation)
@@ -48,7 +50,9 @@
 void SShintToolsPanel::Construct(const FArguments& InArgs)
 {
 	CoreClient     = MakeShared<FShintCoreClient>();
+	// [DASH-STRIP-BEGIN]
 	DashboardSync  = MakeShared<FShintDashboardSync>(*CoreClient);
+	// [DASH-STRIP-END]
 	ProcessManager = MakeShared<FCoreProcessManager>();
 
 	// Kick off an initial /health probe so the Settings tab's LED + the
@@ -73,7 +77,9 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 		{
 		case EShintDestination::Code:     return LOCTEXT("TitleCode",     "Code Validator");
 		case EShintDestination::Assets:   return LOCTEXT("TitleAssets",   "Asset Naming Bot");
+		// [LOD-STRIP-BEGIN]
 		case EShintDestination::LodAudit: return LOCTEXT("TitleLod",      "LOD Auditor");
+		// [LOD-STRIP-END]
 		case EShintDestination::Settings: return LOCTEXT("TitleSettings", "Settings");
 		case EShintDestination::Overview:
 		default:                          return LOCTEXT("TitleOverview", "Overview");
@@ -196,9 +202,11 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 					+ SWidgetSwitcher::Slot()
 					[ WrapSection(BuildAssetNamingSection()) ]
 
+					// [LOD-STRIP-BEGIN]
 					// 3 — LOD Auditor (Studio tier; rail entry hidden on lower tiers)
 					+ SWidgetSwitcher::Slot()
 					[ WrapSection(BuildLodAuditSection()) ]
+					// [LOD-STRIP-END]
 
 					// 4 — Settings (was Config Section, now its own destination)
 					+ SWidgetSwitcher::Slot()
@@ -212,7 +220,7 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 void SShintToolsPanel::SetDestinationIndex(int32 Index)
 {
 	// Clamp defensively so an out-of-range value can't crash the switcher.
-	// Range is 0..4 (Overview, Code, Assets, LodAudit, Settings).
+	// (Loose upper bound: tiers without the LOD destination top out at 3.)
 	if (Index < 0) Index = 0;
 	if (Index > 4) Index = 4;
 	CurrentDestinationIndex = Index;
@@ -222,6 +230,7 @@ void SShintToolsPanel::SetDestinationIndex(int32 Index)
 
 SShintToolsPanel::~SShintToolsPanel()
 {
+	// [AGENT-STRIP-BEGIN]
 	// Clean up the Explain modal + its rotating-status ticker. Without this,
 	// the SWindow was orphaned in FSlateApplication's window list whenever the
 	// panel was destroyed without the user clicking Close, and the ticker
@@ -237,6 +246,7 @@ SShintToolsPanel::~SShintToolsPanel()
 		ExplainWindow->RequestDestroyWindow();
 		ExplainWindow.Reset();
 	}
+	// [AGENT-STRIP-END]
 }
 
 #undef LOCTEXT_NAMESPACE

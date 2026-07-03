@@ -35,7 +35,9 @@ enum class EShintDestination : uint8
 	Overview,
 	Code,
 	Assets,
+	// [LOD-STRIP-BEGIN]
 	LodAudit,   // Studio tier — hidden from the rail on lower tiers
+	// [LOD-STRIP-END]
 	Settings,
 };
 

@@ -203,6 +203,7 @@ struct FShintAssetFixResult
 };
 DECLARE_DELEGATE_OneParam(FOnShintAssetFixComplete, const FShintAssetFixResult&);
 
+// [LOD-STRIP-BEGIN]
 // ─────────────────────────────────────────────────────────────────────────────
 // LOD Auditor (Studio tier) — mesh/texture/material optimisation audit.
 // Mirrors the core Finding shape from /assets/lod/audit. The plugin extracts
@@ -269,6 +270,7 @@ struct FShintLodAuditResult
 	TArray<FShintLodFinding> Findings;
 };
 DECLARE_DELEGATE_OneParam(FOnShintLodAuditComplete, const FShintLodAuditResult&);
+// [LOD-STRIP-END]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Quality Score (Slice B) — full breakdown fetched via /metrics/score/latest
@@ -317,6 +319,7 @@ DECLARE_DELEGATE_OneParam(FOnShintQualityScoreHistoryComplete, const FShintQuali
 // The "Send to Dashboard" feature is a paid-tier-only POST that lives in
 // its own translation unit so other builds can skip the code path.
 
+// [AGENT-STRIP-BEGIN]
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent — Auto-Fix Plan (Indie tier)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -368,6 +371,7 @@ struct FShintAgentExplainResponse
 };
 
 DECLARE_DELEGATE_OneParam(FOnShintAgentExplainComplete, const FShintAgentExplainResponse&);
+// [AGENT-STRIP-END]
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -540,6 +544,7 @@ public:
 	void ReportAssetFixesToServer(const TArray<FShintAssetIssue>& Fixed,
 	                              FOnShintAssetFixComplete OnComplete);
 
+	// [LOD-STRIP-BEGIN]
 	// ── LOD Auditor (Studio tier) — local engine ─────────────────────────────
 	/**
 	 * Audits every mesh / texture / material under /Game for LOD and
@@ -553,6 +558,7 @@ public:
 	 */
 	void AuditLods(const FString& Profile, bool bExplainTop,
 	               FOnShintLodAuditComplete OnComplete);
+	// [LOD-STRIP-END]
 
 	// ── Asset Naming Bot — external web dashboard ────────────────────────────
 	//   Moved to FShintDashboardSync::SendAssetNaming
@@ -562,6 +568,7 @@ public:
 	void SendDashboardReport(const FShintDashboardReport& Report,
 	                         FOnShintDashboardComplete OnComplete);
 
+	// [AGENT-STRIP-BEGIN]
 	// ── Agent — Auto-Fix Plan (Indie tier) ────────────────────────────────────
 	/**
 	 * Sends the validator's last result to /agent/plan and receives a
@@ -588,6 +595,7 @@ public:
 	 */
 	void RequestExplainIssue(const FShintCodeIssue&      Issue,
 	                         FOnShintAgentExplainComplete OnComplete);
+	// [AGENT-STRIP-END]
 
 	// ── Generic ───────────────────────────────────────────────────────────────
 	void SendRequest(const FString& FullUrl, EShintHttpMethod Method,
@@ -611,7 +619,9 @@ private:
 	static FString MethodToString(EShintHttpMethod Method);
 	static FShintValidateResult  ParseValidateResponse (const FShintRequestResult& Raw);
 	static FShintAssetScanResult ParseAssetScanResponse(const FShintRequestResult& Raw);
+	// [LOD-STRIP-BEGIN]
 	static FShintLodAuditResult  ParseLodAuditResponse (const FShintRequestResult& Raw);
+	// [LOD-STRIP-END]
 	static FShintFixResult       ParseFixResponse      (const FShintRequestResult& Raw);
 	static FShintFixResult       ParseTreeSitterFixResponse(const FShintRequestResult& Raw);
 	// Slice B helpers — populate one snapshot from a JSON object that matches
@@ -627,7 +637,9 @@ private:
 	                                 TArray<FShintCodeIssue>     TreeSitterIssues,
 	                                 FOnShintFixComplete         OnComplete);
 
+	// [AGENT-STRIP-BEGIN]
 	static FShintAgentPlanResult ParseAgentPlanResponse(const FShintRequestResult& Raw);
+	// [AGENT-STRIP-END]
 
 	FShintCoreConfig Config;
 };

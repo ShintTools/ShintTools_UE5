@@ -39,6 +39,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 PLUGIN_NAME = "ShintTools"
 
+# The Fab submission is built FROM the generated free tree (paid modules
+# stripped, comments scrubbed, dev files dropped) — never from the dev
+# working tree. Regenerate it with tools/build_tier_release.py.
+SOURCE = REPO / "dist_tier" / "release-marketplace"
+
 # Only these top-level entries are shipped to Fab. Everything else in the
 # repo (tools/, .github/, CHANGELOG.md, README.md, .vscode/, .codegraph/,
 # mempalace.yaml, .editorconfig, .gitignore, ...) is dev-only and excluded.
@@ -59,13 +64,18 @@ _STRIP_DIRS = {
 
 
 def build() -> Path:
+    if not (SOURCE / "ShintTools.uplugin").is_file():
+        raise SystemExit(
+            "release-marketplace tree not found at "
+            f"{SOURCE} — run `python tools/build_tier_release.py` first.")
+
     stage = Path(tempfile.mkdtemp(prefix="shint_fab_"))
     plugin = stage / PLUGIN_NAME
     plugin.mkdir(parents=True)
 
     try:
         for name in _KEEP:
-            src = REPO / name
+            src = SOURCE / name
             if not src.exists():
                 print(f"   WARN: '{name}' not found — skipped.")
                 continue

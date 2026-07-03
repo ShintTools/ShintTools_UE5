@@ -112,64 +112,84 @@ void FShintDashboardSync::SendCodeValidator(
 		return;
 	}
 
-	// Privacy: the dashboard receives METRICS ONLY — per-file
-	// findings, counts and file metadata — never raw source. The plugin has
-	// already run the validator locally, so we transmit the resulting issues
-	// (rule id, severity, category, line, message) instead of file content.
-	// `content`, snippets and source context are deliberately never sent — the
-	// file is not even read from disk here. The dashboard's noise-vs-signal
-	// ratio is preserved by the `totals.files_scanned` aggregate below.
+	// Privacy: the dashboard receives METRICS ONLY — file metadata, per-issue
+	// findings and aggregate counts, never raw source. The plugin has already
+	// run the validator locally, so we transmit the resulting issues (severity,
+	// category, line, rule title + message) instead of file content. Snippet,
+	// FileContent, ContextBefore/After and FixSuggestion are deliberately never
+	// sent — the file is not even read from disk here.
 	//
-	// Files with issues are emitted in first-seen order; a capped resend (HTTP
-	// 413) takes a prefix slice — the plan's `limit` comes from the 413 body so
-	// the behaviour tracks the server quota without hardcoding a per-tier number.
-	TArray<TSharedPtr<FJsonValue>> AllFiles;
+	// Wire shape follows the v2 metrics-only contract:
+	//   { project_name, engine, files[], issues[], stats }
+	// where each files[] entry is a .strict() FileItem carrying ONLY
+	// {name, path, type, lines_count} (any extra field is rejected with 400),
+	// and issues[] is a flat top-level array keyed by project-relative
+	// file_path. Files with issues are emitted in first-seen order; a capped
+	// resend (HTTP 413) takes a prefix slice of files and their issues follow —
+	// the plan's `limit` comes from the 413 body so the behaviour tracks the
+	// server quota without hardcoding a per-tier number.
+	struct FFileRecord
 	{
-		TArray<FString> FileOrder;
-		TMap<FString, TArray<TSharedPtr<FJsonValue>>> IssuesByFile;
+		TSharedPtr<FJsonObject>        Meta;    // strict files[] entry
+		TArray<TSharedPtr<FJsonValue>> Issues;  // this file's issues[] entries
+	};
+	TArray<FFileRecord> Records;
+	{
+		TMap<FString, int32> IndexByFile;
 		TMap<FString, int32> LinesByFile;
 		for (const FShintCodeIssue& Issue : LastResult.Issues)
 		{
 			if (Issue.FilePath.IsEmpty()) continue;
-			TArray<TSharedPtr<FJsonValue>>& Arr = IssuesByFile.FindOrAdd(Issue.FilePath);
-			if (Arr.Num() == 0) FileOrder.Add(Issue.FilePath);
+
+			int32 Idx;
+			if (const int32* Found = IndexByFile.Find(Issue.FilePath))
+			{
+				Idx = *Found;
+			}
+			else
+			{
+				Idx = Records.AddDefaulted();
+				IndexByFile.Add(Issue.FilePath, Idx);
+			}
 			if (Issue.LinesCount > 0 && !LinesByFile.Contains(Issue.FilePath))
 				LinesByFile.Add(Issue.FilePath, Issue.LinesCount);
 
-			// Findings only — never Issue.Snippet / FileContent / fix text.
+			// Project-relative path only — never leak the absolute local layout
+			// (e.g. C:/Users/<name>/...) to the external dashboard.
+			FString RelFile = Issue.FilePath;
+			if (!FPaths::MakePathRelativeTo(RelFile, *FPaths::ProjectDir()))
+				RelFile = FPaths::GetCleanFilename(Issue.FilePath);
+
+			// Findings only — never Snippet / FileContent / FixSuggestion.
 			TSharedRef<FJsonObject> IO = MakeShared<FJsonObject>();
-			IO->SetStringField(TEXT("rule_id"),   Issue.RuleId);
-			IO->SetStringField(TEXT("rule_name"), Issue.RuleName);
-			IO->SetStringField(TEXT("severity"),  Issue.Severity);
-			IO->SetStringField(TEXT("category"),  Issue.Category);
-			IO->SetNumberField(TEXT("line"),      Issue.Line);
-			IO->SetStringField(TEXT("message"),   Issue.Message);
-			Arr.Add(MakeShared<FJsonValueObject>(IO));
+			IO->SetStringField(TEXT("file_path"),   RelFile);
+			IO->SetNumberField(TEXT("line"),        Issue.Line);
+			IO->SetStringField(TEXT("category"),    Issue.Category);
+			IO->SetStringField(TEXT("severity"),    Issue.Severity);
+			IO->SetStringField(TEXT("title"),
+				Issue.RuleName.IsEmpty() ? Issue.RuleId : Issue.RuleName);
+			IO->SetStringField(TEXT("description"), Issue.Message);
+			IO->SetStringField(TEXT("suggestion"),  TEXT(""));
+			Records[Idx].Issues.Add(MakeShared<FJsonValueObject>(IO));
 		}
 
-		for (const FString& AbsPath : FileOrder)
+		for (const TPair<FString, int32>& Pair : IndexByFile)
 		{
+			const FString& AbsPath = Pair.Key;
 			const FString Ext = FPaths::GetExtension(AbsPath).ToLower();
 			const FString TypeStr =
 				(Ext == TEXT("h") || Ext == TEXT("hpp")) ? TEXT("header") : TEXT("cpp");
 
-			// Project-relative path only — never leak the absolute local layout
-			// (e.g. C:/Users/<name>/...) to the external dashboard. Validator
-			// targets live under the project, so this resolves to e.g.
-			// "Source/MyGame"; anything outside falls back to the folder name.
 			FString RelDir = FPaths::GetPath(AbsPath);
 			if (!FPaths::MakePathRelativeTo(RelDir, *FPaths::ProjectDir()))
 				RelDir = FPaths::GetCleanFilename(FPaths::GetPath(AbsPath));
 
-			TArray<TSharedPtr<FJsonValue>>& FileIssues = IssuesByFile[AbsPath];
 			TSharedRef<FJsonObject> FO = MakeShared<FJsonObject>();
 			FO->SetStringField(TEXT("name"),        FPaths::GetCleanFilename(AbsPath));
 			FO->SetStringField(TEXT("path"),        RelDir);
 			FO->SetStringField(TEXT("type"),        TypeStr);
 			FO->SetNumberField(TEXT("lines_count"), LinesByFile.FindRef(AbsPath));
-			FO->SetNumberField(TEXT("issue_count"), FileIssues.Num());
-			FO->SetArrayField (TEXT("issues"),      FileIssues);
-			AllFiles.Add(MakeShared<FJsonValueObject>(FO));
+			Records[Pair.Value].Meta = FO;
 		}
 	}
 
@@ -177,39 +197,45 @@ void FShintDashboardSync::SendCodeValidator(
 		/ TEXT("api/public/code-validator/analyze");
 	const FString ProjectName = Cfg.ProjectName;
 	const TMap<FString, FString> Headers = BuildAuthHeaders(Cfg);
-	const int32 TotalFiles = AllFiles.Num();
+	const int32 TotalFiles = Records.Num();
 
 	// Project-level metrics travel with every (re)send so the dashboard can
-	// show totals even when the per-file list is capped by the plan.
-	const int32 FilesScanned  = LastResult.FilesScanned;
-	const int32 TotalIssues   = LastResult.TotalIssues;
-	const int32 TotalErrors   = LastResult.TotalErrors;
-	const int32 TotalWarnings = LastResult.TotalWarnings;
-	const float QualityScore  = LastResult.QualityScoreOverall;
+	// show totals even when the per-file list is capped by the plan. Issue /
+	// error / warning counts are derivable server-side from issues[]; only the
+	// non-derivable aggregates (files scanned, quality score) ride in stats.
+	const int32 FilesScanned = LastResult.FilesScanned;
+	const float QualityScore = LastResult.QualityScoreOverall;
 
-	// Serialise the body from the first <Take> files (Take<=0 => all).
+	// Serialise the body from the first <Take> files (Take<=0 => all); the
+	// issues for trimmed-out files are dropped with them so the two arrays stay
+	// consistent under a 413 cap.
 	auto BuildBody =
-		[AllFiles, ProjectName, FilesScanned, TotalIssues, TotalErrors,
-		 TotalWarnings, QualityScore](int32 Take) -> FString
+		[Records, ProjectName, FilesScanned, QualityScore](int32 Take) -> FString
 	{
-		const int32 N = (Take <= 0 || Take > AllFiles.Num())
-			? AllFiles.Num() : Take;
-		TArray<TSharedPtr<FJsonValue>> Slice;
-		Slice.Reserve(N);
-		for (int32 i = 0; i < N; ++i) Slice.Add(AllFiles[i]);
+		const int32 N = (Take <= 0 || Take > Records.Num())
+			? Records.Num() : Take;
+		TArray<TSharedPtr<FJsonValue>> FilesArr;
+		TArray<TSharedPtr<FJsonValue>> IssuesArr;
+		FilesArr.Reserve(N);
+		for (int32 i = 0; i < N; ++i)
+		{
+			if (Records[i].Meta.IsValid())
+				FilesArr.Add(MakeShared<FJsonValueObject>(
+					Records[i].Meta.ToSharedRef()));
+			IssuesArr.Append(Records[i].Issues);
+		}
 
-		TSharedRef<FJsonObject> Totals = MakeShared<FJsonObject>();
-		Totals->SetNumberField(TEXT("files_scanned"),  FilesScanned);
-		Totals->SetNumberField(TEXT("total_issues"),   TotalIssues);
-		Totals->SetNumberField(TEXT("total_errors"),   TotalErrors);
-		Totals->SetNumberField(TEXT("total_warnings"), TotalWarnings);
+		TSharedRef<FJsonObject> Stats = MakeShared<FJsonObject>();
+		Stats->SetNumberField(TEXT("scanned_files"), FilesScanned);
 		if (QualityScore >= 0.f)
-			Totals->SetNumberField(TEXT("quality_score"), QualityScore);
+			Stats->SetNumberField(TEXT("quality_score"), QualityScore);
 
 		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 		Body->SetStringField(TEXT("project_name"), ProjectName);
-		Body->SetArrayField (TEXT("files"),        Slice);
-		Body->SetObjectField(TEXT("totals"),       Totals);
+		Body->SetStringField(TEXT("engine"),       TEXT("unreal"));
+		Body->SetArrayField (TEXT("files"),        FilesArr);
+		Body->SetArrayField (TEXT("issues"),       IssuesArr);
+		Body->SetObjectField(TEXT("stats"),        Stats);
 		return FShintCoreClient::SerializeJson(Body);
 	};
 
@@ -276,31 +302,37 @@ void FShintDashboardSync::SendAssetNaming(
 		return;
 	}
 
-	TArray<TSharedPtr<FJsonValue>> ItemsArr;
+	// v2 metrics-only contract: asset_paths[] with {asset_path, name, type,
+	// category}. Only naming metadata travels — never asset bytes or content.
+	// (The legacy items[] shape is still accepted server-side during the
+	// deprecation window, but we emit the current form.)
+	TArray<TSharedPtr<FJsonValue>> AssetsArr;
 	for (const FShintAssetIssue& Issue : LastResult.Issues)
 	{
 		const FString Name     = FPaths::GetBaseFilename(Issue.AssetPath);
-		const FString Path     = FPaths::GetPath(Issue.AssetPath);
 		const FString Category =
 			FShintCoreClient::AssetTypeToCategory(Issue.AssetType);
+		const FString TypeStr  =
+			Issue.AssetType.IsEmpty() ? TEXT("asset") : Issue.AssetType;
 
 		TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
-		O->SetStringField(TEXT("name"),     Name);
-		O->SetStringField(TEXT("path"),     Path);
-		O->SetStringField(TEXT("type"),     TEXT("asset"));
-		O->SetStringField(TEXT("category"), Category);
-		ItemsArr.Add(MakeShared<FJsonValueObject>(O));
+		O->SetStringField(TEXT("asset_path"), Issue.AssetPath);
+		O->SetStringField(TEXT("name"),       Name);
+		O->SetStringField(TEXT("type"),       TypeStr);
+		O->SetStringField(TEXT("category"),   Category);
+		AssetsArr.Add(MakeShared<FJsonValueObject>(O));
 	}
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetStringField(TEXT("project_name"), Cfg.ProjectName);
-	Body->SetArrayField (TEXT("items"),        ItemsArr);
+	Body->SetStringField(TEXT("engine"),       TEXT("unreal"));
+	Body->SetArrayField (TEXT("asset_paths"),  AssetsArr);
 
 	const FString Url = Cfg.DashboardUrl
 		/ TEXT("api/public/naming-bot/analyze");
 	UE_LOG(LogShintTools, Verbose,
 		TEXT("Dashboard: sending %d asset items to %s"),
-		ItemsArr.Num(), *Url);
+		AssetsArr.Num(), *Url);
 
 	Client.SendRequest(Url, EShintHttpMethod::POST,
 		FShintCoreClient::SerializeJson(Body),

@@ -28,7 +28,9 @@
 #include "SShintToolsPanel_Private.h"
 #include "ShintTools.h"
 #include "ShintCoreClient.h"
+// [DASH-STRIP-BEGIN]
 #include "ShintDashboardSync.h"
+// [DASH-STRIP-END]
 
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
@@ -260,6 +262,7 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 F
 // ─────────────────────────────────────────────────────────────────────────────
 // Dashboard push — code
 // ─────────────────────────────────────────────────────────────────────────────
+// [DASH-STRIP-BEGIN]
 void SShintToolsPanel::OnCodeDashboardComplete(const FShintWebDashboardResult& Result)
 {
 	if (!SendCodeBtnLabel.IsValid()) return;
@@ -302,6 +305,7 @@ void SShintToolsPanel::OnCodeDashboardComplete(const FShintWebDashboardResult& R
 			return false;
 		}), 3.f);
 }
+// [DASH-STRIP-END]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Asset scan chain
@@ -406,6 +410,7 @@ void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
 	}
 }
 
+// [DASH-STRIP-BEGIN]
 void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& Result)
 {
 	if (!SendAssetBtnLabel.IsValid()) return;
@@ -446,5 +451,6 @@ void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& 
 			return false;
 		}), 3.f);
 }
+// [DASH-STRIP-END]
 
 #undef LOCTEXT_NAMESPACE

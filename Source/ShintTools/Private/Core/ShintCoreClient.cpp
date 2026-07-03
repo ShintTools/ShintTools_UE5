@@ -219,11 +219,18 @@ void FShintCoreClient::SendRequest(
 	// BindSP keeps FShintCoreClient alive via shared ref — safe if destroyed before response
 	Req->OnProcessRequestComplete().BindSP(
 		AsShared(), &FShintCoreClient::OnHttpRequestComplete, OnComplete);
-	// 90s covers full-project scans; /agent/explain runs the local LLM and
-	// takes 30-45s typical / 60-90s on slow CPUs — give it 180s so a single
-	// slow generation doesn't cut the spinner off mid-stream.
-	const bool bIsLlmCall = FullUrl.Contains(TEXT("/agent/explain"));
-	Req->SetTimeout(bIsLlmCall ? 180.0f : 90.0f);
+	// 90s covers full-project scans.
+	float TimeoutSecs = 90.0f;
+	// [AGENT-STRIP-BEGIN]
+	// /agent/explain runs the local LLM and takes 30-45s typical / 60-90s on
+	// slow CPUs — give it 180s so a single slow generation doesn't cut the
+	// spinner off mid-stream.
+	if (FullUrl.Contains(TEXT("/agent/explain")))
+	{
+		TimeoutSecs = 180.0f;
+	}
+	// [AGENT-STRIP-END]
+	Req->SetTimeout(TimeoutSecs);
 
 	if (!Req->ProcessRequest())
 	{

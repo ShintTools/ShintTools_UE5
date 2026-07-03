@@ -2,6 +2,22 @@
 
 ---
 
+## [Unreleased] — Dashboard send: v2 metrics-only contract
+
+### Changed
+- **"Send to Dashboard" migrated to the v2 metrics-only server contract.** Code
+  Validator now posts `{ project_name, engine, files[], issues[], stats }` —
+  each `files[]` entry is a `.strict()` FileItem of only
+  `{name, path, type, lines_count}`, and per-issue findings move to a flat
+  top-level `issues[]` keyed by project-relative `file_path`
+  (`title`/`description`, `suggestion` intentionally empty — never fix text).
+  Naming Bot now posts `asset_paths[]` (with real asset `type`) instead of the
+  deprecated `items[]`. Still strictly metrics-only: no source, snippets or fix
+  suggestions ever leave the machine, matching the server's source-rejecting
+  pre-check. (`Source/ShintTools/Private/Core/ShintDashboardSync.cpp`)
+
+---
+
 ## [Unreleased — develop-paid] — Studio LOD Auditor: Asset Optimizer completion
 
 ### Added (Studio / paid-only)

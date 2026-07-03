@@ -15,7 +15,9 @@
 #include "SShintToolsPanel_Private.h"
 #include "ShintTools.h"
 #include "ShintCoreClient.h"
+// [DASH-STRIP-BEGIN]
 #include "ShintDashboardSync.h"
+// [DASH-STRIP-END]
 
 #include "ShintStyle.h"
 #include "SShintSeverityBadge.h"
@@ -457,6 +459,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 					FSlateColor(C_Green()))
 				]
 			]
+			// [DASH-STRIP-BEGIN]
 			+ SWrapBox::Slot()
 			[
 				// "Send to Dashboard" is a paid-tier feature: it POSTs the entire
@@ -483,6 +486,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 					FSlateColor(C_Blue()))
 				]
 			]
+			// [DASH-STRIP-END]
 		];
 
 	return SNew(SVerticalBox)
@@ -665,6 +669,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 								]
 							]
 						]
+						// [AGENT-STRIP-BEGIN]
 						// LLM pivot — per-issue "Explain" button. Hidden on Free
 						// tier so the user never gets a 403 mid-click; Tier comes
 						// from the validate response's top-level summary.tier.
@@ -691,6 +696,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 								]
 							]
 						]
+						// [AGENT-STRIP-END]
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 						[
 							SNew(STextBlock).Text(FText::FromString(AutoBadge)).Font(F_Label())
@@ -846,12 +852,14 @@ FReply SShintToolsPanel::OnDeselectAllCodeClicked()
 	return FReply::Handled();
 }
 
+// [DASH-STRIP-BEGIN]
 FReply SShintToolsPanel::OnSendCodeToDashboardClicked()
 {
 	DashboardSync->SendCodeValidator(LastCodeResult,
 		FOnShintWebDashboardComplete::CreateSP(this, &SShintToolsPanel::OnCodeDashboardComplete));
 	return FReply::Handled();
 }
+// [DASH-STRIP-END]
 
 FReply SShintToolsPanel::OnIgnoreSingleFix(FShintIssueItemPtr Item)
 {
