@@ -68,6 +68,20 @@ MODULES = {
             "ShintCoreClient_Lod", "SShintToolsPanel_Lod", "FShintLodFinding",
             "BuildLodAuditSection", "OnAuditLodsClicked", "LodAudit", "ELodTab",
             "ApplyLodFixDuplicate", "RefreshLodStats",
+            # Types / delegates / client API stripped from the headers.
+            "FShintLodFindingItem", "FShintLodFindingPtr", "FShintLodAuditResult",
+            "FOnShintLodAuditComplete", "AuditLods", "ParseLodAuditResponse",
+            # Panel members — auto-derivation only sees method definitions, so a
+            # kept file touching one of these would slip through without them.
+            "LastLodResult", "LodFindingItems", "LodFilteredItems",
+            "LodThumbnailPool", "LodFindingListView", "LodState",
+            "bLodExplainTop", "LodProfile", "LodActiveTab", "LodSearchText",
+            "LodGroupFilter", "LodFormatFilter", "LodSeverityFilter",
+            "LodFiles_Label", "LodFilesSub_Label", "LodMemImpact_Label",
+            "LodMemSavings_Label", "LodSavingsPct_Label", "LodFrameTime_Label",
+            "LodIssues_Label", "LodIssuesSub_Label", "LodFixSelected_Label",
+            "LodAudited_Label", "LodVramSaved_Label", "AuditLodBtn",
+            "AuditLodBtnLabel", "LodEmptyState",
         ],
         "endpoints": ["assets/lod"],
     },

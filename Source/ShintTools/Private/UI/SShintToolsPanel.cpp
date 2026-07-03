@@ -77,7 +77,9 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 		{
 		case EShintDestination::Code:     return LOCTEXT("TitleCode",     "Code Validator");
 		case EShintDestination::Assets:   return LOCTEXT("TitleAssets",   "Asset Naming Bot");
+		// [LOD-STRIP-BEGIN]
 		case EShintDestination::LodAudit: return LOCTEXT("TitleLod",      "LOD Auditor");
+		// [LOD-STRIP-END]
 		case EShintDestination::Settings: return LOCTEXT("TitleSettings", "Settings");
 		case EShintDestination::Overview:
 		default:                          return LOCTEXT("TitleOverview", "Overview");
@@ -200,9 +202,11 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 					+ SWidgetSwitcher::Slot()
 					[ WrapSection(BuildAssetNamingSection()) ]
 
+					// [LOD-STRIP-BEGIN]
 					// 3 — LOD Auditor (Studio tier; rail entry hidden on lower tiers)
 					+ SWidgetSwitcher::Slot()
 					[ WrapSection(BuildLodAuditSection()) ]
+					// [LOD-STRIP-END]
 
 					// 4 — Settings (was Config Section, now its own destination)
 					+ SWidgetSwitcher::Slot()
@@ -216,7 +220,7 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 void SShintToolsPanel::SetDestinationIndex(int32 Index)
 {
 	// Clamp defensively so an out-of-range value can't crash the switcher.
-	// Range is 0..4 (Overview, Code, Assets, LodAudit, Settings).
+	// (Loose upper bound: tiers without the LOD destination top out at 3.)
 	if (Index < 0) Index = 0;
 	if (Index > 4) Index = 4;
 	CurrentDestinationIndex = Index;

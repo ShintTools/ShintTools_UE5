@@ -108,6 +108,7 @@ struct FShintAssetItem
 };
 using FShintAssetItemPtr = TSharedPtr<FShintAssetItem>;
 
+// [LOD-STRIP-BEGIN]
 // One LOD audit finding row. Wraps FShintLodFinding (the client/transport
 // struct) with display-only state. Guidance + AiGuidance are rendered in an
 // expandable detail block under the row.
@@ -125,6 +126,7 @@ using FShintLodFindingPtr = TSharedPtr<FShintLodFindingItem>;
 
 // Asset Optimizer result tab — findings are grouped by asset family.
 enum class ELodTab : uint8 { Textures, Meshes, Materials };
+// [LOD-STRIP-END]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Panel widget
@@ -184,6 +186,7 @@ private:
 	TSharedRef<SWidget> BuildAssetResultsPanel();
 	TSharedRef<SWidget> BuildAssetTypeMenuContent();
 
+	// [LOD-STRIP-BEGIN]
 	// ── LOD Auditor / Asset Optimizer (Studio tier) ───────────────────────────
 	TSharedRef<SWidget> BuildLodAuditSection();
 	TSharedRef<SWidget> BuildLodKpiRow();
@@ -192,6 +195,7 @@ private:
 	TSharedRef<SWidget> BuildLodTableHeader();
 	TSharedRef<ITableRow> GenerateLodFindingRow(
 		FShintLodFindingPtr Item, const TSharedRef<STableViewBase>& Owner);
+	// [LOD-STRIP-END]
 
 	// ── Row generators for SListView ──────────────────────────────────────────
 	TSharedRef<ITableRow> GenerateCodeIssueRow(
@@ -250,6 +254,7 @@ private:
 	FReply OnSendAssetToDashboardClicked();
 	// [DASH-STRIP-END]
 
+	// [LOD-STRIP-BEGIN]
 	// ── LOD Auditor handlers ──────────────────────────────────────────────────
 	FReply OnAuditLodsClicked();
 	void   OnLodAuditComplete(const FShintLodAuditResult& Result);
@@ -266,6 +271,7 @@ private:
 	// Returns false + fills OutError on failure; OutNewPath = new asset path.
 	bool   ApplyLodFixDuplicate(const FShintLodFinding& Finding,
 	                            FString& OutNewPath, FString& OutError);
+	// [LOD-STRIP-END]
 
 	// ── HTTP callbacks ────────────────────────────────────────────────────────
 	void OnHealthCheckComplete(const FShintRequestResult& Result);
@@ -339,22 +345,27 @@ private:
 
 	FShintValidateResult  LastCodeResult;
 	FShintAssetScanResult LastAssetResult;
+	// [LOD-STRIP-BEGIN]
 	FShintLodAuditResult  LastLodResult;       // LOD Auditor (Studio)
+	// [LOD-STRIP-END]
 	FShintQualityScoreSnapshot LastQualityScore;  // Slice B
 
 	// All issues from last scan
 	TArray<FShintIssueItemPtr> AllCodeItems;
 	TArray<FShintAssetItemPtr> AllAssetItems;
+	// [LOD-STRIP-BEGIN]
 	TArray<FShintLodFindingPtr> LodFindingItems;    // all findings from last audit
 	TArray<FShintLodFindingPtr> LodFilteredItems;   // visible rows (tab + filters)
 	// Shared thumbnail renderer pool for the Asset Optimizer table (Stage 2b).
 	// Lazily created on first row generation; one pool backs every row's 34px
 	// thumbnail so the editor renders real asset previews instead of a swatch.
 	TSharedPtr<class FAssetThumbnailPool> LodThumbnailPool;
+	// [LOD-STRIP-END]
 	// Currently visible (after filter)
 	TArray<FShintIssueItemPtr> CodeIssueItems;
 	TArray<FShintAssetItemPtr> AssetIssueItems;
 
+	// [LOD-STRIP-BEGIN]
 	// LOD Auditor / Asset Optimizer UI state
 	EModuleState LodState        = EModuleState::Idle;
 	bool         bLodExplainTop  = false;     // "Explain top issues" toggle
@@ -364,6 +375,7 @@ private:
 	FString      LodGroupFilter    = TEXT("All Groups");
 	FString      LodFormatFilter   = TEXT("All Formats");
 	FString      LodSeverityFilter = TEXT("All Severities");
+	// [LOD-STRIP-END]
 
 	EIssueFilter         CurrentFilter            = EIssueFilter::All;
 	EIssueCategoryFilter CurrentCategoryFilter    = EIssueCategoryFilter::All;
@@ -389,6 +401,7 @@ private:
 	// ── Slate refs ────────────────────────────────────────────────────────────
 	TSharedPtr<SListView<FShintIssueItemPtr>> CodeIssueListView;
 	TSharedPtr<SListView<FShintAssetItemPtr>> AssetIssueListView;
+	// [LOD-STRIP-BEGIN]
 	TSharedPtr<SListView<FShintLodFindingPtr>> LodFindingListView;
 
 	// KPI tiles (Asset Optimizer): value + colored breakdown subtitle.
@@ -407,6 +420,7 @@ private:
 	TSharedPtr<SButton>    AuditLodBtn;
 	TSharedPtr<STextBlock> AuditLodBtnLabel;
 	TSharedPtr<SWidget>    LodEmptyState;
+	// [LOD-STRIP-END]
 
 	TSharedPtr<STextBlock> CodeFiles_Label;
 	TSharedPtr<STextBlock> CodeErrors_Label;

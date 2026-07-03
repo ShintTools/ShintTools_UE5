@@ -203,6 +203,7 @@ struct FShintAssetFixResult
 };
 DECLARE_DELEGATE_OneParam(FOnShintAssetFixComplete, const FShintAssetFixResult&);
 
+// [LOD-STRIP-BEGIN]
 // ─────────────────────────────────────────────────────────────────────────────
 // LOD Auditor (Studio tier) — mesh/texture/material optimisation audit.
 // Mirrors the core Finding shape from /assets/lod/audit. The plugin extracts
@@ -269,6 +270,7 @@ struct FShintLodAuditResult
 	TArray<FShintLodFinding> Findings;
 };
 DECLARE_DELEGATE_OneParam(FOnShintLodAuditComplete, const FShintLodAuditResult&);
+// [LOD-STRIP-END]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Quality Score (Slice B) — full breakdown fetched via /metrics/score/latest
@@ -542,6 +544,7 @@ public:
 	void ReportAssetFixesToServer(const TArray<FShintAssetIssue>& Fixed,
 	                              FOnShintAssetFixComplete OnComplete);
 
+	// [LOD-STRIP-BEGIN]
 	// ── LOD Auditor (Studio tier) — local engine ─────────────────────────────
 	/**
 	 * Audits every mesh / texture / material under /Game for LOD and
@@ -555,6 +558,7 @@ public:
 	 */
 	void AuditLods(const FString& Profile, bool bExplainTop,
 	               FOnShintLodAuditComplete OnComplete);
+	// [LOD-STRIP-END]
 
 	// ── Asset Naming Bot — external web dashboard ────────────────────────────
 	//   Moved to FShintDashboardSync::SendAssetNaming
@@ -615,7 +619,9 @@ private:
 	static FString MethodToString(EShintHttpMethod Method);
 	static FShintValidateResult  ParseValidateResponse (const FShintRequestResult& Raw);
 	static FShintAssetScanResult ParseAssetScanResponse(const FShintRequestResult& Raw);
+	// [LOD-STRIP-BEGIN]
 	static FShintLodAuditResult  ParseLodAuditResponse (const FShintRequestResult& Raw);
+	// [LOD-STRIP-END]
 	static FShintFixResult       ParseFixResponse      (const FShintRequestResult& Raw);
 	static FShintFixResult       ParseTreeSitterFixResponse(const FShintRequestResult& Raw);
 	// Slice B helpers — populate one snapshot from a JSON object that matches

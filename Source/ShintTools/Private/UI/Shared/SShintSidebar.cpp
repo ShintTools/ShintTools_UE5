@@ -63,9 +63,11 @@ void SShintSidebar::Construct(const FArguments& InArgs)
 		[ BuildNavButton(EShintDestination::Code,     NSLOCTEXT("Sidebar","Code",    "Code"),     TEXT("ShintTools.Icons.Search")) ];
 	Stack->AddSlot().AutoHeight()
 		[ BuildNavButton(EShintDestination::Assets,   NSLOCTEXT("Sidebar","Assets",  "Assets"),   TEXT("ShintTools.Icons.Grid")) ];
+	// [LOD-STRIP-BEGIN]
 	// LOD Auditor — Studio-tier only; the button hides itself for Free/Indie.
 	Stack->AddSlot().AutoHeight()
 		[ BuildNavButton(EShintDestination::LodAudit, NSLOCTEXT("Sidebar","LodAudit","LOD Auditor"), TEXT("ShintTools.Icons.Grid"), /*bStudioOnly*/ true) ];
+	// [LOD-STRIP-END]
 	Stack->AddSlot()
 		.FillHeight(1.f)
 		[ SNew(SSpacer) ];
