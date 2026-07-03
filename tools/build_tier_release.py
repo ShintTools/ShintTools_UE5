@@ -179,7 +179,13 @@ def _scrub_comments_shipped(text: str) -> str:
         two = body[j:j + 2]
         if two == "//":                       # line comment → drop to newline
             k = body.find("\n", j)
-            j = n if k == -1 else k
+            k = n if k == -1 else k
+            # FAB-STRIP markers are CONSUMED downstream by
+            # build_fab_source_pack.py (they delimit launcher-managed UI the
+            # Fab submission omits) — they must survive the scrub.
+            if "[FAB-STRIP" in body[j:k]:
+                out.append(body[j:k])
+            j = k
         elif two == "/*":                     # block comment → drop to */
             k = body.find("*/", j + 2)
             j = n if k == -1 else k + 2
