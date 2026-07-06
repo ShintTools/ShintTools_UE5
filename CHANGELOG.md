@@ -2,6 +2,34 @@
 
 ---
 
+## [Unreleased] — Tier-isolated branch model (Free / Indie / Studio)
+
+### Changed
+- **Per-plan release branches with true source isolation.** A customer's
+  install never even *contains* a higher tier's source: Free →
+  `release-marketplace` (LOD Auditor + AI agent + Send-to-Dashboard stripped),
+  Indie → `release-indie` (LOD Auditor stripped), Studio → `main` (full).
+  Branches are GENERATED from the single source of truth `develop-studio` by
+  `tools/build_tier_release.py` — never hand-committed. Module wiring in
+  shared files is delimited by `[LOD/AGENT/DASH-STRIP]` sentinel regions;
+  each generated tree was leak-checked (auto-derived symbols + paid endpoint
+  strings) and BuildPlugin-verified on UE_5.7.
+- **Free tree is fully sanitised.** All developer comments scrubbed from
+  shipped source (string-literal-safe; copyright headers kept), dev-only /
+  confidential files dropped (tools/, docs/, CI, security audits), sentinel
+  markers removed, and paid-feature marketing copy stripped from the welcome
+  dialog. Apply-fixes stays free — it drives the free `/validate/fix` route.
+- **Fab pack now builds only from the generated `release-marketplace` tree**
+  (`tools/build_fab_source_pack.py`); submission zip verified to contain no
+  paid symbols, endpoints, or strip markers.
+
+### Added
+- **CI tier leak gate** (`.github/workflows/tier-leak-gate.yml`): every
+  push/PR to `main`/`develop-studio` regenerates both stripped trees and
+  fails on any surviving paid symbol, endpoint string, or module file.
+
+---
+
 ## [Unreleased] — Dashboard send: v2 metrics-only contract
 
 ### Changed
