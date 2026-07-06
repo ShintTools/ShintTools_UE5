@@ -78,7 +78,17 @@ void FShintToolsModule::StartupModule()
 
 	RegisterTabSpawner();
 	ExtendLevelEditorMenu();
-	
+
+	// The welcome dialog is tier-gated, but the license probe below is
+	// ASYNC — at tab-spawn time GCachedTier is still "free" on a first run,
+	// so a paid user never saw the welcome. Re-attempt whenever a probe
+	// resolves: MaybeShowForTier's own guards (paid-only + once per machine)
+	// make every repeat a no-op. Subscribe BEFORE kicking the probe so the
+	// first resolve can't slip through.
+	OnLicenseResolved.AddLambda([]()
+	{
+		SShintWelcomeDialog::MaybeShowForTier(GetCachedTier());
+	});
 	RefreshTierAsync();
 
 #if SHINT_MARKETPLACE_BUILD
