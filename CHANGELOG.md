@@ -2,6 +2,35 @@
 
 ---
 
+## [1.1.4] — 2026-07-06 — Rename safety + tile cards + Free welcome
+
+### Fixed
+- **Asset rename no longer breaks references (all tiers).** The rename flow
+  kept deleting the redirector stub (`DeleteFixedUpRedirectors`) and leaned on
+  `[CoreRedirects]` as the fallback — but CoreRedirects are only read from the
+  `.ini` at editor startup, so anything `FixupReferencers` couldn't re-save in
+  the live session (the open level, read-only or unloaded packages) was left
+  dangling until the next launch. The redirector is now KEPT
+  (`LeaveFixedUpRedirectors`): referencers are still re-pointed at the new
+  asset, but every reference form resolves through the stub immediately. Users
+  can still sweep stubs via Content Browser → "Fix Up Redirectors".
+
+### Changed
+- **KPI tile cards unified across every module.** Code Validator, Asset Naming
+  Bot and LOD Auditor tiles now paint the same rounded card (BgCard fill +
+  subtle border) as the Overview hero, instead of flat squared surfaces.
+- **Per-category Quality breakdown strip removed** from the Code Validator
+  (Perf / Sec / BP / Maint / Naming). The overall QUALITY tile is the single
+  quality readout.
+- **"Fix all" moved onto the filter toolbar** (Unity layout) on both the Code
+  Validator and Asset Naming Bot, renamed from "Apply Selected" / "Apply
+  Corrections". The paid Send-to-Dashboard button stays in the footer.
+- **Welcome dialog now shows for the Free tier too** (once per project), with
+  Free-specific copy and an upgrade CTA instead of the paid "full edition"
+  unlock text.
+
+---
+
 ## [1.1.3] — 2026-07-06 — Panel design unification + fix precision
 
 ### Changed

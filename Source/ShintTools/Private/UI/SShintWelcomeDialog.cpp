@@ -24,12 +24,6 @@ namespace
 		return FPaths::Combine(FPaths::ProjectSavedDir(),
 			TEXT("ShintTools"), TEXT("welcome.txt"));
 	}
-
-	bool IsPaidTier(const FString& Tier)
-	{
-		const FString L = Tier.ToLower();
-		return L == TEXT("indie") || L == TEXT("studio") || L == TEXT("enterprise");
-	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -52,9 +46,11 @@ void SShintWelcomeDialog::MarkShown()
 
 void SShintWelcomeDialog::MaybeShowForTier(const FString& Tier)
 {
-	// Paid-only and once per machine/project. Called on every panel open, so
-	// both guards matter: free users never see it, paid users see it once.
-	if (!IsPaidTier(Tier) || HasBeenShown())
+	// Shown once per machine/project, for every tier including Free. Called on
+	// every panel open, so the HasBeenShown() guard is what keeps it to one
+	// appearance. The body text below adapts to the tier (Free gets its own
+	// copy + an upgrade CTA).
+	if (HasBeenShown())
 	{
 		return;
 	}
@@ -104,34 +100,54 @@ void SShintWelcomeDialog::Construct(const FArguments& InArgs)
 	const FText Heading = FText::FromString(
 		FString::Printf(TEXT("Welcome — ShintTools %s"), *TierLabel));
 
-	// What the tier unlocks + how to start. Studio adds the Phase-2 modules.
+	// What the tier unlocks + how to start. Free gets its own copy (the free
+	// edition is rule-capped, has no license "activation", and ends on an
+	// upgrade CTA); paid tiers describe the full unlock. Studio adds Phase-2.
+	const bool bIsFree = Tier.IsEmpty() || Tier.ToLower() == TEXT("free");
+
 	FString BodyStr;
-	BodyStr += TEXT("Thanks for activating ShintTools. Your license unlocks:\n\n");
-	BodyStr += TEXT("  - Deep Code Validator (full edition) — every C++ and Blueprint rule\n");
-	BodyStr += TEXT("    and one-click Auto-Fix.\n");
-	// [AGENT-STRIP-BEGIN]
-	BodyStr += TEXT("  - AI \"Explain\" — plain-language rationale on any finding.\n");
-	// [AGENT-STRIP-END]
-	BodyStr += TEXT("  - Asset Naming Bot (full edition) — project-wide naming audit + rename.\n");
-	if (bStudioPlus)
+	if (bIsFree)
 	{
-		BodyStr += TEXT("  - LOD Auditor — mesh/texture/material optimisation findings.\n");
-		BodyStr += TEXT("  - Predictive Profiler — early-warning performance hints.\n");
+		BodyStr += TEXT("Thanks for installing ShintTools Free. You get:\n\n");
+		BodyStr += TEXT("  - Code Validator — core C++ and Blueprint rules with one-click Auto-Fix.\n");
+		BodyStr += TEXT("  - Asset Naming Bot — project-wide naming audit + safe rename.\n");
+		BodyStr += TEXT("\nGetting started:\n");
+		BodyStr += TEXT("  1. Open Window > ShintTools to dock the panel.\n");
+		BodyStr += TEXT("  2. Pick a module and click Scan.\n");
+		BodyStr += TEXT("  3. Click \"Fix all\" on the findings to apply them.\n\n");
+		BodyStr += TEXT("The local Core Engine does the analysis on your machine; nothing leaves it.\n\n");
+		BodyStr += TEXT("Upgrade to Indie or Studio for the full rule set, AI Explain, the\n");
+		BodyStr += TEXT("LOD Auditor and more:  https://shint.tools/pricing");
 	}
-	BodyStr += TEXT("\nGetting started:\n");
-	BodyStr += TEXT("  1. Open Window > ShintTools to dock the panel.\n");
-	BodyStr += TEXT("  2. Pick a module and click Scan.\n");
-	BodyStr += TEXT("  3. Click Apply on a finding to fix it");
-	// [AGENT-STRIP-BEGIN]
-	BodyStr += TEXT(", or Explain for a plain-language rationale");
-	// [AGENT-STRIP-END]
-	BodyStr += TEXT(".\n\n");
-	BodyStr += TEXT("The local Core Engine does the analysis on your machine; nothing leaves\n");
-	BodyStr += TEXT("it");
-	// [DASH-STRIP-BEGIN]
-	BodyStr += TEXT(" unless you click \"Send to Dashboard\"");
-	// [DASH-STRIP-END]
-	BodyStr += TEXT(".");
+	else
+	{
+		BodyStr += TEXT("Thanks for activating ShintTools. Your license unlocks:\n\n");
+		BodyStr += TEXT("  - Deep Code Validator (full edition) — every C++ and Blueprint rule\n");
+		BodyStr += TEXT("    and one-click Auto-Fix.\n");
+		// [AGENT-STRIP-BEGIN]
+		BodyStr += TEXT("  - AI \"Explain\" — plain-language rationale on any finding.\n");
+		// [AGENT-STRIP-END]
+		BodyStr += TEXT("  - Asset Naming Bot (full edition) — project-wide naming audit + rename.\n");
+		if (bStudioPlus)
+		{
+			BodyStr += TEXT("  - LOD Auditor — mesh/texture/material optimisation findings.\n");
+			BodyStr += TEXT("  - Predictive Profiler — early-warning performance hints.\n");
+		}
+		BodyStr += TEXT("\nGetting started:\n");
+		BodyStr += TEXT("  1. Open Window > ShintTools to dock the panel.\n");
+		BodyStr += TEXT("  2. Pick a module and click Scan.\n");
+		BodyStr += TEXT("  3. Click Apply on a finding to fix it");
+		// [AGENT-STRIP-BEGIN]
+		BodyStr += TEXT(", or Explain for a plain-language rationale");
+		// [AGENT-STRIP-END]
+		BodyStr += TEXT(".\n\n");
+		BodyStr += TEXT("The local Core Engine does the analysis on your machine; nothing leaves\n");
+		BodyStr += TEXT("it");
+		// [DASH-STRIP-BEGIN]
+		BodyStr += TEXT(" unless you click \"Send to Dashboard\"");
+		// [DASH-STRIP-END]
+		BodyStr += TEXT(".");
+	}
 
 	const FText Body = FText::FromString(BodyStr);
 
