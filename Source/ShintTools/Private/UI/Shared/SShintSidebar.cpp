@@ -60,13 +60,13 @@ void SShintSidebar::Construct(const FArguments& InArgs)
 	Stack->AddSlot().AutoHeight()
 		[ BuildNavButton(EShintDestination::Overview, NSLOCTEXT("Sidebar","Overview","Overview"), TEXT("ShintTools.Icons.Info")) ];
 	Stack->AddSlot().AutoHeight()
-		[ BuildNavButton(EShintDestination::Code,     NSLOCTEXT("Sidebar","Code",    "Code"),     TEXT("ShintTools.Icons.Search")) ];
+		[ BuildNavButton(EShintDestination::Code,     NSLOCTEXT("Sidebar","Code",    "Code"),     TEXT("ShintTools.Icons.Code")) ];
 	Stack->AddSlot().AutoHeight()
-		[ BuildNavButton(EShintDestination::Assets,   NSLOCTEXT("Sidebar","Assets",  "Assets"),   TEXT("ShintTools.Icons.Grid")) ];
+		[ BuildNavButton(EShintDestination::Assets,   NSLOCTEXT("Sidebar","Assets",  "Assets"),   TEXT("ShintTools.Icons.Tag")) ];
 	// [LOD-STRIP-BEGIN]
 	// LOD Auditor — Studio-tier only; the button hides itself for Free/Indie.
 	Stack->AddSlot().AutoHeight()
-		[ BuildNavButton(EShintDestination::LodAudit, NSLOCTEXT("Sidebar","LodAudit","LOD Auditor"), TEXT("ShintTools.Icons.Grid"), /*bStudioOnly*/ true) ];
+		[ BuildNavButton(EShintDestination::LodAudit, NSLOCTEXT("Sidebar","LodAudit","LOD Auditor"), TEXT("ShintTools.Icons.Optimize"), /*bStudioOnly*/ true) ];
 	// [LOD-STRIP-END]
 	Stack->AddSlot()
 		.FillHeight(1.f)

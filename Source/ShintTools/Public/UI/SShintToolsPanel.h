@@ -181,7 +181,8 @@ private:
 	TSharedRef<SWidget> BuildCodeFilterBar();
 	TSharedRef<SWidget> BuildCategoryMenuContent();
 	TSharedRef<SWidget> BuildSeverityMenuContent();
-	TSharedRef<SWidget> BuildCodeTypeMenuContent();
+	// BuildCodeTypeMenuContent retired — the C++/Blueprints choice is the
+	// LOD-design tab strip inside BuildCodeFilterBar.
 	TSharedRef<SWidget> BuildAssetNamingSection();
 	TSharedRef<SWidget> BuildAssetResultsPanel();
 	TSharedRef<SWidget> BuildAssetTypeMenuContent();
@@ -382,6 +383,11 @@ private:
 	EIssueSeverityFilter CurrentSeverityFilter    = EIssueSeverityFilter::All;
 	EAssetTypeFilter     CurrentAssetTypeFilter   = EAssetTypeFilter::All;
 	ECodeTypeFilter      CurrentCodeTypeFilter    = ECodeTypeFilter::All;
+	// Toolbar text search (Asset Optimizer design language, replicated on the
+	// Code Validator + Naming Bot toolbars). Matched case-insensitively
+	// against message/file/rule (code) and names/path (assets).
+	FString              CodeSearchText;
+	FString              AssetSearchText;
 
 	// Fingerprints "FilePath:Line:RuleId" of issues fixed this session.
 	// Prevents re-showing the same issue on an incremental/BP re-scan.
@@ -446,7 +452,6 @@ private:
 
 	TSharedPtr<STextBlock> CategoryFilterLabel;
 	TSharedPtr<STextBlock> SeverityFilterLabel;
-	TSharedPtr<STextBlock> CodeTypeFilterLabel;
 	TSharedPtr<STextBlock> AssetTypeFilterLabel;
 
 	TSharedPtr<SWidget>    CodeEmptyState;

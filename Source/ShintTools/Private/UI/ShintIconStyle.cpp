@@ -69,6 +69,14 @@ TSharedRef<FSlateStyleSet> FShintIconStyle::Create()
 	Style->Set("ShintTools.Icons.Settings", new IMAGE_BRUSH_SVG(TEXT("settings"), Icon16));
 	Style->Set("ShintTools.Icons.UI",       new IMAGE_BRUSH_SVG(TEXT("ui"),       Icon16));
 
+	// Per-module glyphs (Nieo icon pack v1.0.3 — commercial use, no
+	// attribution required). One distinct icon per module: the rail used to
+	// reuse "Grid" for both Assets and the LOD Auditor.
+	Style->Set("ShintTools.Icons.Code",     new IMAGE_BRUSH_SVG(TEXT("code"),     Icon16));
+	Style->Set("ShintTools.Icons.Tag",      new IMAGE_BRUSH_SVG(TEXT("tag"),      Icon16));
+	Style->Set("ShintTools.Icons.Optimize", new IMAGE_BRUSH_SVG(TEXT("optimize"), Icon16));
+	Style->Set("ShintTools.Icons.Profiler", new IMAGE_BRUSH_SVG(TEXT("profiler"), Icon16));
+
 	// Action buttons.
 	Style->Set("ShintTools.Icons.Refresh",  new IMAGE_BRUSH_SVG(TEXT("refresh"),  Icon16));
 	Style->Set("ShintTools.Icons.Tick",     new IMAGE_BRUSH_SVG(TEXT("tick"),     Icon16));

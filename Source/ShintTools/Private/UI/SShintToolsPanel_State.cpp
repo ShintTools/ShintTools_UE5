@@ -274,6 +274,13 @@ void SShintToolsPanel::ApplyCodeFilter()
 		// Compile errors always show regardless of active filters — they are critical.
 		const bool bIsBuildError = (Item->RuleId == TEXT("BUILD001"));
 
+		// Toolbar search — case-insensitive across message / file / rule id.
+		if (!bIsBuildError && !CodeSearchText.IsEmpty()
+			&& !Item->Message.Contains(CodeSearchText)
+			&& !Item->FilePath.Contains(CodeSearchText)
+			&& !Item->RuleId.Contains(CodeSearchText))
+			continue;
+
 		if (!bIsBuildError && CurrentCodeTypeFilter != ECodeTypeFilter::All)
 		{
 			if (CurrentCodeTypeFilter == ECodeTypeFilter::CppOnly        &&  Item->bIsBlueprint) continue;
@@ -367,6 +374,13 @@ void SShintToolsPanel::ApplyAssetFilter()
 
 	for (const FShintAssetItemPtr& Item : AllAssetItems)
 	{
+		// Toolbar search — case-insensitive across names / path.
+		if (!AssetSearchText.IsEmpty()
+			&& !Item->CurrentName.Contains(AssetSearchText)
+			&& !Item->SuggestedName.Contains(AssetSearchText)
+			&& !Item->AssetPath.Contains(AssetSearchText))
+			continue;
+
 		if (CurrentAssetTypeFilter != EAssetTypeFilter::All)
 		{
 			const FString TypeLower = Item->AssetType.ToLower();

@@ -25,6 +25,7 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SWrapBox.h"
+#include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
@@ -43,33 +44,67 @@
 // ─────────────────────────────────────────────────────────────────────────────
 TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 {
+	// LOD/Asset-Optimizer design language — caption (muted) over a big H1
+	// value over a coloured subtitle, on a Surface card. Mirrors the Tile
+	// lambda in BuildLodKpiRow so all three modules read as one system.
+	auto Tile = [](const FText& Caption, TSharedPtr<STextBlock>& OutValue,
+		const FText& Sub, const FLinearColor& SubColor) -> TSharedRef<SWidget>
+	{
+		return SNew(SBorder)
+			.BorderImage(ST4::Solid(C_Surface()))
+			.Padding(FMargin(16.f, 14.f))
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
+				[
+					SNew(STextBlock).Text(Caption).Font(F_Label())
+					.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
+				]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SAssignNew(OutValue, STextBlock).Text(FText::FromString(TEXT("—")))
+					.Font(FShintStyle::Fonts::H1())
+					.ColorAndOpacity(FSlateColor(C_White()))
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f, 0.f, 0.f)
+				[
+					SNew(STextBlock).Text(Sub)
+					.Font(F_Label()).ColorAndOpacity(FSlateColor(SubColor))
+				]
+			];
+	};
+	const float Gap = FShintStyle::Space::S2 * 0.5f;
+
 	return SNew(SBorder)
 		.BorderImage(ST4::Solid(C_BG()))
 		.Padding(FMargin(20.f, 18.f))
 		[
 			SNew(SVerticalBox)
 
-			+ SVerticalBox::Slot().AutoHeight()
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S3)
 			[
 				BuildSectionTitle(
-					LOCTEXT("CVTitle","CODE VALIDATOR"),
+					LOCTEXT("CVTitle","Code Validator"),
 					LOCTEXT("CVSub","Analyse C++ source and Blueprints · review issues · apply fixes · send to dashboard"))
 			]
 
-			// Stats — 4-up KPI grid. Each tile is a SShintCard so metrics read
-			// as discrete dashboard surfaces. Slot HAlign is Fill + horizontal
-			// padding for inter-tile gutters; FillWidth(1.f) gives equal width.
+			// KPI tile row — FILES · ERRORS · WARNINGS · QUALITY, same tile
+			// anatomy as the Asset Optimizer.
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S2)
 			[
 				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(0.f, 0.f, FShintStyle::Space::S2 * 0.5f, 0.f))
-				[ StatBadge(CodeFiles_Label,    LOCTEXT("CVF","FILES"),    FShintStyle::Colors::TextPrimary())  ]
-				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(FShintStyle::Space::S2 * 0.5f, 0.f, FShintStyle::Space::S2 * 0.5f, 0.f))
-				[ StatBadge(CodeErrors_Label,   LOCTEXT("CVE","ERRORS"),   FShintStyle::Colors::SevCritical())  ]
-				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(FShintStyle::Space::S2 * 0.5f, 0.f, FShintStyle::Space::S2 * 0.5f, 0.f))
-				[ StatBadge(CodeWarnings_Label, LOCTEXT("CVW","WARNINGS"), FShintStyle::Colors::SevHigh())      ]
-				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(FShintStyle::Space::S2 * 0.5f, 0.f, 0.f, 0.f))
-				[ StatBadge(CodeScore_Label,    LOCTEXT("CVQ","QUALITY"),  FShintStyle::Colors::SevLow())       ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(0.f, 0.f, Gap, 0.f))
+				[ Tile(LOCTEXT("CVF","FILES"), CodeFiles_Label,
+					LOCTEXT("CVFSub","Scanned"), FShintStyle::Colors::TextMuted()) ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(Gap, 0.f, Gap, 0.f))
+				[ Tile(LOCTEXT("CVE","ERRORS"), CodeErrors_Label,
+					LOCTEXT("CVESub","Blocking"), FShintStyle::Colors::SevCritical()) ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(Gap, 0.f, Gap, 0.f))
+				[ Tile(LOCTEXT("CVW","WARNINGS"), CodeWarnings_Label,
+					LOCTEXT("CVWSub","Review advised"), FShintStyle::Colors::SevHigh()) ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(Gap, 0.f, 0.f, 0.f))
+				[ Tile(LOCTEXT("CVQ","QUALITY"), CodeScore_Label,
+					LOCTEXT("CVQSub","Project score"), FShintStyle::Colors::SevLow()) ]
 			]
 			// Sub-score breakdown line (perf / sec / bp / maint / naming).
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 16.f).HAlign(HAlign_Center)
@@ -88,13 +123,15 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 						TAttribute<TOptional<float>>::FGetter::CreateSP(this, &SShintToolsPanel::GetCodeProgress)))
 			]
 
-			// Scan buttons
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 18.f)
+			// Scan bar — Asset Optimizer layout: primary scan fills the row,
+			// secondary scan sits at the right.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S3)
 			[
-				SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f, 6.f))
-				+ SWrapBox::Slot()
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0.f, 0.f, 8.f, 0.f)
 				[
-					SNew(SButton).ContentPadding(FMargin(14.f, 7.f))
+					SNew(SButton).ContentPadding(FMargin(14.f, 9.f))
+					.HAlign(HAlign_Center)
 					.OnClicked(this, &SShintToolsPanel::OnScanProjectClicked)
 					[
 						ShintBtnContent(TEXT("ShintTools.Icons.Search"),
@@ -103,9 +140,10 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 						FSlateColor(C_White()))
 					]
 				]
-				+ SWrapBox::Slot()
+				+ SHorizontalBox::Slot().AutoWidth()
 				[
-					SNew(SButton).ContentPadding(FMargin(14.f, 7.f))
+					SNew(SButton).ContentPadding(FMargin(14.f, 9.f))
+					.ButtonColorAndOpacity(FSlateColor(C_Surface()))
 					.OnClicked(this, &SShintToolsPanel::OnScanBlueprintsClicked)
 					[
 						ShintBtnContent(TEXT("ShintTools.Icons.Search"),
@@ -208,49 +246,38 @@ TSharedRef<SWidget> SShintToolsPanel::BuildSeverityMenuContent()
 		[ Menu ];
 }
 
-TSharedRef<SWidget> SShintToolsPanel::BuildCodeTypeMenuContent()
-{
-	struct FEntry { FText Label; ECodeTypeFilter Value; };
-	const TArray<FEntry> Entries = {
-		{ LOCTEXT("CodeTypeAll", "All Types"),       ECodeTypeFilter::All           },
-		{ LOCTEXT("CodeTypeCpp", "C++ Only"),         ECodeTypeFilter::CppOnly       },
-		{ LOCTEXT("CodeTypeBP",  "Blueprints Only"),  ECodeTypeFilter::BlueprintsOnly},
-	};
+// BuildCodeTypeMenuContent was retired with the LOD-design toolbar: the
+// C++/Blueprints choice is now the tab strip in BuildCodeFilterBar, matching
+// the Asset Optimizer's Textures/Meshes/Materials tabs.
 
-	TSharedRef<SVerticalBox> Menu = SNew(SVerticalBox);
-	for (const FEntry& E : Entries)
+// ─────────────────────────────────────────────────────────────────────────────
+// Filter bar — tabs + search + dropdowns + Fixable toggle + select/deselect.
+// ─────────────────────────────────────────────────────────────────────────────
+TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
+{
+	// LOD-design tab strip — replaces the old "All Types" dropdown. Active
+	// tab = Surface background + white text, exactly like the Asset
+	// Optimizer's Textures/Meshes/Materials tabs.
+	auto TabBtn = [this](const FText& Label, ECodeTypeFilter Tab) -> TSharedRef<SWidget>
 	{
-		const FText            Label = E.Label;
-		const ECodeTypeFilter  Value = E.Value;
-		Menu->AddSlot().AutoHeight()
-		[
-			SNew(SButton).ContentPadding(FMargin(10.f, 5.f))
-			.ButtonColorAndOpacity(FSlateColor(C_Surface()))
-			.OnClicked_Lambda([this, Label, Value]() -> FReply
-			{
-				CurrentCodeTypeFilter = Value;
-				if (CodeTypeFilterLabel.IsValid())
-					CodeTypeFilterLabel->SetText(Label);
+		return SNew(SButton)
+			.ContentPadding(FMargin(14.f, 7.f))
+			.ButtonColorAndOpacity_Lambda([this, Tab]() {
+				return FSlateColor(CurrentCodeTypeFilter == Tab ? C_Surface() : C_BG());
+			})
+			.OnClicked_Lambda([this, Tab]() {
+				CurrentCodeTypeFilter = Tab;
 				ApplyCodeFilter();
 				return FReply::Handled();
 			})
 			[
-				SNew(STextBlock).Text(Label).Font(F_Label())
-				.ColorAndOpacity(FSlateColor(C_Gray()))
-			]
-		];
-	}
-	return SNew(SBorder)
-		.BorderImage(ST4::Solid(C_Surface()))
-		.Padding(2.f)
-		[ Menu ];
-}
+				SNew(STextBlock).Text(Label).Font(F_Small())
+				.ColorAndOpacity_Lambda([this, Tab]() {
+					return FSlateColor(CurrentCodeTypeFilter == Tab ? C_White() : C_Gray());
+				})
+			];
+	};
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Filter bar — dropdowns + Fixable toggle + select/deselect buttons.
-// ─────────────────────────────────────────────────────────────────────────────
-TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
-{
 	TSharedRef<SWidget> CategoryCombo =
 		SNew(SComboButton)
 		.ContentPadding(FMargin(8.f, 4.f))
@@ -288,23 +315,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			]
 		];
 
-	TSharedRef<SWidget> CodeTypeCombo =
-		SNew(SComboButton)
-		.ContentPadding(FMargin(8.f, 4.f))
-		.ButtonColorAndOpacity(FSlateColor(C_Surface()))
-		.OnGetMenuContent(this, &SShintToolsPanel::BuildCodeTypeMenuContent)
-		.ButtonContent()
-		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				SAssignNew(CodeTypeFilterLabel, STextBlock)
-				.Text(LOCTEXT("CodeTypeAll", "All Types"))
-				.Font(FShintStyle::Fonts::Caption())
-				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
-			]
-		];
-
 	TSharedRef<SWidget> FixableBtn =
 		SNew(SButton).ContentPadding(FMargin(8.f, 4.f))
 		.ButtonColorAndOpacity(FSlateColor(C_Surface()))
@@ -321,15 +331,30 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 		];
 
 	return SNew(SVerticalBox)
+		// Tabs — All / C++ / Blueprints (Asset Optimizer design).
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 4.f, 0.f)
+			[ TabBtn(LOCTEXT("CodeTabAll", "All"),        ECodeTypeFilter::All) ]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 4.f, 0.f)
+			[ TabBtn(LOCTEXT("CodeTabCpp", "C++"),        ECodeTypeFilter::CppOnly) ]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[ TabBtn(LOCTEXT("CodeTabBP",  "Blueprints"), ECodeTypeFilter::BlueprintsOnly) ]
+		]
+		// Filter row — search (fills) + combos + bulk selection.
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
 		[
 			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
 			[
-				SNew(STextBlock).Text(LOCTEXT("ResLbl", "RESULTS")).Font(F_Label())
-				.ColorAndOpacity(FSlateColor(C_DimGray()))
+				SNew(SEditableTextBox)
+				.HintText(LOCTEXT("CodeSearch", "Search"))
+				.OnTextChanged_Lambda([this](const FText& T) {
+					CodeSearchText = T.ToString();
+					ApplyCodeFilter();
+				})
 			]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f) [ CodeTypeCombo ]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f) [ CategoryCombo ]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f) [ SeverityCombo ]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f) [ FixableBtn    ]
@@ -788,10 +813,9 @@ FReply SShintToolsPanel::OnScanProjectClicked()
 
 	// T1 — Auto-switch the visible filter to "All" so the user sees both
 	// kinds at once (the previous flow forced CppOnly/BlueprintsOnly on every
-	// click, which silently hid the other half of the merged list).
+	// click, which silently hid the other half of the merged list). The tab
+	// strip reads CurrentCodeTypeFilter reactively — no label to update.
 	CurrentCodeTypeFilter = ECodeTypeFilter::All;
-	if (CodeTypeFilterLabel.IsValid())
-		CodeTypeFilterLabel->SetText(LOCTEXT("CodeTypeAll", "All"));
 
 	SetCodeState(EModuleState::Running);
 	if (CodeEmptyText.IsValid())
@@ -819,8 +843,6 @@ FReply SShintToolsPanel::OnScanBlueprintsClicked()
 	// T1 — see OnScanProjectClicked. Auto-switch to "All" instead of forcing
 	// BlueprintsOnly, and preserve previous-scan state so the merge survives.
 	CurrentCodeTypeFilter = ECodeTypeFilter::All;
-	if (CodeTypeFilterLabel.IsValid())
-		CodeTypeFilterLabel->SetText(LOCTEXT("CodeTypeAll", "All"));
 
 	SetCodeState(EModuleState::Running);
 	if (CodeEmptyText.IsValid())
