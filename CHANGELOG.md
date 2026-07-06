@@ -2,6 +2,34 @@
 
 ---
 
+## [Unreleased] — Panel design unification + fix precision
+
+### Changed
+- **Code Validator + Asset Naming Bot restyled to the Asset Optimizer
+  design language.** KPI tile rows (caption / big value / coloured subtitle),
+  fill-width scan bars, an All/C++/Blueprints tab strip on the Code Validator
+  (replaces the "All Types" dropdown), and toolbar text search on both
+  modules (message/file/rule for code; names/path for assets).
+- **Per-module sidebar icons** (Nieo pack v1.0.3): Code, Assets and the LOD
+  Auditor each get a distinct glyph — the rail previously reused the same
+  grid icon for Assets and LOD.
+- **Paid welcome dialog now fires when the async license probe resolves** —
+  it previously checked the tier at tab-spawn, when the probe hadn't
+  answered yet, so paid users never saw it.
+
+### Bug Fixes
+- **"N fixes applied" toast labels by what was actually applied**, not by
+  the last scan mode — a C++ fix applied after a Blueprint scan announced
+  itself as Blueprint fixes. Mixed batches show a C++/Blueprint breakdown.
+- **Asset rename precision.** Renames are verified individually before any
+  [CoreRedirects] mapping / server report is emitted (partial RenameAssets
+  failures no longer write poisoned mappings); redirector fixup touches only
+  the redirectors this batch created and deletes them after fixup; the
+  post-rename auto-save is scoped to the batch's packages instead of saving
+  every dirty package in the project.
+
+---
+
 ## [Unreleased] — Tier-isolated branch model (Free / Indie / Studio)
 
 ### Changed
