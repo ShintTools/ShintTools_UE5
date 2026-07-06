@@ -20,6 +20,7 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SWrapBox.h"
+#include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
@@ -38,29 +39,62 @@
 // ─────────────────────────────────────────────────────────────────────────────
 TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 {
+	// LOD/Asset-Optimizer tile — caption over H1 value over coloured
+	// subtitle, mirroring BuildLodKpiRow so the modules read as one system.
+	auto Tile = [](const FText& Caption, TSharedPtr<STextBlock>& OutValue,
+		const FText& Sub, const FLinearColor& SubColor) -> TSharedRef<SWidget>
+	{
+		return SNew(SBorder)
+			.BorderImage(ST4::Solid(C_Surface()))
+			.Padding(FMargin(16.f, 14.f))
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
+				[
+					SNew(STextBlock).Text(Caption).Font(F_Label())
+					.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
+				]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SAssignNew(OutValue, STextBlock).Text(FText::FromString(TEXT("—")))
+					.Font(FShintStyle::Fonts::H1())
+					.ColorAndOpacity(FSlateColor(C_White()))
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f, 0.f, 0.f)
+				[
+					SNew(STextBlock).Text(Sub)
+					.Font(F_Label()).ColorAndOpacity(FSlateColor(SubColor))
+				]
+			];
+	};
+	const float Gap = FShintStyle::Space::S2 * 0.5f;
+
 	return SNew(SBorder)
 		.BorderImage(ST4::Solid(C_BG()))
 		.Padding(FMargin(20.f, 18.f))
 		[
 			SNew(SVerticalBox)
 
-			+ SVerticalBox::Slot().AutoHeight()
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S3)
 			[
 				BuildSectionTitle(
-					LOCTEXT("ANBTitle", "ASSET NAMING BOT"),
+					LOCTEXT("ANBTitle", "Asset Naming Bot"),
 					LOCTEXT("ANBSub", "Scan entire project · detect invalid names · apply UE5 rename (refs preserved) · send to dashboard"))
 			]
 
-			// Stats — 3-up KPI grid (asset count / invalid / scan time).
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S4)
+			// KPI tile row — ASSETS · INVALID · TIME, Asset Optimizer anatomy.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S2)
 			[
 				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(0.f, 0.f, FShintStyle::Space::S2 * 0.5f, 0.f))
-				[ StatBadge(AssetTotal_Label,   LOCTEXT("ANBT", "ASSETS"),    FShintStyle::Colors::TextPrimary()) ]
-				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(FShintStyle::Space::S2 * 0.5f, 0.f, FShintStyle::Space::S2 * 0.5f, 0.f))
-				[ StatBadge(AssetInvalid_Label, LOCTEXT("ANBI", "INVALID"),   FShintStyle::Colors::SevCritical()) ]
-				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(FShintStyle::Space::S2 * 0.5f, 0.f, 0.f, 0.f))
-				[ StatBadge(AssetTime_Label,    LOCTEXT("ANBMS", "TIME (s)"), FShintStyle::Colors::TextMuted()) ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(0.f, 0.f, Gap, 0.f))
+				[ Tile(LOCTEXT("ANBT", "ASSETS"), AssetTotal_Label,
+					LOCTEXT("ANBTSub", "Project-wide"), FShintStyle::Colors::TextMuted()) ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(Gap, 0.f, Gap, 0.f))
+				[ Tile(LOCTEXT("ANBI", "INVALID"), AssetInvalid_Label,
+					LOCTEXT("ANBISub", "Need renaming"), FShintStyle::Colors::SevCritical()) ]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(FMargin(Gap, 0.f, 0.f, 0.f))
+				[ Tile(LOCTEXT("ANBMS", "TIME (s)"), AssetTime_Label,
+					LOCTEXT("ANBMSSub", "Last scan"), FShintStyle::Colors::TextMuted()) ]
 			]
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 14.f)
@@ -70,19 +104,17 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 						TAttribute<TOptional<float>>::FGetter::CreateSP(this, &SShintToolsPanel::GetAssetProgress)))
 			]
 
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 18.f)
+			// Scan bar — primary scan fills the row (Asset Optimizer layout).
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S3)
 			[
-				SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f, 6.f))
-				+ SWrapBox::Slot()
+				SNew(SButton).ContentPadding(FMargin(14.f, 9.f))
+				.HAlign(HAlign_Center)
+				.OnClicked(this, &SShintToolsPanel::OnScanAssetsClicked)
 				[
-					SNew(SButton).ContentPadding(FMargin(14.f, 7.f))
-					.OnClicked(this, &SShintToolsPanel::OnScanAssetsClicked)
-					[
-						ShintBtnContent(TEXT("ShintTools.Icons.Search"),
-						SNew(STextBlock).Text(LOCTEXT("ScanAssets", "Scan All Assets")).Font(F_Small())
-						.ColorAndOpacity(FSlateColor(C_White())),
-						FSlateColor(C_White()))
-					]
+					ShintBtnContent(TEXT("ShintTools.Icons.Search"),
+					SNew(STextBlock).Text(LOCTEXT("ScanAssets", "Scan All Assets")).Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_White())),
+					FSlateColor(C_White()))
 				]
 			]
 
@@ -225,13 +257,19 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 			]
 		]
 
+		// Filter row — search (fills) + type combo + bulk selection, matching
+		// the Asset Optimizer toolbar.
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
 		[
 			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
 			[
-				SNew(STextBlock).Text(LOCTEXT("ANBRes", "RESULTS")).Font(F_Label())
-				.ColorAndOpacity(FSlateColor(C_DimGray()))
+				SNew(SEditableTextBox)
+				.HintText(LOCTEXT("ANBSearch", "Search"))
+				.OnTextChanged_Lambda([this](const FText& T) {
+					AssetSearchText = T.ToString();
+					ApplyAssetFilter();
+				})
 			]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f) [ AssetTypeCombo ]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 4.f, 0.f)

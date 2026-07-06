@@ -883,8 +883,9 @@ void FShintCoreClient::ApplyCodeFixes(
 		}
 	}
 
-	Result.TotalFixesApplied += BPApplied;
-	Result.TotalFixesSkipped += BPSkipped + SkippedNoFix;
+	Result.TotalFixesApplied     += BPApplied;
+	Result.BlueprintFixesApplied  = BPApplied;
+	Result.TotalFixesSkipped     += BPSkipped + SkippedNoFix;
 
 	if (!TreeSitterIssues.IsEmpty())
 	{

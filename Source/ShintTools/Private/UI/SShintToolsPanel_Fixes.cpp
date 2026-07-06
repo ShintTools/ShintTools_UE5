@@ -416,11 +416,20 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 		FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
 
 	TArray<FAssetRenameData> RenameData;
-	TArray<FShintAssetIssue> ForServer;
-	// Captured BEFORE RenameAssets() so we know the old object path. After the
-	// rename, Asset->GetPathName() reports the new path, so any later attempt
-	// to derive OldName would only emit identity mappings.
-	TArray<FShintRedirectEntry> RedirectEntries;
+	// Old/new paths captured BEFORE RenameAssets() (after the rename,
+	// Asset->GetPathName() reports the new path). Redirect entries + server
+	// rows are emitted AFTER the rename, per asset, only for renames that
+	// verifiably happened — RenameAssets can partially fail, and emitting up
+	// front wrote poisoned [CoreRedirects] mappings for renames that never
+	// occurred.
+	struct FShintPendingRename
+	{
+		UObject*           Asset = nullptr;
+		FShintAssetItemPtr Item;
+		FString            OldPackage;   // /Game/.../OldName
+		FString            NewPackage;   // /Game/.../NewName
+	};
+	TArray<FShintPendingRename> Pending;
 	int32 SkippedCircular  = 0;
 	int32 SkippedCollision = 0;
 	int32 SkippedLoadFail  = 0;
@@ -474,53 +483,12 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 		RenameData.Add(FAssetRenameData(Asset, NewPackagePath, Item->SuggestedName));
 
-		// Record redirect mappings for DefaultEngine.ini. Three redirect kinds,
-		// emitted per asset, because UE5 resolves references through different
-		// paths depending on context:
-		//
-		//   +PackageRedirects (always)  — soft asset paths "/Game/.../OldName"
-		//   +ObjectRedirects  (always)  — UObject paths    "/Game/.../OldName.OldName"
-		//   +ClassRedirects   (BP only) — generated class  "/Game/.../OldName.OldName_C"
-		//
-		// Previously we emitted only one of these per asset, so renames broke
-		// soft references in unloaded packages and child Blueprints whose parent
-		// was renamed (parent class lookup fell through to "Class not found").
-		{
-			const FString OldPackage = Item->AssetPath;                          // /Game/.../OldName
-			const FString NewPackage = NewPackagePath / Item->SuggestedName;     // /Game/.../NewName
-			const FString OldBase    = FPaths::GetBaseFilename(OldPackage);
-			const FString NewBase    = Item->SuggestedName;
-
-			{
-				FShintRedirectEntry RE;
-				RE.Key     = TEXT("+PackageRedirects");
-				RE.OldName = OldPackage;
-				RE.NewName = NewPackage;
-				RedirectEntries.Add(MoveTemp(RE));
-			}
-			{
-				FShintRedirectEntry RE;
-				RE.Key     = TEXT("+ObjectRedirects");
-				RE.OldName = OldPackage + TEXT(".") + OldBase;
-				RE.NewName = NewPackage + TEXT(".") + NewBase;
-				RedirectEntries.Add(MoveTemp(RE));
-			}
-			if (Asset->IsA<UBlueprint>())
-			{
-				FShintRedirectEntry RE;
-				RE.Key     = TEXT("+ClassRedirects");
-				RE.OldName = OldPackage + TEXT(".") + OldBase + TEXT("_C");
-				RE.NewName = NewPackage + TEXT(".") + NewBase + TEXT("_C");
-				RedirectEntries.Add(MoveTemp(RE));
-			}
-		}
-
-		FShintAssetIssue I;
-		I.AssetPath     = Item->AssetPath;
-		I.CurrentName   = Item->CurrentName;
-		I.SuggestedName = Item->SuggestedName;
-		I.AssetType     = Item->AssetType;
-		ForServer.Add(I);
+		FShintPendingRename P;
+		P.Asset      = Asset;
+		P.Item       = Item;
+		P.OldPackage = Item->AssetPath;                       // /Game/.../OldName
+		P.NewPackage = NewPackagePath / Item->SuggestedName;  // /Game/.../NewName
+		Pending.Add(MoveTemp(P));
 	}
 
 	if (SkippedCircular + SkippedCollision + SkippedLoadFail > 0)
@@ -540,13 +508,19 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 	// compiler to rebuild the parent pointer through the new class path.
 	TSet<UBlueprint*> DescendantBPsToRecompile;
 	{
-		// Build map of OLD generated-class path -> NEW generated-class path,
-		// extracted from the +ClassRedirects entries we just queued.
+		// Build map of OLD generated-class path -> NEW generated-class path
+		// from the pending Blueprint renames (must run BEFORE the rename —
+		// afterwards the old class path is gone). A child collected for a
+		// rename that then fails just gets a harmless recompile.
 		TMap<FString, FString> OldBPClassToNew;
-		for (const FShintRedirectEntry& RE : RedirectEntries)
+		for (const FShintPendingRename& P : Pending)
 		{
-			if (RE.Key.Equals(TEXT("+ClassRedirects")))
-				OldBPClassToNew.Add(RE.OldName, RE.NewName);
+			if (!P.Asset->IsA<UBlueprint>())
+				continue;
+			const FString OldBase = FPaths::GetBaseFilename(P.OldPackage);
+			OldBPClassToNew.Add(
+				P.OldPackage + TEXT(".") + OldBase + TEXT("_C"),
+				P.NewPackage + TEXT(".") + P.Item->SuggestedName + TEXT("_C"));
 		}
 
 		if (!OldBPClassToNew.IsEmpty())
@@ -598,32 +572,104 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 	AssetTools.RenameAssets(RenameData);
 
-	// Fix redirectors left at old paths. After RenameAssets, UE5 creates an
-	// ObjectRedirector at the original package path. Collect all redirectors
-	// under /Game and fix references so no stale pointers remain and
-	// DefaultEngine.ini stays clean.
+	// Verify EACH rename before emitting anything derived from it.
+	// RenameAssets can partially fail (checkout refusal, in-memory-only
+	// package, external locks); the previous flow ignored its result and
+	// emitted [CoreRedirects] mappings, server rows and success counts for
+	// renames that never happened.
+	TArray<FShintRedirectEntry>  RedirectEntries;
+	TArray<FShintAssetIssue>     ForServer;
+	TArray<UObjectRedirector*>   OurRedirectors;
+	TArray<UPackage*>            TouchedPackages;
+	int32 FailedRenames = 0;
+
+	for (const FShintPendingRename& P : Pending)
 	{
-		FARFilter RedirFilter;
-		RedirFilter.ClassPaths.Add(UObjectRedirector::StaticClass()->GetClassPathName());
-		RedirFilter.PackagePaths.Add(TEXT("/Game"));
-		RedirFilter.bRecursivePaths = true;
-
-		TArray<FAssetData> RedirAssets;
-		AR.GetAssets(RedirFilter, RedirAssets);
-
-		TArray<UObjectRedirector*> Redirectors;
-		Redirectors.Reserve(RedirAssets.Num());
-		for (const FAssetData& RD : RedirAssets)
+		const bool bRenamed =
+			IsValid(P.Asset) &&
+			P.Asset->GetName() == P.Item->SuggestedName;
+		if (!bRenamed)
 		{
-			if (UObjectRedirector* Redir = Cast<UObjectRedirector>(RD.GetAsset()))
-				Redirectors.Add(Redir);
+			++FailedRenames;
+			UE_LOG(LogShintTools, Warning,
+				TEXT("ShintPanel: rename '%s' → '%s' did not apply — skipping "
+				     "its redirects/report so no stale mapping is written."),
+				*P.Item->CurrentName, *P.Item->SuggestedName);
+			continue;
 		}
-		if (!Redirectors.IsEmpty())
+
+		// Redirect mappings for DefaultEngine.ini. Three kinds, because UE5
+		// resolves references through different paths depending on context:
+		//   +PackageRedirects (always)  — soft asset paths "/Game/.../OldName"
+		//   +ObjectRedirects  (always)  — UObject paths    ".../OldName.OldName"
+		//   +ClassRedirects   (BP only) — generated class  ".../OldName.OldName_C"
+		// Emitting only one of these per asset used to break soft references
+		// in unloaded packages and child Blueprints of a renamed parent.
+		const FString OldBase = FPaths::GetBaseFilename(P.OldPackage);
+		const FString NewBase = P.Item->SuggestedName;
 		{
-			UE_LOG(LogShintTools, Verbose,
-				TEXT("ShintPanel: fixing %d redirector(s) after asset rename"), Redirectors.Num());
-			AssetTools.FixupReferencers(Redirectors);
+			FShintRedirectEntry RE;
+			RE.Key     = TEXT("+PackageRedirects");
+			RE.OldName = P.OldPackage;
+			RE.NewName = P.NewPackage;
+			RedirectEntries.Add(MoveTemp(RE));
 		}
+		{
+			FShintRedirectEntry RE;
+			RE.Key     = TEXT("+ObjectRedirects");
+			RE.OldName = P.OldPackage + TEXT(".") + OldBase;
+			RE.NewName = P.NewPackage + TEXT(".") + NewBase;
+			RedirectEntries.Add(MoveTemp(RE));
+		}
+		if (P.Asset->IsA<UBlueprint>())
+		{
+			FShintRedirectEntry RE;
+			RE.Key     = TEXT("+ClassRedirects");
+			RE.OldName = P.OldPackage + TEXT(".") + OldBase + TEXT("_C");
+			RE.NewName = P.NewPackage + TEXT(".") + NewBase + TEXT("_C");
+			RedirectEntries.Add(MoveTemp(RE));
+		}
+
+		FShintAssetIssue I;
+		I.AssetPath     = P.OldPackage;
+		I.CurrentName   = P.Item->CurrentName;
+		I.SuggestedName = P.Item->SuggestedName;
+		I.AssetType     = P.Item->AssetType;
+		ForServer.Add(MoveTemp(I));
+
+		TouchedPackages.AddUnique(P.Asset->GetOutermost());
+
+		// Collect ONLY the redirector this rename left at the old package
+		// path. The previous flow swept every redirector under /Game and
+		// fixed up assets completely unrelated to this batch.
+		TArray<FAssetData> OldPkgAssets;
+		AR.GetAssetsByPackageName(FName(*P.OldPackage), OldPkgAssets);
+		for (const FAssetData& AD : OldPkgAssets)
+		{
+			if (UObjectRedirector* Redir = Cast<UObjectRedirector>(AD.GetAsset()))
+				OurRedirectors.AddUnique(Redir);
+		}
+	}
+
+	if (FailedRenames > 0)
+	{
+		UE_LOG(LogShintTools, Warning,
+			TEXT("ShintPanel: %d of %d rename(s) failed to apply."),
+			FailedRenames, Pending.Num());
+	}
+
+	// Re-point every referencer at the new asset and DELETE the fixed-up
+	// redirector (ERedirectFixupMode::DeleteFixedUpRedirectors — same cleanup
+	// as the Content Browser's "Fix Up Redirectors"), so no stale redirector
+	// .uassets accumulate at the old paths. No checkout modal mid-flow.
+	if (!OurRedirectors.IsEmpty())
+	{
+		UE_LOG(LogShintTools, Verbose,
+			TEXT("ShintPanel: fixing up %d redirector(s) from this batch"),
+			OurRedirectors.Num());
+		AssetTools.FixupReferencers(OurRedirectors,
+			/*bCheckoutDialogPrompt=*/false,
+			ERedirectFixupMode::DeleteFixedUpRedirectors);
 	}
 
 	// T2 — Persist redirect mappings to DefaultEngine.ini. ObjectRedirector
@@ -658,22 +704,32 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 			Recompiled);
 	}
 
-	// Save renamed packages + their referencers so the rename (and the .uasset
-	// redirector left behind) survives an editor close. With the redirectors
-	// un-saved, closing the editor without saving silently reverts the rename
-	// and the user reports "broken references".
+	// Save the packages THIS batch touched (renamed assets + recompiled
+	// children) so the rename survives an editor close. Saving every dirty
+	// content package here silently committed the user's unrelated
+	// half-finished edits — auto-save must stay scoped to our own writes.
+	// (FixupReferencers already saves the referencer packages it re-points.)
 	{
-		TArray<UPackage*> DirtyPackages;
-		FEditorFileUtils::GetDirtyContentPackages(DirtyPackages);
-		if (!DirtyPackages.IsEmpty())
+		for (UBlueprint* Child : DescendantBPsToRecompile)
+		{
+			if (IsValid(Child))
+				TouchedPackages.AddUnique(Child->GetOutermost());
+		}
+		TArray<UPackage*> ToSave;
+		for (UPackage* Pkg : TouchedPackages)
+		{
+			if (IsValid(Pkg) && Pkg->IsDirty())
+				ToSave.Add(Pkg);
+		}
+		if (!ToSave.IsEmpty())
 		{
 			const bool bSaved = FEditorFileUtils::PromptForCheckoutAndSave(
-				DirtyPackages,
+				ToSave,
 				/*bCheckDirty=*/true,
 				/*bPromptToSave=*/false) == FEditorFileUtils::EPromptReturnCode::PR_Success;
 			UE_LOG(LogShintTools, Verbose,
-				TEXT("ShintPanel: auto-saved %d dirty package(s) post-rename (success=%d)"),
-				DirtyPackages.Num(), bSaved ? 1 : 0);
+				TEXT("ShintPanel: auto-saved %d package(s) from this batch (success=%d)"),
+				ToSave.Num(), bSaved ? 1 : 0);
 		}
 	}
 
