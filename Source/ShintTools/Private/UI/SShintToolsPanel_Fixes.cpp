@@ -13,8 +13,9 @@
 // Asset path:
 //   OnApplySelectedAssetFixesClicked — the heavy AssetTools rename flow,
 //     emits CoreRedirects entries to DefaultEngine.ini, recompiles
-//     descendant Blueprints, fixes up ObjectRedirectors, auto-saves
-//     dirty packages, then reports the batch to the server.
+//     descendant Blueprints, re-points referencers while KEEPING the redirector
+//     stubs (so no reference ever dangles), auto-saves dirty packages, then
+//     reports the batch to the server.
 //
 // Pulled out of the main panel TU because these are the only flows that
 // reach into AssetTools / AssetRegistry / Kismet / FileHelpers and they
@@ -658,18 +659,27 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 			FailedRenames, Pending.Num());
 	}
 
-	// Re-point every referencer at the new asset and DELETE the fixed-up
-	// redirector (ERedirectFixupMode::DeleteFixedUpRedirectors — same cleanup
-	// as the Content Browser's "Fix Up Redirectors"), so no stale redirector
-	// .uassets accumulate at the old paths. No checkout modal mid-flow.
+	// Re-point every referencer at the new asset but KEEP the redirector
+	// (ERedirectFixupMode::LeaveFixedUpRedirectors). Deleting it here
+	// (DeleteFixedUpRedirectors) was the cause of "renaming breaks references":
+	// FixupReferencers can only re-save referencers it can load AND check out
+	// — the currently-open level, read-only packages, and anything it fails to
+	// resolve are left dangling the instant the redirector is gone. The
+	// [CoreRedirects] fallback we also write does NOT cover them, because
+	// CoreRedirects are read from the .ini only at editor startup, so nothing
+	// catches those references until the next launch. Leaving the redirector
+	// makes the rename reference-safe immediately: every reference form (soft /
+	// hard / by-package / by-object / unloaded) resolves through it. The stub
+	// is cosmetic and the user can run Content Browser → "Fix Up Redirectors"
+	// whenever they want to sweep them.
 	if (!OurRedirectors.IsEmpty())
 	{
 		UE_LOG(LogShintTools, Verbose,
-			TEXT("ShintPanel: fixing up %d redirector(s) from this batch"),
+			TEXT("ShintPanel: re-pointing referencers of %d redirector(s), keeping the stubs"),
 			OurRedirectors.Num());
 		AssetTools.FixupReferencers(OurRedirectors,
 			/*bCheckoutDialogPrompt=*/false,
-			ERedirectFixupMode::DeleteFixedUpRedirectors);
+			ERedirectFixupMode::LeaveFixedUpRedirectors);
 	}
 
 	// T2 — Persist redirect mappings to DefaultEngine.ini. ObjectRedirector

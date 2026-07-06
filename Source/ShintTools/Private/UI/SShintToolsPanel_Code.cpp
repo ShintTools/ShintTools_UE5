@@ -50,8 +50,12 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 	auto Tile = [](const FText& Caption, TSharedPtr<STextBlock>& OutValue,
 		const FText& Sub, const FLinearColor& SubColor) -> TSharedRef<SWidget>
 	{
+		// Rounded card treatment (BgCard fill + subtle border) — the same brush
+		// SShintCard paints, so the KPI tiles read as one system with the
+		// Overview hero cards instead of flat squared surfaces.
 		return SNew(SBorder)
-			.BorderImage(ST4::Solid(C_Surface()))
+			.BorderImage(ST4::Outline(FShintStyle::Colors::BgCard(),
+				FShintStyle::Colors::BorderSubtle(), FShintStyle::Radius::Card))
 			.Padding(FMargin(16.f, 14.f))
 			[
 				SNew(SVerticalBox)
@@ -106,16 +110,9 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 				[ Tile(LOCTEXT("CVQ","QUALITY"), CodeScore_Label,
 					LOCTEXT("CVQSub","Project score"), FShintStyle::Colors::SevLow()) ]
 			]
-			// Sub-score breakdown line (perf / sec / bp / maint / naming).
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 16.f).HAlign(HAlign_Center)
-			[
-				SAssignNew(CodeScoreBreakdown_Label, STextBlock)
-					.Text(LOCTEXT("CVQBreakdownEmpty",
-						"Quality Score: run a scan to compute"))
-					.Font(F_Small())
-					.ColorAndOpacity(FSlateColor(C_Gray()))
-			]
-
+			// The overall QUALITY tile above is the single quality readout; the
+			// per-category breakdown strip (perf / sec / bp / maint / naming) was
+			// removed as redundant.
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 14.f)
 			[
 				BuildModuleProgressBar(CodeProgressBar,
@@ -366,13 +363,28 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 				  SNew(STextBlock).Text(LOCTEXT("SelAll", "Select All")).Font(F_Label())
 				  .ColorAndOpacity(FSlateColor(C_Blue())), FSlateColor(C_Blue())) ]
 			]
-			+ SHorizontalBox::Slot().AutoWidth()
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f)
 			[
 				SNew(SButton).ContentPadding(FMargin(8.f, 4.f))
 				.OnClicked(this, &SShintToolsPanel::OnDeselectAllCodeClicked)
 				[ ShintBtnContent(TEXT("ShintTools.Icons.Cross"),
 				  SNew(STextBlock).Text(LOCTEXT("DeselAll", "Deselect All")).Font(F_Label())
 				  .ColorAndOpacity(FSlateColor(C_Gray())), FSlateColor(C_Gray())) ]
+			]
+			// Primary action lives inline on the toolbar (Unity layout), on the
+			// same row as the Fixable Only filter rather than a separate footer.
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SAssignNew(ApplyCodeBtn, SButton)
+				.IsEnabled(false).ContentPadding(FMargin(12.f, 5.f))
+				.OnClicked(this, &SShintToolsPanel::OnApplySelectedCodeFixesClicked)
+				[
+					ShintBtnContent(TEXT("ShintTools.Icons.Tick"),
+					SAssignNew(ApplyCodeBtnLabel, STextBlock)
+					.Text(LOCTEXT("ApplyCode", "Fix all (0)"))
+					.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Green())),
+					FSlateColor(C_Green()))
+				]
 			]
 		];
 }
@@ -467,23 +479,11 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 8.f, 0.f, 0.f) [ Divider() ]
 
-		// Action row
+		// Action row — the primary "Fix all" action moved onto the filter
+		// toolbar; only the paid Send-to-Dashboard button lives here now.
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 8.f, 0.f, 0.f)
 		[
 			SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f, 6.f))
-			+ SWrapBox::Slot()
-			[
-				SAssignNew(ApplyCodeBtn, SButton)
-				.IsEnabled(false).ContentPadding(FMargin(14.f, 7.f))
-				.OnClicked(this, &SShintToolsPanel::OnApplySelectedCodeFixesClicked)
-				[
-					ShintBtnContent(TEXT("ShintTools.Icons.Tick"),
-					SAssignNew(ApplyCodeBtnLabel, STextBlock)
-					.Text(LOCTEXT("ApplyCode", "Apply Selected (0)"))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green())),
-					FSlateColor(C_Green()))
-				]
-			]
 			// [DASH-STRIP-BEGIN]
 			+ SWrapBox::Slot()
 			[

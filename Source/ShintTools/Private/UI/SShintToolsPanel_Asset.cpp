@@ -45,7 +45,8 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 		const FText& Sub, const FLinearColor& SubColor) -> TSharedRef<SWidget>
 	{
 		return SNew(SBorder)
-			.BorderImage(ST4::Solid(C_Surface()))
+			.BorderImage(ST4::Outline(FShintStyle::Colors::BgCard(),
+				FShintStyle::Colors::BorderSubtle(), FShintStyle::Radius::Card))
 			.Padding(FMargin(16.f, 14.f))
 			[
 				SNew(SVerticalBox)
@@ -282,13 +283,27 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 			]
 			// T6 — Deselect All companion button. Lives next to Select All so
 			// users have symmetric controls for the asset rename batch.
-			+ SHorizontalBox::Slot().AutoWidth()
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f)
 			[
 				SNew(SButton).ContentPadding(FMargin(10.f, 4.f))
 				.OnClicked(this, &SShintToolsPanel::OnDeselectAllAssetsClicked)
 				[ ShintBtnContent(TEXT("ShintTools.Icons.Cross"),
 				  SNew(STextBlock).Text(LOCTEXT("ANBDes", "Deselect All")).Font(F_Label())
 				  .ColorAndOpacity(FSlateColor(C_DimGray())), FSlateColor(C_DimGray())) ]
+			]
+			// Primary action inline on the toolbar (Unity layout).
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SAssignNew(ApplyAssetBtn, SButton)
+				.IsEnabled(false).ContentPadding(FMargin(12.f, 5.f))
+				.OnClicked(this, &SShintToolsPanel::OnApplySelectedAssetFixesClicked)
+				[
+					ShintBtnContent(TEXT("ShintTools.Icons.Tick"),
+					SAssignNew(ApplyAssetBtnLabel, STextBlock)
+					.Text(LOCTEXT("ApplyAsset", "Fix all (0)"))
+					.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Green())),
+					FSlateColor(C_Green()))
+				]
 			]
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f) [ Divider() ]
@@ -306,19 +321,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 8.f, 0.f, 0.f)
 		[
 			SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f, 6.f))
-			+ SWrapBox::Slot()
-			[
-				SAssignNew(ApplyAssetBtn, SButton)
-				.IsEnabled(false).ContentPadding(FMargin(14.f, 7.f))
-				.OnClicked(this, &SShintToolsPanel::OnApplySelectedAssetFixesClicked)
-				[
-					ShintBtnContent(TEXT("ShintTools.Icons.Tick"),
-					SAssignNew(ApplyAssetBtnLabel, STextBlock)
-					.Text(LOCTEXT("ApplyAsset", "Apply Corrections (0)"))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green())),
-					FSlateColor(C_Green()))
-				]
-			]
+			// "Fix all" moved onto the filter toolbar; only paid Send lives here.
 			// [DASH-STRIP-BEGIN]
 			+ SWrapBox::Slot()
 			[

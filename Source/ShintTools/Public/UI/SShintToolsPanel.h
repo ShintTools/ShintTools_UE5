@@ -432,7 +432,6 @@ private:
 	TSharedPtr<STextBlock> CodeErrors_Label;
 	TSharedPtr<STextBlock> CodeWarnings_Label;
 	TSharedPtr<STextBlock> CodeScore_Label;            // Slice B — overall Quality Score badge
-	TSharedPtr<STextBlock> CodeScoreBreakdown_Label;   // Slice B — sub-scores under stats
 	TSharedPtr<STextBlock> AssetTotal_Label;
 	TSharedPtr<STextBlock> AssetInvalid_Label;
 	TSharedPtr<STextBlock> AssetTime_Label;

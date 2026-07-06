@@ -241,7 +241,8 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodKpiRow()
 		const FLinearColor& SubColor, const FText& InitialSub) -> TSharedRef<SWidget>
 	{
 		return SNew(SBorder)
-			.BorderImage(ST4::Solid(C_Surface()))
+			.BorderImage(ST4::Outline(FShintStyle::Colors::BgCard(),
+				FShintStyle::Colors::BorderSubtle(), FShintStyle::Radius::Card))
 			.Padding(FMargin(16.f, 14.f))
 			[
 				SNew(SVerticalBox)

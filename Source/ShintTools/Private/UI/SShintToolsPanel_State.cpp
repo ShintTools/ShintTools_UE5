@@ -477,29 +477,6 @@ void SShintToolsPanel::RefreshQualityScore()
 			CodeScore_Label->SetColorAndOpacity(FSlateColor(C_Gray()));
 		}
 	}
-
-	if (CodeScoreBreakdown_Label.IsValid())
-	{
-		if (LastQualityScore.bValid)
-		{
-			const FString Line = FString::Printf(
-				TEXT("Perf %.0f  ·  Sec %.0f  ·  BP %.0f  ·  Maint %.0f  ·  Naming %.0f"),
-				LastQualityScore.PerformanceScore,
-				LastQualityScore.SecurityScore,
-				LastQualityScore.BestPracticesScore,
-				LastQualityScore.MaintainabilityScore,
-				LastQualityScore.NamingScore);
-			CodeScoreBreakdown_Label->SetText(FText::FromString(Line));
-			CodeScoreBreakdown_Label->SetColorAndOpacity(
-				FSlateColor(ScoreColor(LastQualityScore.OverallScore)));
-		}
-		else
-		{
-			CodeScoreBreakdown_Label->SetText(LOCTEXT("CVQBreakdownEmpty",
-				"Quality Score: run a scan to compute"));
-			CodeScoreBreakdown_Label->SetColorAndOpacity(FSlateColor(C_Gray()));
-		}
-	}
 }
 
 void SShintToolsPanel::OnLatestScoreFetched(const FShintQualityScoreSnapshot& Snap)
@@ -527,7 +504,7 @@ void SShintToolsPanel::RefreshApplyCodeLabel()
 		[](const FShintIssueItemPtr& P){ return P->bChecked; });
 	if (ApplyCodeBtnLabel.IsValid())
 		ApplyCodeBtnLabel->SetText(FText::FromString(
-			FString::Printf(TEXT("Apply Selected (%d)"), N)));
+			FString::Printf(TEXT("Fix all (%d)"), N)));
 	if (ApplyCodeBtn.IsValid()) ApplyCodeBtn->SetEnabled(N > 0);
 }
 
@@ -537,7 +514,7 @@ void SShintToolsPanel::RefreshApplyAssetLabel()
 		[](const FShintAssetItemPtr& P){ return P->bChecked; });
 	if (ApplyAssetBtnLabel.IsValid())
 		ApplyAssetBtnLabel->SetText(FText::FromString(
-			FString::Printf(TEXT("Apply Corrections (%d)"), N)));
+			FString::Printf(TEXT("Fix all (%d)"), N)));
 	if (ApplyAssetBtn.IsValid()) ApplyAssetBtn->SetEnabled(N > 0);
 }
 
