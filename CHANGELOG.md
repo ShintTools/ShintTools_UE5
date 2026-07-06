@@ -2,7 +2,7 @@
 
 ---
 
-## [Unreleased] — Panel design unification + fix precision
+## [1.1.3] — 2026-07-06 — Panel design unification + fix precision
 
 ### Changed
 - **Code Validator + Asset Naming Bot restyled to the Asset Optimizer
