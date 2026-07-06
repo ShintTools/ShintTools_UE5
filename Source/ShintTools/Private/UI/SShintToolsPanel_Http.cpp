@@ -151,14 +151,27 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 F
 
 		// T3 — Surface a success toast so the user sees what just landed.
 		// Without this, the panel only updated counters and the "click was
-		// silent" perception drove repeat-clicks. Mention the kind of scan
-		// (Blueprint vs C++) explicitly because BP fixes were the most
-		// visually-quiet flow.
+		// silent" perception drove repeat-clicks. Label by what was ACTUALLY
+		// applied (Result.BlueprintFixesApplied), never by the last scan mode
+		// — bBlueprintScanActive said "Blueprint" for a C++ fix applied right
+		// after a BP scan.
 		{
-			const TCHAR* Kind = bBlueprintScanActive ? TEXT("Blueprint") : TEXT("C++");
-			FNotificationInfo Info(FText::FromString(
-				FString::Printf(TEXT("✓  %d %s fix(es) applied"),
-					Result.TotalFixesApplied, Kind)));
+			const int32 BPCount  = Result.BlueprintFixesApplied;
+			const int32 CppCount = Result.TotalFixesApplied - BPCount;
+			FString Headline;
+			if (BPCount > 0 && CppCount > 0)
+			{
+				Headline = FString::Printf(
+					TEXT("✓  %d fix(es) applied — %d C++ · %d Blueprint"),
+					Result.TotalFixesApplied, CppCount, BPCount);
+			}
+			else
+			{
+				Headline = FString::Printf(TEXT("✓  %d %s fix(es) applied"),
+					Result.TotalFixesApplied,
+					BPCount > 0 ? TEXT("Blueprint") : TEXT("C++"));
+			}
+			FNotificationInfo Info(FText::FromString(Headline));
 			if (Result.TotalFixesSkipped > 0)
 			{
 				Info.SubText = FText::FromString(

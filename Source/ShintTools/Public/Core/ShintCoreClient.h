@@ -138,6 +138,11 @@ struct FShintFixResult
 	bool    bSuccess           = false;
 	int32   TotalFixesApplied  = 0;
 	int32   TotalFixesSkipped  = 0;
+	// How many of TotalFixesApplied were Blueprint fixes (Kismet-side). The
+	// UI labels its "N fixes applied" toast from THIS split — labelling from
+	// the last scan mode showed "Blueprint" for a C++ fix applied after a BP
+	// scan.
+	int32   BlueprintFixesApplied = 0;
 	FString ErrorMessage;
 	TArray<FShintFixedFile>     FixedFiles;
 	TArray<FShintCompileError>  CompileErrors;  // populated after incremental build check
