@@ -2,6 +2,20 @@
 
 ---
 
+## [1.1.5] — 2026-07-07 — Fab launcher welcome
+
+### Added
+- **Fab (marketplace) launcher welcome.** On the standalone Fab build
+  (`SHINT_MARKETPLACE_BUILD`), a one-time welcome now funnels users to the
+  platform: *"To get full access… visit shint.tools/login and start today."*
+  with a **Get the Launcher** button that opens `https://shint.tools/login`.
+  Shown once per project (persisted to `Saved/ShintTools/launcher_welcome.txt`),
+  dismissible, and it replaces the generic tier welcome on the Fab build only.
+  The in-editor Core install wizard is unchanged, so the free tier still works
+  standalone. Paid and launcher-installed builds never show it.
+
+---
+
 ## [1.1.4] — 2026-07-06 — Rename safety + tile cards + Free welcome
 
 ### Fixed
