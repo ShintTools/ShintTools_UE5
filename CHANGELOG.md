@@ -2,6 +2,27 @@
 
 ---
 
+## [1.1.6] — 2026-07-07 — Streaming Issue Explain + timeout fix
+
+### Fixed
+- **"Could not reach the LLM" on paid tiers.** The synchronous `/agent/explain`
+  call held the HTTP connection silent for the whole 30-45s CPU generation, and
+  UE's HTTP backend aborts on ~30s of no activity (a timeout separate from the
+  request total). Short (<30s) explanations slipped under it; real 30-45s ones
+  tripped the abort and surfaced as "Could not reach the LLM" even though the
+  core returned a valid 200. Both request paths now set `SetActivityTimeout` to
+  match the total (180s for the LLM endpoints).
+
+### Changed
+- **Issue Explain now streams** via `/agent/explain/stream`. Tokens appear in the
+  modal as they generate (first token in ~3-5s) instead of a 30-45s blank
+  spinner, and the continuous token flow keeps the connection active so it can
+  never hit the silent-generation timeout. New SSE parser + streaming transport
+  (`FShintSseParser`, `SendRequestStream`); paid-only, stripped from the free
+  build with the rest of the agent module.
+
+---
+
 ## [1.1.5] — 2026-07-07 — Fab launcher welcome
 
 ### Added

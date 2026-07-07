@@ -225,6 +225,12 @@ private:
 	// the request fires, the server takes 30-45s on CPU and the modal shows
 	// a spinner with rotating status text until the response arrives.
 	FReply OnExplainIssueClicked(FShintIssueItemPtr Item);
+	// Live token from /agent/explain/stream — appended to the modal as it
+	// arrives. RequestId guards against a stale stream writing into a modal that
+	// now shows a different issue.
+	void   OnExplainChunk(const FString& Chunk, uint64 RequestId);
+	// Accumulates streamed tokens for the currently-open modal.
+	FString ExplainStreamBuffer;
 	void   OnExplainComplete(const FShintAgentExplainResponse& Result,
 	                         FShintIssueItemPtr                Item,
 	                         uint64                            RequestId);

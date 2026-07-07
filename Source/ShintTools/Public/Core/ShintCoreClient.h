@@ -22,6 +22,16 @@ struct FShintRequestResult
 };
 DECLARE_DELEGATE_OneParam(FOnShintRequestComplete, const FShintRequestResult&);
 
+// Per-chunk callback for Server-Sent-Events endpoints (agent/explain/stream).
+// Fired on the game thread as each text fragment arrives. Generic (not
+// agent-gated) so the streaming transport compiles in every tier even though
+// only the paid explainer drives it.
+DECLARE_DELEGATE_OneParam(FOnShintStreamChunk, const FString&);
+
+// SSE response parser (FArchive). Defined in ShintCoreClient.cpp; forward
+// declared here so the streaming send/complete signatures can reference it.
+class FShintSseParser;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Code Validator — enriched issue
 // ─────────────────────────────────────────────────────────────────────────────
@@ -600,12 +610,32 @@ public:
 	 */
 	void RequestExplainIssue(const FShintCodeIssue&      Issue,
 	                         FOnShintAgentExplainComplete OnComplete);
+
+	/**
+	 *  Streaming twin of RequestExplainIssue — POSTs /agent/explain/stream and
+	 *  surfaces tokens as they generate (first token in ~3-5s) via OnChunk,
+	 *  then OnComplete with the final text. Streaming keeps the connection
+	 *  active token-by-token, so it never hits the silent-generation gap that
+	 *  made the synchronous call trip the HTTP activity timeout.
+	 */
+	void RequestExplainIssueStream(const FShintCodeIssue&       Issue,
+	                               FOnShintStreamChunk          OnChunk,
+	                               FOnShintAgentExplainComplete OnComplete);
 	// [AGENT-STRIP-END]
 
 	// ── Generic ───────────────────────────────────────────────────────────────
 	void SendRequest(const FString& FullUrl, EShintHttpMethod Method,
 	                 const FString& Body, FOnShintRequestComplete OnComplete,
 	                 const TMap<FString, FString>& ExtraHeaders = {});
+
+	// Streaming variant of SendRequest for Server-Sent-Events endpoints.
+	// OnChunk fires on the game thread per {"chunk"} event; OnComplete fires
+	// once at stream end, ResponseBody carrying the accumulated text (or the
+	// raw error body on a non-2xx status).
+	void SendRequestStream(const FString& FullUrl, EShintHttpMethod Method,
+	                       const FString& Body, FOnShintStreamChunk OnChunk,
+	                       FOnShintRequestComplete OnComplete,
+	                       const TMap<FString, FString>& ExtraHeaders = {});
 
 	// GetConfig() / GetConfigMutable() are already declared above
 	// (lines ~409). FShintDashboardSync uses GetConfig() to read
@@ -620,6 +650,11 @@ public:
 private:
 	void OnHttpRequestComplete(FHttpRequestPtr Request, FHttpResponsePtr Response,
 	                           bool bConnectedSuccessfully, FOnShintRequestComplete OnComplete);
+
+	void OnHttpStreamComplete(FHttpRequestPtr Request, FHttpResponsePtr Response,
+	                          bool bConnectedSuccessfully,
+	                          TSharedRef<FShintSseParser> Parser,
+	                          FOnShintRequestComplete OnComplete);
 
 	static FString MethodToString(EShintHttpMethod Method);
 	static FShintValidateResult  ParseValidateResponse (const FShintRequestResult& Raw);

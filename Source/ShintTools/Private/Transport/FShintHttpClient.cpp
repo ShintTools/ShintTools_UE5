@@ -77,7 +77,19 @@ void FShintHttpClient::Send(
 		AsShared(),
 		&FShintHttpClient::HandleResponse,
 		OnComplete);
-	Req->SetTimeout(TimeoutForUrl(FullUrl));
+	const float RequestTimeout = TimeoutForUrl(FullUrl);
+	Req->SetTimeout(RequestTimeout);
+	// CRITICAL for /agent/explain: SetTimeout bounds the TOTAL request, but UE's
+	// HTTP backend also enforces a separate ACTIVITY timeout (no bytes sent or
+	// received) that defaults to ~30s. The synchronous /agent/explain endpoint
+	// streams nothing — it holds the connection silent for the full 30-45s (60-90s
+	// on slow CPUs) CPU generation, then sends the whole body at once. With the
+	// 30s default, that silent gap tripped the activity abort at ~30s and the
+	// plugin reported "Could not reach the LLM" even though the core returned a
+	// valid 200 (short <30s generations slipped under it, which is why it looked
+	// intermittent). Match the activity timeout to the total so a long, quiet
+	// generation is never mistaken for a dead connection.
+	Req->SetActivityTimeout(RequestTimeout);
 
 	if (!Req->ProcessRequest())
 	{
