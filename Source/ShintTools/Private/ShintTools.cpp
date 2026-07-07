@@ -93,15 +93,23 @@ void FShintToolsModule::StartupModule()
 	// worker thread; if it isn't healthy, open the install wizard.
 	SShintCoreInstallerWindow::OpenIfNeededAsync(18200);
 #else
-	// The welcome dialog is tier-gated, but the license probe below is
-	// ASYNC — at tab-spawn time GCachedTier is still "free" on a first run,
-	// so a paid user never saw the welcome. Re-attempt whenever a probe
-	// resolves: MaybeShowForTier's own guards (once per machine) make every
-	// repeat a no-op. Subscribe BEFORE kicking the probe so the first resolve
-	// can't slip through.
+	// Show the generic welcome ONCE, and only for the FREE tier. Paid users
+	// install + onboard through the launcher, so an in-editor welcome popup is
+	// redundant noise for them. Decide only AFTER the async license probe
+	// resolves: at tab-spawn time GCachedTier is still the "free" default, so
+	// firing on tab-open would pop the free welcome on a paid install (the
+	// reported bug). MaybeShowForTier's once-per-machine guard keeps it to a
+	// single appearance. Subscribe BEFORE kicking the probe so the first
+	// resolve can't slip through.
 	OnLicenseResolved.AddLambda([]()
 	{
-		SShintWelcomeDialog::MaybeShowForTier(GetCachedTier());
+		const FString Tier = GetCachedTier();
+		const bool bIsFree =
+			Tier.IsEmpty() || Tier.Equals(TEXT("free"), ESearchCase::IgnoreCase);
+		if (bIsFree)
+		{
+			SShintWelcomeDialog::MaybeShowForTier(Tier);
+		}
 	});
 #endif
 
@@ -188,7 +196,11 @@ void FShintToolsModule::OpenShintToolsPanel()
 
 TSharedRef<SDockTab> FShintToolsModule::SpawnShintToolsTab(const FSpawnTabArgs& SpawnTabArgs)
 {
-	SShintWelcomeDialog::MaybeShowForTier(GetCachedTier());
+	// NOTE: the welcome is driven exclusively by the license-resolved callback
+	// in StartupModule (free-tier only). Do NOT pop it here on tab-open — at
+	// first spawn the tier is still the "free" default, which would show the
+	// free welcome on a paid install. It would also double up with the Fab
+	// launcher-welcome on marketplace builds.
 
 	return SNew(SDockTab)
 		.TabRole(ETabRole::NomadTab)

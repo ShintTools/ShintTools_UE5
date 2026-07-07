@@ -33,9 +33,16 @@ public class ShintTools : ModuleRules
 		// sets this to 1 to compile the reduced Free-tier variant.
 		PublicDefinitions.Add("SHINT_FREE_TIER=0");
 
-		// 1 = enable the standalone Core install wizard at module startup
-		// (used by the marketplace build, which has no external installer).
-		PublicDefinitions.Add("SHINT_MARKETPLACE_BUILD=1");
+		// 0 = full paid/launcher build: the launcher's installer owns Core, and
+		// the generic tier welcome is used. The Fab source pack and the
+		// launcher's marketplace binary build flip this to 1 to compile the
+		// standalone variant (in-editor Core install wizard + "get the launcher"
+		// promo). This MUST stay 0 in committed source: paid installs pull @main
+		// and compile it directly, so a committed 1 makes every paid install run
+		// the marketplace path (Fab welcome + Core wizard). Regressed to 1 in
+		// 9ae64c5 while chasing a green UE 5.7 build — that is the paid
+		// welcome-on-launcher-install bug; restored here.
+		PublicDefinitions.Add("SHINT_MARKETPLACE_BUILD=0");
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
