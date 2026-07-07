@@ -5,14 +5,20 @@
 ## [1.1.7] — 2026-07-07 — Welcome dialog no longer shows on paid launcher installs
 
 ### Fixed
-- **Generic welcome popped on paid tiers when installed through the launcher.**
-  The welcome was fired from `SpawnShintToolsTab` on every panel open using the
-  cached tier — but the license probe is async, so at first tab-spawn the tier
-  is still the `"free"` default and a paid user saw the (free) welcome before
-  the probe resolved. The welcome is now driven exclusively by the
-  license-resolved callback and gated to the free tier only: paid users onboard
-  through the launcher, so the in-editor popup is redundant for them. This also
-  removes a double-welcome on Fab builds (launcher promo + generic).
+- **Paid launcher installs ran the whole marketplace path (Fab "get the
+  launcher" promo + Core install wizard).** `SHINT_MARKETPLACE_BUILD` regressed
+  from its canonical `0` to `1` in `9ae64c5` while chasing a green UE 5.7 build.
+  Paid installs pull `@main` **source** and compile it directly, so a committed
+  `1` made every paid build take the `#if SHINT_MARKETPLACE_BUILD` branch —
+  showing the "download the launcher" dialog to users who already have it and
+  re-opening the Core wizard. Restored the canonical `0`; the Fab source pack
+  and the launcher's marketplace binary build still flip it to `1` themselves.
+- **Generic tier welcome could also pop with the wrong tier.** It was fired from
+  `SpawnShintToolsTab` on every panel open using the cached tier — but the
+  license probe is async, so at first tab-spawn the tier is still the `"free"`
+  default. It's now driven exclusively by the license-resolved callback and
+  gated to the free tier only (paid users onboard through the launcher), which
+  also prevents a double-welcome on Fab builds.
 
 ## [1.1.6] — 2026-07-07 — Streaming Issue Explain + timeout fix
 
