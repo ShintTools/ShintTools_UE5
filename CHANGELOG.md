@@ -2,6 +2,18 @@
 
 ---
 
+## [1.1.7] — 2026-07-07 — Welcome dialog no longer shows on paid launcher installs
+
+### Fixed
+- **Generic welcome popped on paid tiers when installed through the launcher.**
+  The welcome was fired from `SpawnShintToolsTab` on every panel open using the
+  cached tier — but the license probe is async, so at first tab-spawn the tier
+  is still the `"free"` default and a paid user saw the (free) welcome before
+  the probe resolved. The welcome is now driven exclusively by the
+  license-resolved callback and gated to the free tier only: paid users onboard
+  through the launcher, so the in-editor popup is redundant for them. This also
+  removes a double-welcome on Fab builds (launcher promo + generic).
+
 ## [1.1.6] — 2026-07-07 — Streaming Issue Explain + timeout fix
 
 ### Fixed
