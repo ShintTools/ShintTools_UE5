@@ -86,6 +86,7 @@ FReply SShintToolsPanel::OnExplainIssueClicked(FShintIssueItemPtr Item)
 	}
 
 	ExplainStatusIndex = 0;
+	ExplainStreamBuffer.Reset();
 
 	// Token this request so a stale, slow answer for a previously-clicked row
 	// can't overwrite the modal that's now showing a different issue.
@@ -201,19 +202,57 @@ FReply SShintToolsPanel::OnExplainIssueClicked(FShintIssueItemPtr Item)
 		FTickerDelegate::CreateSP(this, &SShintToolsPanel::TickExplainStatus),
 		8.0f);
 
-	// Fire the request — completion routes through OnExplainComplete on the
-	// game thread (UE's HTTP module dispatches there).
+	// Stream the explanation: tokens land via OnExplainChunk as they generate
+	// (first token in ~3-5s), then OnExplainComplete finalises. Both route on
+	// the game thread — the transport marshals SSE chunks there — and both
+	// carry the request token so a stale stream can't bleed into a newer modal.
+	TWeakPtr<SShintToolsPanel> WeakSelf(SharedThis(this));
+
+	FOnShintStreamChunk OnChunk =
+		FOnShintStreamChunk::CreateLambda(
+			[WeakSelf, ThisRequestId](const FString& Chunk)
+			{
+				if (TSharedPtr<SShintToolsPanel> Pinned = WeakSelf.Pin())
+					Pinned->OnExplainChunk(Chunk, ThisRequestId);
+			});
+
 	FOnShintAgentExplainComplete OnDone =
 		FOnShintAgentExplainComplete::CreateLambda(
-			[WeakThis = TWeakPtr<SShintToolsPanel>(SharedThis(this)), Item, ThisRequestId]
+			[WeakSelf, Item, ThisRequestId]
 			(const FShintAgentExplainResponse& Resp)
 			{
-				if (TSharedPtr<SShintToolsPanel> Pinned = WeakThis.Pin())
+				if (TSharedPtr<SShintToolsPanel> Pinned = WeakSelf.Pin())
 					Pinned->OnExplainComplete(Resp, Item, ThisRequestId);
 			});
 
-	CoreClient->RequestExplainIssue(Issue, OnDone);
+	CoreClient->RequestExplainIssueStream(Issue, OnChunk, OnDone);
 	return FReply::Handled();
+}
+
+void SShintToolsPanel::OnExplainChunk(const FString& Chunk, uint64 RequestId)
+{
+	// Drop chunks from a superseded request (user clicked Explain on another
+	// row, or closed the modal, while this stream was still generating).
+	if (RequestId != ExplainRequestId)
+		return;
+
+	// First token: the model is producing output, so retire the rotating
+	// "Analyzing…/Drafting…" ticker and switch the status to a steady label.
+	// The spinner keeps turning until the stream completes.
+	if (ExplainStreamBuffer.IsEmpty())
+	{
+		if (ExplainTickerHandle.IsValid())
+		{
+			FTSTicker::GetCoreTicker().RemoveTicker(ExplainTickerHandle);
+			ExplainTickerHandle.Reset();
+		}
+		if (ExplainStatusLine.IsValid())
+			ExplainStatusLine->SetText(LOCTEXT("ExplainGenerating", "Generating explanation…"));
+	}
+
+	ExplainStreamBuffer += Chunk;
+	if (ExplainResultBox.IsValid())
+		ExplainResultBox->SetText(FText::FromString(ExplainStreamBuffer));
 }
 
 void SShintToolsPanel::OnExplainComplete(

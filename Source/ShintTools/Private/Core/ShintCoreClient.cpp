@@ -30,11 +30,131 @@
 
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Async/Async.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Server-Sent-Events parser (FArchive sink)
+//
+// UE's HTTP backend writes the streamed response body into an FArchive as the
+// bytes arrive (SetResponseBodyReceiveStream). This sink splits the stream on
+// the SSE "\n\n" event delimiter, parses each `data: {json}` line, and surfaces
+// chunk / error / done events. Chunk events are pushed to the game thread by the
+// caller-supplied sink so Slate can append tokens live.
+//
+// Byte-level split is safe: '\n' (0x0A) never appears inside a multi-byte UTF-8
+// sequence, so cutting on "\n\n" can't bisect a character.
+// ─────────────────────────────────────────────────────────────────────────────
+class FShintSseParser : public FArchive
+{
+public:
+	explicit FShintSseParser(TFunction<void(FString)> InChunkSink)
+		: ChunkSink(MoveTemp(InChunkSink))
+	{
+		SetIsSaving(true);   // bytes flow INTO us, like a write target
+	}
+
+	virtual void Serialize(void* Data, int64 Length) override
+	{
+		if (!Data || Length <= 0) return;
+		const uint8* Bytes = static_cast<const uint8*>(Data);
+		Raw.Append(Bytes, static_cast<int32>(Length));
+		Pending.Append(Bytes, static_cast<int32>(Length));
+		DrainEvents();
+	}
+
+	virtual FString GetArchiveName() const override { return TEXT("FShintSseParser"); }
+
+	// Read on the game thread once the request completes.
+	FString FullText;      // concatenated chunk events (or authoritative full_text)
+	FString ErrorText;     // first {"error"} event, if any
+	float   GenSeconds = 0.f;
+	bool    bDone = false;
+
+	// Whole body decoded — used to surface a non-2xx error body (e.g. a 403
+	// tier-gate JSON) that never arrives as an SSE event.
+	FString RawBody() const
+	{
+		if (Raw.Num() == 0) return FString();
+		FUTF8ToTCHAR Conv(reinterpret_cast<const ANSICHAR*>(Raw.GetData()), Raw.Num());
+		return FString(Conv.Length(), Conv.Get());
+	}
+
+private:
+	void DrainEvents()
+	{
+		int32 Start = 0;
+		for (int32 i = 0; i + 1 < Pending.Num(); ++i)
+		{
+			if (Pending[i] == 0x0A && Pending[i + 1] == 0x0A)
+			{
+				HandleEvent(Pending.GetData() + Start, i - Start);
+				Start = i + 2;
+				++i; // skip the paired newline
+			}
+		}
+		if (Start > 0)
+		{
+			// Keep only the unparsed tail (version-agnostic — avoids RemoveAt's
+			// shrink-flag API churn across engine versions).
+			Pending = TArray<uint8>(Pending.GetData() + Start, Pending.Num() - Start);
+		}
+	}
+
+	void HandleEvent(const uint8* EvtBytes, int32 EvtLen)
+	{
+		if (EvtLen <= 0) return;
+		FUTF8ToTCHAR Conv(reinterpret_cast<const ANSICHAR*>(EvtBytes), EvtLen);
+		FString Line(Conv.Length(), Conv.Get());
+		Line.TrimStartAndEndInline();
+		if (!Line.StartsWith(TEXT("data:"))) return;
+
+		FString Json = Line.RightChop(5); // strip "data:"
+		Json.TrimStartAndEndInline();
+		if (Json.IsEmpty()) return;
+
+		TSharedPtr<FJsonObject> Obj;
+		TSharedRef<TJsonReader<>> R = TJsonReaderFactory<>::Create(Json);
+		if (!FJsonSerializer::Deserialize(R, Obj) || !Obj.IsValid()) return;
+
+		FString Chunk;
+		if (Obj->TryGetStringField(TEXT("chunk"), Chunk) && !Chunk.IsEmpty())
+		{
+			FullText += Chunk;
+			if (ChunkSink) ChunkSink(Chunk);
+			return;
+		}
+		FString Err;
+		if (Obj->TryGetStringField(TEXT("error"), Err))
+		{
+			if (ErrorText.IsEmpty()) ErrorText = Err;
+			return;
+		}
+		bool bDoneField = false;
+		if (Obj->TryGetBoolField(TEXT("done"), bDoneField) && bDoneField)
+		{
+			bDone = true;
+			FString ServerFull;
+			if (Obj->TryGetStringField(TEXT("full_text"), ServerFull) && !ServerFull.IsEmpty())
+			{
+				FullText = ServerFull; // authoritative concatenation from the server
+			}
+			double G = 0.0;
+			if (Obj->TryGetNumberField(TEXT("generation_seconds"), G))
+			{
+				GenSeconds = static_cast<float>(G);
+			}
+		}
+	}
+
+	TArray<uint8> Raw;      // every byte received (for the raw error body)
+	TArray<uint8> Pending;  // unparsed tail
+	TFunction<void(FString)> ChunkSink;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Construction
@@ -231,6 +351,14 @@ void FShintCoreClient::SendRequest(
 	}
 	// [AGENT-STRIP-END]
 	Req->SetTimeout(TimeoutSecs);
+	// Match the ACTIVITY timeout to the total. SetTimeout bounds the whole
+	// request, but UE's HTTP backend separately aborts when no bytes flow for
+	// ~30s (default). The synchronous /agent/explain holds the connection
+	// silent for the full 30-45s CPU generation, so the 30s default aborted it
+	// mid-generation and the plugin reported "Could not reach the LLM" even
+	// though the core returned a valid 200. (The streaming endpoint below avoids
+	// the gap entirely; this keeps the non-streaming path safe too.)
+	Req->SetActivityTimeout(TimeoutSecs);
 
 	if (!Req->ProcessRequest())
 	{
@@ -239,6 +367,113 @@ void FShintCoreClient::SendRequest(
 		Err.ErrorMessage = TEXT("Failed to dispatch HTTP request.");
 		OnComplete.ExecuteIfBound(Err);
 	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Streaming request (Server-Sent Events)
+// ─────────────────────────────────────────────────────────────────────────────
+void FShintCoreClient::SendRequestStream(
+	const FString& FullUrl, EShintHttpMethod Method, const FString& Body,
+	FOnShintStreamChunk OnChunk, FOnShintRequestComplete OnComplete,
+	const TMap<FString, FString>& ExtraHeaders)
+{
+	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient (stream): %s %s"),
+		*MethodToString(Method), *FullUrl);
+
+	FHttpModule& Http = FHttpModule::Get();
+	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Req = Http.CreateRequest();
+
+	Req->SetURL(FullUrl);
+	Req->SetVerb(MethodToString(Method));
+	Req->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+	Req->SetHeader(TEXT("Accept"),       TEXT("text/event-stream"));
+	Req->SetHeader(TEXT("User-Agent"),   TEXT("ShintTools-UE5/1.1"));
+
+	for (const auto& KV : ExtraHeaders)
+		Req->SetHeader(KV.Key, KV.Value);
+
+	if (!Body.IsEmpty() &&
+	    (Method == EShintHttpMethod::POST || Method == EShintHttpMethod::PUT))
+	{
+		Req->SetContentAsString(Body);
+	}
+
+	// The parser runs on the HTTP worker thread; marshal every chunk to the
+	// game thread before handing it to OnChunk so Slate updates are safe.
+	TSharedRef<FShintSseParser> Parser = MakeShared<FShintSseParser>(
+		[OnChunk](FString Chunk)
+		{
+			AsyncTask(ENamedThreads::GameThread,
+				[OnChunk, Chunk = MoveTemp(Chunk)]()
+				{
+					OnChunk.ExecuteIfBound(Chunk);
+				});
+		});
+
+	Req->SetResponseBodyReceiveStream(Parser);
+
+	Req->OnProcessRequestComplete().BindSP(
+		AsShared(), &FShintCoreClient::OnHttpStreamComplete, Parser, OnComplete);
+
+	// Long total + matching activity timeout. Streaming keeps the connection
+	// active token-by-token, but the initial prompt-eval before the first token
+	// can still approach the old 30s default on a cold model.
+	Req->SetTimeout(180.0f);
+	Req->SetActivityTimeout(180.0f);
+
+	if (!Req->ProcessRequest())
+	{
+		FShintRequestResult Err;
+		Err.bSuccess     = false;
+		Err.ErrorMessage = TEXT("Failed to dispatch streaming HTTP request.");
+		OnComplete.ExecuteIfBound(Err);
+	}
+}
+
+void FShintCoreClient::OnHttpStreamComplete(
+	FHttpRequestPtr Request, FHttpResponsePtr Response,
+	bool bConnectedSuccessfully, TSharedRef<FShintSseParser> Parser,
+	FOnShintRequestComplete OnComplete)
+{
+	FShintRequestResult Result;
+
+	if (!bConnectedSuccessfully || !Response.IsValid())
+	{
+		Result.bSuccess = false;
+		const FString TriedUrl = Request.IsValid() ? Request->GetURL() : FString();
+		Result.ErrorMessage = FString::Printf(
+			TEXT("Connection failed — could not reach Core Engine at %s."), *TriedUrl);
+		OnComplete.ExecuteIfBound(Result);
+		return;
+	}
+
+	Result.StatusCode = Response->GetResponseCode();
+	const bool bHttpOk = (Result.StatusCode >= 200 && Result.StatusCode < 300);
+	if (!bHttpOk)
+	{
+		// The error body (e.g. a 403 tier-gate JSON) landed in the stream
+		// unparsed — surface it raw so the caller can classify the status.
+		Result.bSuccess     = false;
+		Result.ResponseBody = Parser->RawBody();
+		Result.ErrorMessage = FString::Printf(TEXT("HTTP %d"), Result.StatusCode);
+		OnComplete.ExecuteIfBound(Result);
+		return;
+	}
+
+	if (!Parser->ErrorText.IsEmpty())
+	{
+		Result.bSuccess     = false;
+		Result.ErrorMessage = Parser->ErrorText;
+		Result.ResponseBody = Parser->FullText;
+	}
+	else
+	{
+		Result.bSuccess     = !Parser->FullText.IsEmpty();
+		Result.ResponseBody = Parser->FullText;
+		if (!Result.bSuccess)
+			Result.ErrorMessage = TEXT("Stream ended with no text.");
+	}
+	OnComplete.ExecuteIfBound(Result);
 }
 
 void FShintCoreClient::OnHttpRequestComplete(

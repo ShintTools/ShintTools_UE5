@@ -120,6 +120,101 @@ void FShintCoreClient::RequestExplainIssue(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// LLM pivot (streaming) — POST /agent/explain/stream
+//
+// Same request contract as RequestExplainIssue, but the response is an SSE
+// stream of {"chunk"} events. OnChunk fires per token on the game thread so the
+// modal fills in live; OnComplete fires once at stream end with the full text.
+// Streaming keeps the socket active token-by-token, so it never trips the HTTP
+// activity timeout the way the silent synchronous call did.
+// ─────────────────────────────────────────────────────────────────────────────
+void FShintCoreClient::RequestExplainIssueStream(
+	const FShintCodeIssue&       Issue,
+	FOnShintStreamChunk          OnChunk,
+	FOnShintAgentExplainComplete OnComplete)
+{
+	TSharedRef<FJsonObject> IssueJson = MakeShared<FJsonObject>();
+	IssueJson->SetStringField(TEXT("rule_id"),          Issue.RuleId);
+	IssueJson->SetStringField(TEXT("rule_name"),        Issue.RuleName);
+	IssueJson->SetStringField(TEXT("rule_explanation"), Issue.RuleExplanation);
+	IssueJson->SetStringField(TEXT("severity"),         Issue.Severity);
+	IssueJson->SetStringField(TEXT("category"),         Issue.Category);
+	IssueJson->SetStringField(TEXT("file_path"),        Issue.FilePath);
+	IssueJson->SetNumberField(TEXT("line"),             Issue.Line);
+	IssueJson->SetStringField(TEXT("message"),          Issue.Message);
+	IssueJson->SetStringField(TEXT("fix_suggestion"),   Issue.FixSuggestion);
+	IssueJson->SetStringField(TEXT("snippet"),          Issue.Snippet);
+	IssueJson->SetBoolField  (TEXT("is_auto_fixable"),  Issue.bIsAutoFixable);
+
+	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("api_key"), Config.ApiKeyMongo);
+	Body->SetObjectField(TEXT("issue"),   IssueJson);
+
+	const FString Url        = Config.GetBaseUrl() / TEXT("agent/explain/stream");
+	const double  StartedAt  = FPlatformTime::Seconds();
+
+	UE_LOG(LogShintTools, Verbose,
+		TEXT("RequestExplainIssueStream: POST /agent/explain/stream rule=%s line=%d"),
+		*Issue.RuleId, Issue.Line);
+
+	SendRequestStream(Url, EShintHttpMethod::POST, SerializeJson(Body), OnChunk,
+		FOnShintRequestComplete::CreateLambda(
+			[OnComplete, StartedAt](const FShintRequestResult& Raw)
+		{
+			FShintAgentExplainResponse R;
+
+			if (!Raw.bSuccess)
+			{
+				R.bSuccess = false;
+				if (Raw.StatusCode == 403)
+				{
+					R.Tier         = TEXT("free");
+					R.ErrorMessage = TEXT(
+						"Issue Explain requires the Indie tier. The connected core "
+						"resolved your api_key as 'free'. Upgrade your subscription "
+						"at https://shint.tools to enable LLM explanations.");
+				}
+				else if (Raw.StatusCode == 404)
+				{
+					R.ErrorMessage = TEXT(
+						"/agent/explain/stream is not exposed by this core build. "
+						"Update the core engine to a release that ships the LLM explainer.");
+				}
+				else if (Raw.StatusCode > 0)
+				{
+					R.ErrorMessage = Raw.ErrorMessage.IsEmpty()
+						? FString::Printf(TEXT("HTTP %d on /agent/explain/stream."), Raw.StatusCode)
+						: Raw.ErrorMessage;
+				}
+				else
+				{
+					R.ErrorMessage = Raw.ErrorMessage.IsEmpty()
+						? FString(TEXT("Network error reaching /agent/explain/stream."))
+						: Raw.ErrorMessage;
+				}
+				if (OnComplete.IsBound()) OnComplete.Execute(R);
+				return;
+			}
+
+			// 2xx — either a real explanation or an SSE {"error"} the parser caught.
+			if (!Raw.ErrorMessage.IsEmpty() && Raw.ResponseBody.IsEmpty())
+			{
+				R.bSuccess     = false;
+				R.ErrorMessage = Raw.ErrorMessage;
+			}
+			else
+			{
+				R.bSuccess          = !Raw.ResponseBody.IsEmpty();
+				R.Explanation       = Raw.ResponseBody;
+				R.GenerationSeconds = static_cast<float>(FPlatformTime::Seconds() - StartedAt);
+				if (!R.bSuccess)
+					R.ErrorMessage = TEXT("Stream ended with no text.");
+			}
+			if (OnComplete.IsBound()) OnComplete.Execute(R);
+		}));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Agent — Auto-Fix Plan
 // ─────────────────────────────────────────────────────────────────────────────
 
