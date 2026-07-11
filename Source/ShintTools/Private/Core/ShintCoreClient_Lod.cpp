@@ -23,10 +23,16 @@
 #include "AssetRegistry/IAssetRegistry.h"
 
 #include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshSourceData.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/Texture2D.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstance.h"
+#include "Materials/Material.h"
+
+// Contract v2 fast-scan sources (Studio tier):
+#include "StaticMeshResources.h"        // FStaticMeshRenderData / FStaticMeshLODResources
+#include "PhysicsEngine/BodySetup.h"    // UBodySetup, FKAggregateGeom, CollisionTraceFlag
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Metadata extractors — one per asset family. Each fills *Obj in place and
@@ -59,6 +65,45 @@ namespace
 		}
 	}
 
+	// EBlendMode -> the taxonomy string the core rules read
+	// (Opaque / Masked / Translucent / Additive / Modulate). Used both for the
+	// material's own blend_mode and the mesh's used_material_blend_modes list
+	// (LD012/LD013 Nanite gate). Unknown modes fall back to Opaque.
+	FString BlendModeToString(EBlendMode Blend)
+	{
+		switch (Blend)
+		{
+			case BLEND_Opaque:      return TEXT("Opaque");
+			case BLEND_Masked:      return TEXT("Masked");
+			case BLEND_Translucent: return TEXT("Translucent");
+			case BLEND_Additive:    return TEXT("Additive");
+			case BLEND_Modulate:    return TEXT("Modulate");
+			case BLEND_AlphaComposite: return TEXT("Translucent");
+			case BLEND_AlphaHoldout:   return TEXT("Translucent");
+			default:                return TEXT("Opaque");
+		}
+	}
+
+	// Best-effort semantic usage bucket (BaseColor / Normal / Mask / HDR / UI /
+	// Data) inferred from compression + sRGB + texture group. UE stores no
+	// explicit semantic usage, so this is a field filler for LT009/LT010/LT013/
+	// LT016; when the guess is wrong the affected rule simply abstains.
+	FString InferTextureUsage(UTexture2D* Tex)
+	{
+		if (Tex->LODGroup == TEXTUREGROUP_UI)          return TEXT("UI");
+		switch (Tex->CompressionSettings)
+		{
+			case TC_Normalmap:      return TEXT("Normal");
+			case TC_Masks:
+			case TC_Grayscale:
+			case TC_Alpha:          return TEXT("Mask");
+			case TC_HDR:
+			case TC_HDR_Compressed: return TEXT("HDR");
+			default: break;
+		}
+		return Tex->SRGB ? TEXT("BaseColor") : TEXT("Data");
+	}
+
 	// Per-asset display metadata retained from the collection pass and joined
 	// onto findings client-side (the server findings don't echo width/height/
 	// group/format back). Drives the Asset Optimizer table columns.
@@ -88,7 +133,8 @@ namespace
 		// be null for a freshly-imported mesh whose build hasn't finished; guard
 		// so a half-built asset never crashes the scan (it just reports lod_count
 		// without per-LOD triangle detail, and LD001 still fires on lod_count<2).
-		const bool bHasRenderData = Mesh->GetRenderData() != nullptr;
+		FStaticMeshRenderData* RD = Mesh->GetRenderData();
+		const bool bHasRenderData = RD != nullptr;
 
 		TArray<TSharedPtr<FJsonValue>> Lods;
 		for (int32 i = 0; i < NumLods; ++i)
@@ -101,6 +147,16 @@ namespace
 				// RenderCore module dep) and read the same render data.
 				L->SetNumberField(TEXT("triangles"), Mesh->GetNumTriangles(i));
 				L->SetNumberField(TEXT("vertices"),  Mesh->GetNumVertices(i));
+
+				// Contract v2 per-LOD detail: draw sections (LD008) + UV channels
+				// (LD009). Read straight off the LOD render resources.
+				if (RD->LODResources.IsValidIndex(i))
+				{
+					const FStaticMeshLODResources& LR = RD->LODResources[i];
+					L->SetNumberField(TEXT("section_count"), LR.Sections.Num());
+					L->SetNumberField(TEXT("uv_channel_count"),
+						LR.VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords());
+				}
 			}
 			// Screen size per LOD: source-imported value when available.
 			float ScreenSize = 0.f;
@@ -117,6 +173,78 @@ namespace
 			Mesh->GetBounds().SphereRadius);
 		Obj->SetNumberField(TEXT("material_slot_count"),
 			Mesh->GetStaticMaterials().Num());
+
+		// ── Contract v2 fast-scan geometry / chain fields ──────────────────────
+		// LOD0 totals (LG001/LG004/LG009 + LG002/LG003/LG005). Falls back to the
+		// per-LOD detail already sent, so a rule reads whichever it prefers.
+		if (bHasRenderData)
+		{
+			Obj->SetNumberField(TEXT("triangle_count"), Mesh->GetNumTriangles(0));
+			Obj->SetNumberField(TEXT("vertex_count"),   Mesh->GetNumVertices(0));
+			if (RD->LODResources.IsValidIndex(0))
+			{
+				const FStaticMeshLODResources& L0 = RD->LODResources[0];
+				Obj->SetNumberField(TEXT("section_count"), L0.Sections.Num());
+				Obj->SetNumberField(TEXT("uv_channel_count"),
+					L0.VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords());
+			}
+		}
+
+		// Lightmap UV channel (LW002/LW006/LW009/LW010, LG007/LG008 static-light
+		// legs). -1 when the mesh has no dedicated lightmap UV.
+		Obj->SetNumberField(TEXT("lightmap_uv_index"),
+			Mesh->GetLightMapCoordinateIndex());
+
+		// Nanite (LD012/LD013 + the LG Nanite-abstain legs). FallbackPercentTriangles
+		// is a 0–1 fraction; the contract carries a percentage.
+#if WITH_EDITORONLY_DATA
+		Obj->SetBoolField(TEXT("nanite_enabled"), Mesh->NaniteSettings.bEnabled);
+		Obj->SetNumberField(TEXT("nanite_fallback_triangle_percent"),
+			Mesh->NaniteSettings.FallbackPercentTriangles * 100.0);
+
+		// Import scale (LG014). BuildScale3D is the closest fast-scan proxy for
+		// the FBX import scale; a non-uniform build scale is the LG014 warning.
+		if (Mesh->IsSourceModelValid(0))
+		{
+			const FVector S = Mesh->GetSourceModel(0).BuildSettings.BuildScale3D;
+			Obj->SetNumberField(TEXT("import_uniform_scale"), S.X);
+			const bool bNonUniform =
+				!FMath::IsNearlyEqual(S.X, S.Y) || !FMath::IsNearlyEqual(S.X, S.Z);
+			Obj->SetBoolField(TEXT("import_scale_nonuniform"), bNonUniform);
+		}
+#else
+		Obj->SetBoolField(TEXT("nanite_enabled"), Mesh->IsNaniteEnabled());
+#endif
+
+		// Material slots' blend modes — LD012/LD013 abstain without this list.
+		TArray<TSharedPtr<FJsonValue>> Blends;
+		for (const FStaticMaterial& SMat : Mesh->GetStaticMaterials())
+		{
+			if (SMat.MaterialInterface)
+			{
+				Blends.Add(MakeShared<FJsonValueString>(
+					BlendModeToString(SMat.MaterialInterface->GetBlendMode())));
+			}
+		}
+		Obj->SetArrayField(TEXT("used_material_blend_modes"), Blends);
+
+		// Collision (LD011). AggGeom primitive count + complex-as-simple flag.
+		if (UBodySetup* BS = Mesh->GetBodySetup())
+		{
+			const FKAggregateGeom& Agg = BS->AggGeom;
+			const int32 PrimCount =
+				Agg.BoxElems.Num() + Agg.SphereElems.Num() +
+				Agg.SphylElems.Num() + Agg.ConvexElems.Num() +
+				Agg.TaperedCapsuleElems.Num();
+			TSharedRef<FJsonObject> Col = MakeShared<FJsonObject>();
+			Col->SetBoolField(TEXT("has_simple_collision"), PrimCount > 0);
+			Col->SetNumberField(TEXT("primitive_count"), PrimCount);
+			Col->SetBoolField(TEXT("complex_as_simple"),
+				BS->CollisionTraceFlag == CTF_UseComplexAsSimple);
+			Col->SetNumberField(TEXT("complex_triangles"),
+				bHasRenderData ? Mesh->GetNumTriangles(0) : 0);
+			Obj->SetObjectField(TEXT("collision"), Col);
+		}
 		return true;
 	}
 
@@ -136,6 +264,12 @@ namespace
 			StaticEnum<TextureGroup>()
 				? StaticEnum<TextureGroup>()->GetNameStringByValue(Tex->LODGroup)
 				: TEXT("World"));
+
+		// ── Contract v2 fast-scan texture fields ───────────────────────────────
+		Obj->SetNumberField(TEXT("mip_count"), Tex->GetNumMips());   // LT009
+		Obj->SetStringField(TEXT("usage"), InferTextureUsage(Tex));  // LT009/10/13/16
+		Obj->SetNumberField(TEXT("size_kb"),                          // LT015 pool
+			(double)Tex->CalcTextureMemorySizeEnum(TMC_AllMips) / 1024.0);
 		return true;
 	}
 
@@ -152,11 +286,24 @@ namespace
 			/*bAllQualityLevels*/ false, ERHIFeatureLevel::SM5,
 			/*bAllFeatureLevels*/ false);
 		Obj->SetNumberField(TEXT("sampler_count"), Textures.Num());
-		const EBlendMode Blend = Mat->GetBlendMode();
-		Obj->SetStringField(TEXT("blend_mode"),
-			StaticEnum<EBlendMode>()
-				? StaticEnum<EBlendMode>()->GetNameStringByValue(Blend)
-				: TEXT("Opaque"));
+		Obj->SetStringField(TEXT("blend_mode"), BlendModeToString(Mat->GetBlendMode()));
+
+		// ── Contract v2 trivial material flags (no graph walk / shader compile) ──
+		// Full graph stats (node/switch/function counts) + shader_stats come in a
+		// later phase; these three are cheap property reads that activate LR005/
+		// LR006 and the shading-model guidance now.
+		Obj->SetBoolField(TEXT("two_sided"), Mat->IsTwoSided());          // LR006
+		if (const UMaterial* Base = Mat->GetMaterial())
+		{
+			Obj->SetBoolField(TEXT("is_decal"),                          // LR005
+				Base->MaterialDomain == MD_DeferredDecal);
+		}
+		const EMaterialShadingModel SM =
+			Mat->GetShadingModels().GetFirstShadingModel();
+		Obj->SetStringField(TEXT("shading_model"),
+			StaticEnum<EMaterialShadingModel>()
+				? StaticEnum<EMaterialShadingModel>()->GetNameStringByValue(SM)
+				: TEXT("MSM_DefaultLit"));
 		return true;
 	}
 }
