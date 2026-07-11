@@ -34,6 +34,12 @@
 #include "StaticMeshResources.h"        // FStaticMeshRenderData / FStaticMeshLODResources
 #include "PhysicsEngine/BodySetup.h"    // UBodySetup, FKAggregateGeom, CollisionTraceFlag
 
+// Material analysis (§20.3) — graph walks + compiled-stats instruction counts.
+#include "MaterialEditingLibrary.h"                           // GetStatistics (exported)
+#include "Materials/MaterialExpression.h"
+#include "Materials/MaterialExpressionTextureBase.h"          // texture_samples (LM002)
+#include "Materials/MaterialExpressionStaticSwitchParameter.h" // static_switch_count (LM011)
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Metadata extractors — one per asset family. Each fills *Obj in place and
 // returns true if the asset was understood (so the caller knows to send it).
@@ -106,13 +112,16 @@ namespace
 
 	// Per-asset display metadata retained from the collection pass and joined
 	// onto findings client-side (the server findings don't echo width/height/
-	// group/format back). Drives the Asset Optimizer table columns.
+	// group/format back). Drives the Asset Optimizer table columns. ResText is
+	// the per-family RESOLUTION cell: "2048x2048" stays derived from W/H for
+	// textures; meshes carry "12,345 tris" and materials "140 instr" here.
 	struct FLodAssetMeta
 	{
 		int32   Width  = 0;
 		int32   Height = 0;
 		FString Group;
 		FString Format;
+		FString ResText;
 	};
 
 	// Display cleanup: "TC_BC7" -> "BC7", "TEXTUREGROUP_World" -> "World".
@@ -198,9 +207,9 @@ namespace
 		// Nanite (LD012/LD013 + the LG Nanite-abstain legs). FallbackPercentTriangles
 		// is a 0–1 fraction; the contract carries a percentage.
 #if WITH_EDITORONLY_DATA
-		Obj->SetBoolField(TEXT("nanite_enabled"), Mesh->NaniteSettings.bEnabled);
+		Obj->SetBoolField(TEXT("nanite_enabled"), Mesh->GetNaniteSettings().bEnabled);
 		Obj->SetNumberField(TEXT("nanite_fallback_triangle_percent"),
-			Mesh->NaniteSettings.FallbackPercentTriangles * 100.0);
+			Mesh->GetNaniteSettings().FallbackPercentTriangles * 100.0);
 
 		// Import scale (LG014). BuildScale3D is the closest fast-scan proxy for
 		// the FBX import scale; a non-uniform build scale is the LG014 warning.
@@ -273,25 +282,22 @@ namespace
 		return true;
 	}
 
-	bool ExtractMaterial(UMaterialInterface* Mat, const TSharedRef<FJsonObject>& Obj)
+	bool ExtractMaterial(UMaterialInterface* Mat, const TSharedRef<FJsonObject>& Obj,
+		IAssetRegistry& AR, const FString& PackageName)
 	{
 		if (!Mat) return false;
 		const bool bIsInstance = Mat->IsA<UMaterialInstance>();
 		Obj->SetStringField(TEXT("asset_type"),
 			bIsInstance ? TEXT("MaterialInstance") : TEXT("Material"));
 		Obj->SetBoolField(TEXT("is_material_instance"), bIsInstance);
-		// Texture sampler count — the unique textures the material references.
+		// Texture sampler count — the unique textures the material references
+		// (all quality levels / shader platforms; the 5.7 default overload).
 		TArray<UTexture*> Textures;
-		Mat->GetUsedTextures(Textures, EMaterialQualityLevel::High,
-			/*bAllQualityLevels*/ false, ERHIFeatureLevel::SM5,
-			/*bAllFeatureLevels*/ false);
+		Mat->GetUsedTextures(Textures);
 		Obj->SetNumberField(TEXT("sampler_count"), Textures.Num());
 		Obj->SetStringField(TEXT("blend_mode"), BlendModeToString(Mat->GetBlendMode()));
 
 		// ── Contract v2 trivial material flags (no graph walk / shader compile) ──
-		// Full graph stats (node/switch/function counts) + shader_stats come in a
-		// later phase; these three are cheap property reads that activate LR005/
-		// LR006 and the shading-model guidance now.
 		Obj->SetBoolField(TEXT("two_sided"), Mat->IsTwoSided());          // LR006
 		if (const UMaterial* Base = Mat->GetMaterial())
 		{
@@ -304,6 +310,86 @@ namespace
 			StaticEnum<EMaterialShadingModel>()
 				? StaticEnum<EMaterialShadingModel>()->GetNameStringByValue(SM)
 				: TEXT("MSM_DefaultLit"));
+
+		// ── used_by_primitives (LM003, LM009, LR002/LR006/LR008) ────────────────
+		// Registry-only referencer count (§20.1 "reference analysis") — hard
+		// package refs pointing at this material. An approximation of primitive
+		// consumers (levels + meshes + blueprints), but the rules only need an
+		// order-of-magnitude gate. Without this every LR rule abstains, which is
+		// why the Materials tab used to come back empty.
+		{
+			TArray<FName> Referencers;
+			AR.GetReferencers(FName(*PackageName), Referencers,
+				UE::AssetRegistry::EDependencyCategory::Package,
+				UE::AssetRegistry::EDependencyQuery::Hard);
+			Obj->SetNumberField(TEXT("used_by_primitives"), Referencers.Num());
+		}
+
+		// ── Graph stats (master materials only) ─────────────────────────────────
+		// Instances resolve GetMaterial() to their root parent — attributing the
+		// parent graph's stats to every instance would fire duplicate findings on
+		// each instance, so instances skip the graph-derived fields entirely.
+		if (!bIsInstance)
+		{
+			if (UMaterial* Base = Mat->GetMaterial())
+			{
+				int32 NodeCount = 0, SwitchCount = 0;
+				TArray<TSharedPtr<FJsonValue>> Samples;   // texture_samples (LM002)
+				for (UMaterialExpression* E : Base->GetExpressions())
+				{
+					if (!E) continue;
+					++NodeCount;
+					if (E->IsA<UMaterialExpressionStaticSwitchParameter>())
+						++SwitchCount;
+					if (const UMaterialExpressionTextureBase* TexNode =
+							Cast<UMaterialExpressionTextureBase>(E))
+					{
+						if (TexNode->Texture)
+						{
+							TSharedRef<FJsonObject> S = MakeShared<FJsonObject>();
+							S->SetStringField(TEXT("texture"),
+								TexNode->Texture->GetPathName());
+							Samples.Add(MakeShared<FJsonValueObject>(S));
+						}
+					}
+				}
+				Obj->SetNumberField(TEXT("graph_node_count"), NodeCount);      // LM005
+				Obj->SetNumberField(TEXT("static_switch_count"), SwitchCount); // LM011
+				if (SwitchCount > 0)
+					Obj->SetNumberField(TEXT("static_permutation_estimate"),
+						1 << FMath::Min(SwitchCount, 20));
+				if (Samples.Num() > 0)
+					Obj->SetArrayField(TEXT("texture_samples"), Samples);      // LM002
+			}
+		}
+
+		// ── layer_count (LM007/LM008) ───────────────────────────────────────────
+		{
+			FMaterialLayersFunctions Layers;
+			if (Mat->GetMaterialLayers(Layers) && Layers.Layers.Num() > 0)
+				Obj->SetNumberField(TEXT("layer_count"), Layers.Layers.Num());
+		}
+
+		// ── Instruction counts (LM001, LM008, LM014, LR005) ─────────────────────
+		// Compiled-shader statistics via the exported Material Editor library
+		// (the same numbers the editor's stats panel shows).
+		// FMaterialStatsUtils::GetRepresentativeInstructionCounts is NOT
+		// MATERIALEDITOR_API-exported — calling it fails to link. Best-effort: an
+		// uncompiled material yields zeros and the fields stay absent → abstain.
+		{
+			const FMaterialStatistics Stats =
+				UMaterialEditingLibrary::GetStatistics(Mat);
+			if (Stats.NumPixelShaderInstructions > 0)
+			{
+				Obj->SetNumberField(TEXT("instruction_count"),
+					Stats.NumPixelShaderInstructions);                          // LM001
+				Obj->SetNumberField(TEXT("base_pass_instructions"),
+					Stats.NumPixelShaderInstructions);                          // LM008
+			}
+			if (Stats.NumVertexShaderInstructions > 0)
+				Obj->SetNumberField(TEXT("vertex_shader_instructions"),
+					Stats.NumVertexShaderInstructions);                         // LM014
+		}
 		return true;
 	}
 }
@@ -336,6 +422,7 @@ void FShintCoreClient::AuditLods(
 	TArray<TSharedPtr<FJsonValue>> Arr;
 	TMap<FString, FLodAssetMeta>   MetaByPath;   // joined onto findings post-parse
 	int64 TotalVramBytes = 0;                    // resident texture VRAM (KPI tile)
+
 	for (const FAssetData& AD : AllAssets)
 	{
 		TSharedRef<FJsonObject> Obj = MakeShared<FJsonObject>();
@@ -347,6 +434,26 @@ void FShintCoreClient::AuditLods(
 		if (UStaticMesh* SM = Cast<UStaticMesh>(Loaded))
 		{
 			bUnderstood = ExtractStaticMesh(SM, Obj);
+			if (bUnderstood)
+			{
+				// Mesh columns: GROUP = mesh family, FORMAT = render path,
+				// RESOLUTION = LOD0 triangle count.
+				FLodAssetMeta Meta;
+				Meta.Group = TEXT("Static");
+				const int32 NumLods = SM->GetNumLODs();
+				const bool bNanite =
+#if WITH_EDITORONLY_DATA
+					SM->GetNaniteSettings().bEnabled;
+#else
+					SM->IsNaniteEnabled();
+#endif
+				Meta.Format = bNanite ? TEXT("Nanite")
+					: FString::Printf(TEXT("LOD x%d"), NumLods);
+				if (SM->GetRenderData())
+					Meta.ResText = FString::Printf(TEXT("%s tris"),
+						*FText::AsNumber(SM->GetNumTriangles(0)).ToString());
+				MetaByPath.Add(AssetPath, MoveTemp(Meta));
+			}
 		}
 		else if (UTexture2D* T = Cast<UTexture2D>(Loaded))
 		{
@@ -368,7 +475,20 @@ void FShintCoreClient::AuditLods(
 		}
 		else if (UMaterialInterface* M = Cast<UMaterialInterface>(Loaded))
 		{
-			bUnderstood = ExtractMaterial(M, Obj);
+			bUnderstood = ExtractMaterial(M, Obj, AR, AssetPath);
+			if (bUnderstood)
+			{
+				// Material columns: GROUP = Master/Instance, FORMAT = blend mode,
+				// RESOLUTION = compiled instruction count when available.
+				FLodAssetMeta Meta;
+				Meta.Group  = M->IsA<UMaterialInstance>()
+					? TEXT("Instance") : TEXT("Master");
+				Meta.Format = BlendModeToString(M->GetBlendMode());
+				double Instr = 0.0;
+				if (Obj->TryGetNumberField(TEXT("instruction_count"), Instr) && Instr > 0.0)
+					Meta.ResText = FString::Printf(TEXT("%d instr"), (int32)Instr);
+				MetaByPath.Add(AssetPath, MoveTemp(Meta));
+			}
 		}
 		// SkeletalMesh: send the bare path + type so LA002 (no-LOD) can fire;
 		// detailed skeletal metadata extraction is a follow-up.
@@ -376,6 +496,9 @@ void FShintCoreClient::AuditLods(
 		{
 			Obj->SetStringField(TEXT("asset_type"), TEXT("SkeletalMesh"));
 			bUnderstood = true;
+			FLodAssetMeta Meta;
+			Meta.Group = TEXT("Skeletal");
+			MetaByPath.Add(AssetPath, MoveTemp(Meta));
 		}
 
 		if (bUnderstood)
@@ -435,6 +558,7 @@ void FShintCoreClient::AuditLods(
 				{
 					F.Width  = M->Width;
 					F.Height = M->Height;
+					F.ResText = M->ResText;
 					if (F.Group.IsEmpty())  F.Group  = M->Group;
 					if (F.Format.IsEmpty()) F.Format = M->Format;
 				}

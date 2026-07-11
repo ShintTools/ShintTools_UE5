@@ -58,10 +58,13 @@ public class ShintTools : ModuleRules
 			"SlateCore",
 
 			// LOD Auditor Contract v2 fast-scan collection (Studio tier):
-			//   RenderCore  — FStaticMeshLODResources (per-LOD section / UV counts)
-			//   PhysicsCore — UBodySetup / FKAggregateGeom (collision stats, LD011)
+			//   RenderCore     — FStaticMeshLODResources (per-LOD section / UV counts)
+			//   PhysicsCore    — UBodySetup / FKAggregateGeom (collision stats, LD011)
+			//   MaterialEditor — UMaterialEditingLibrary::GetStatistics
+			//                    (compiled instruction counts)
 			"RenderCore",
 			"PhysicsCore",
+			"MaterialEditor",
 
 			// Editor modules
 			"EditorStyle",

@@ -251,8 +251,10 @@ struct FShintLodFinding
 	// size-changing rules — others leave them 0 and the table shows "—").
 	int32   Width           = 0;
 	int32   Height          = 0;
-	FString Group;             // texture LOD group (e.g. "World")
-	FString Format;            // current compression (e.g. "BC7")
+	FString Group;             // per-family: texture LOD group / Static / Master…
+	FString Format;            // per-family: compression / "Nanite" / blend mode
+	FString ResText;           // per-family RESOLUTION cell when W/H don't apply
+	                           //   (meshes: "12,345 tris", materials: "140 instr")
 	double  CurrentVramMb   = 0.0;
 	double  PotentialVramMb = 0.0;
 

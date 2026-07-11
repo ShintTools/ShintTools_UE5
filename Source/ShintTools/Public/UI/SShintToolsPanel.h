@@ -272,6 +272,7 @@ private:
 	int32  LodCheckedCount() const;         // selected rows (bulk Fix label)
 	FReply OnLodFixRow(FShintLodFindingPtr Item);
 	FReply OnLodFixSelected();
+	FReply OnLodFixAll();                   // every applicable fix in the tab
 	FReply OnLodExport();
 	// Writes an optimised *duplicate* of the finding's texture (original left
 	// untouched), applying the server's recommended max-size / compression.
@@ -425,7 +426,8 @@ private:
 	TSharedPtr<STextBlock> LodFrameTime_Label;   // FRAME TIME SAVINGS (stub)
 	TSharedPtr<STextBlock> LodIssues_Label;      // ISSUES — total
 	TSharedPtr<STextBlock> LodIssuesSub_Label;   //   "Textures: N  Meshes: N"
-	TSharedPtr<STextBlock> LodFixSelected_Label; // bulk "Fix (N)"
+	TSharedPtr<STextBlock> LodFixSelected_Label; // bulk "Fix (N)" (checked rows)
+	TSharedPtr<STextBlock> LodFixAll_Label;      // "Fix All (N)" (applicable rows)
 	// Retained for back-compat with older stat refs (unused by the new layout).
 	TSharedPtr<STextBlock> LodAudited_Label;
 	TSharedPtr<STextBlock> LodVramSaved_Label;

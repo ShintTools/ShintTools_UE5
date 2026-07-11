@@ -127,14 +127,13 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0.f, 0.f, 8.f, 0.f)
 				[
+					// LOD Auditor button language: plain label, no icon.
 					SNew(SButton).ContentPadding(FMargin(14.f, 9.f))
 					.HAlign(HAlign_Center)
 					.OnClicked(this, &SShintToolsPanel::OnScanProjectClicked)
 					[
-						ShintBtnContent(TEXT("ShintTools.Icons.Search"),
 						SNew(STextBlock).Text(LOCTEXT("ScanSrc", "Scan All C++ Source")).Font(F_Small())
-						.ColorAndOpacity(FSlateColor(C_White())),
-						FSlateColor(C_White()))
+						.ColorAndOpacity(FSlateColor(C_White()))
 					]
 				]
 				+ SHorizontalBox::Slot().AutoWidth()
@@ -143,10 +142,8 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 					.ButtonColorAndOpacity(FSlateColor(C_Surface()))
 					.OnClicked(this, &SShintToolsPanel::OnScanBlueprintsClicked)
 					[
-						ShintBtnContent(TEXT("ShintTools.Icons.Search"),
 						SNew(STextBlock).Text(LOCTEXT("ScanBP", "Scan All BP")).Font(F_Small())
-						.ColorAndOpacity(FSlateColor(C_White())),
-						FSlateColor(C_White()))
+						.ColorAndOpacity(FSlateColor(C_White()))
 					]
 				]
 			]
@@ -312,8 +309,10 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			]
 		];
 
+	// Toggle filter — LOD Auditor button language; the label brightens while
+	// the filter is active so the toggle state stays readable without an icon.
 	TSharedRef<SWidget> FixableBtn =
-		SNew(SButton).ContentPadding(FMargin(8.f, 4.f))
+		SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
 		.ButtonColorAndOpacity(FSlateColor(C_Surface()))
 		.OnClicked_Lambda([this]() -> FReply
 		{
@@ -323,8 +322,11 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			return FReply::Handled();
 		})
 		[
-			SNew(STextBlock).Text(LOCTEXT("FFix", "Fixable Only")).Font(F_Label())
-			.ColorAndOpacity(FSlateColor(C_Green()))
+			SNew(STextBlock).Text(LOCTEXT("FFix", "Fixable Only")).Font(F_Small())
+			.ColorAndOpacity_Lambda([this]() {
+				return FSlateColor(CurrentFilter == EIssueFilter::FixableOnly
+					? C_White() : C_Gray());
+			})
 		];
 
 	return SNew(SVerticalBox)
@@ -355,35 +357,39 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f) [ CategoryCombo ]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f) [ SeverityCombo ]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f) [ FixableBtn    ]
+			// Secondary actions — LOD Auditor button language (flat Surface,
+			// plain label, no icon), matching the Asset Optimizer's Export.
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 4.f, 0.f)
 			[
-				SNew(SButton).ContentPadding(FMargin(8.f, 4.f))
+				SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
+				.ButtonColorAndOpacity(FSlateColor(C_Surface()))
 				.OnClicked(this, &SShintToolsPanel::OnSelectAllCodeClicked)
-				[ ShintBtnContent(TEXT("ShintTools.Icons.Tick"),
-				  SNew(STextBlock).Text(LOCTEXT("SelAll", "Select All")).Font(F_Label())
-				  .ColorAndOpacity(FSlateColor(C_Blue())), FSlateColor(C_Blue())) ]
+				[
+					SNew(STextBlock).Text(LOCTEXT("SelAll", "Select All")).Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_Gray()))
+				]
 			]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f)
 			[
-				SNew(SButton).ContentPadding(FMargin(8.f, 4.f))
+				SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
+				.ButtonColorAndOpacity(FSlateColor(C_Surface()))
 				.OnClicked(this, &SShintToolsPanel::OnDeselectAllCodeClicked)
-				[ ShintBtnContent(TEXT("ShintTools.Icons.Cross"),
-				  SNew(STextBlock).Text(LOCTEXT("DeselAll", "Deselect All")).Font(F_Label())
-				  .ColorAndOpacity(FSlateColor(C_Gray())), FSlateColor(C_Gray())) ]
+				[
+					SNew(STextBlock).Text(LOCTEXT("DeselAll", "Deselect All")).Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_Gray()))
+				]
 			]
-			// Primary action lives inline on the toolbar (Unity layout), on the
-			// same row as the Fixable Only filter rather than a separate footer.
+			// Primary action — default button + white label, matching the
+			// Asset Optimizer's bulk Fix.
 			+ SHorizontalBox::Slot().AutoWidth()
 			[
 				SAssignNew(ApplyCodeBtn, SButton)
-				.IsEnabled(false).ContentPadding(FMargin(12.f, 5.f))
+				.IsEnabled(false).ContentPadding(FMargin(12.f, 6.f))
 				.OnClicked(this, &SShintToolsPanel::OnApplySelectedCodeFixesClicked)
 				[
-					ShintBtnContent(TEXT("ShintTools.Icons.Tick"),
 					SAssignNew(ApplyCodeBtnLabel, STextBlock)
 					.Text(LOCTEXT("ApplyCode", "Fix all (0)"))
-					.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Green())),
-					FSlateColor(C_Green()))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White()))
 				]
 			]
 		];
@@ -501,14 +507,13 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 						? EVisibility::Collapsed
 						: EVisibility::Visible;
 				})
-				.IsEnabled(false).ContentPadding(FMargin(14.f, 7.f))
+				.IsEnabled(false).ContentPadding(FMargin(12.f, 6.f))
 				.OnClicked(this, &SShintToolsPanel::OnSendCodeToDashboardClicked)
 				[
-					ShintBtnContent(TEXT("ShintTools.Icons.Save"),
+					// LOD Auditor button language: plain white label, no icon.
 					SAssignNew(SendCodeBtnLabel, STextBlock)
 					.Text(LOCTEXT("SendCode", "Send to Dashboard"))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Blue())),
-					FSlateColor(C_Blue()))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White()))
 				]
 			]
 			// [DASH-STRIP-END]
