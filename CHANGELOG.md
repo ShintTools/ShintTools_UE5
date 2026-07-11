@@ -2,6 +2,33 @@
 
 ---
 
+## [1.2.0] — 2026-07-11 — LOD Auditor Contract v2 fast-scan collection (Studio)
+
+### Added
+- **Contract v2 fast-scan fields in the LOD audit payload** (first client slice
+  of TDD Part 2 §20; Core 2.1.0 ships the 111-rule engine). The collectors in
+  `ShintCoreClient_Lod.cpp` now send, per asset:
+  - *Meshes* — LOD0 `triangle_count`/`vertex_count`, per-LOD `section_count` +
+    `uv_channel_count` (LD008/LD009), `lightmap_uv_index` (LW rules),
+    `nanite_enabled` + `nanite_fallback_triangle_percent` +
+    `used_material_blend_modes` (LD012/LD013), `import_uniform_scale` +
+    `import_scale_nonuniform` (LG014), and a `collision` sub-object built from
+    `UBodySetup::AggGeom` (LD011).
+  - *Textures* — `mip_count` (LT009), inferred semantic `usage`
+    (LT009/LT010/LT013/LT016), `size_kb` for the streaming-pool total (LT015).
+  - *Materials* — `two_sided` (LR006), `is_decal` (LR005), `shading_model`;
+    `blend_mode` now uses the core taxonomy strings (Opaque/Masked/…) instead
+    of raw `BLEND_*` enum names.
+  Every field is additive and optional — Core rules abstain when a field is
+  absent, so v1 behaviour is unchanged where data isn't collected yet.
+- `RenderCore` + `PhysicsCore` module dependencies (LOD render resources +
+  body-setup reads).
+
+### Notes
+- Deferred to later Part-2 phases: material graph stats, `shader_stats`
+  collection, Deep Scan (mesh-description) pipeline, fixer registry + Python
+  auto-fix library, audit commandlet/CI, and the §21 panel sub-views.
+
 ## [1.1.7] — 2026-07-07 — Welcome dialog no longer shows on paid launcher installs
 
 ### Fixed
