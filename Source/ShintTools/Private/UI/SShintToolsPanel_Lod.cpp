@@ -118,6 +118,30 @@ namespace
 			? FString::Printf(TEXT("%.2f GB"), Mb / 1024.0)
 			: FString::Printf(TEXT("%.0f MB"), Mb);
 	}
+
+	// Map the server's recommended compression string to a UE setting.
+	// Returns TC_MAX for unknown values (caller then skips the compression change).
+	TextureCompressionSettings LodMapRecCompression(const FString& In)
+	{
+		const FString S = In.TrimStartAndEnd().ToUpper();
+		if (S == TEXT("BC7"))                                   return TC_BC7;
+		if (S == TEXT("BC5")  || S == TEXT("NORMALMAP"))        return TC_Normalmap;
+		if (S == TEXT("BC4")  || S == TEXT("GRAYSCALE"))        return TC_Grayscale;
+		if (S == TEXT("BC6H") || S == TEXT("BC6") || S == TEXT("HDR")) return TC_HDR;
+		if (S == TEXT("BC1")  || S == TEXT("BC3") || S == TEXT("DXT1") ||
+		    S == TEXT("DXT5") || S == TEXT("DEFAULT"))          return TC_Default;
+		return TC_MAX;
+	}
+
+	// True when the finding carries a change the duplicate-fix flow can actually
+	// apply (texture max-size / compression). Server-side auto_fixable findings
+	// without an applicable client action (e.g. mesh rules) are excluded so
+	// "Fix All" never spams per-row errors.
+	bool IsLodFixApplicable(const FShintLodFinding& F)
+	{
+		return F.bAutoFixable &&
+			(F.RecMaxSize > 0 || LodMapRecCompression(F.RecCompression) != TC_MAX);
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -131,26 +155,14 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodAuditSection()
 		[
 			SNew(SVerticalBox)
 
-			// Title row — title + subtitle on the left, Studio badge on the right.
+			// Title row — title + subtitle. (The "Studio" badge chip that used to
+			// sit above the KPI tiles was removed — cleaner, more compact cards;
+			// tier gating is enforced functionally, not decoratively.)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S3)
 			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
-				[
-					BuildSectionTitle(
-						LOCTEXT("AOTitle", "Asset Optimizer"),
-						LOCTEXT("AOSub", "Audit textures · meshes · materials for memory + frame-time savings · apply fixes"))
-				]
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-				[
-					SNew(SBorder)
-					.BorderImage(ST4::Solid(C_Surface()))
-					.Padding(FMargin(12.f, 5.f))
-					[
-						SNew(STextBlock).Text(LOCTEXT("AOStudio", "Studio"))
-						.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray()))
-					]
-				]
+				BuildSectionTitle(
+					LOCTEXT("AOTitle", "Asset Optimizer"),
+					LOCTEXT("AOSub", "Audit textures · meshes · materials for memory + frame-time savings · apply fixes"))
 			]
 
 			// KPI tile row
@@ -427,14 +439,26 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodToolbar()
 					.ColorAndOpacity(FSlateColor(C_Gray()))
 				]
 			]
-			// Bulk Fix (N)
-			+ SHorizontalBox::Slot().AutoWidth()
+			// Bulk Fix (N) — applies the *checked* rows.
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
 			[
 				SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
 				.OnClicked(this, &SShintToolsPanel::OnLodFixSelected)
 				[
 					SAssignNew(LodFixSelected_Label, STextBlock)
 					.Text(LOCTEXT("AOFixN", "Fix")).Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_White()))
+				]
+			]
+			// Fix All (N) — applies every applicable fix in the current tab,
+			// no row selection needed.
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
+				.OnClicked(this, &SShintToolsPanel::OnLodFixAll)
+				[
+					SAssignNew(LodFixAll_Label, STextBlock)
+					.Text(LOCTEXT("AOFixAll", "Fix All")).Font(F_Small())
 					.ColorAndOpacity(FSlateColor(C_White()))
 				]
 			]
@@ -514,8 +538,12 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateLodFindingRow(
 	const FShintLodFinding& F = Item->Finding;
 
 	const FString AssetName = FPaths::GetCleanFilename(F.AssetPath);
-	const FString Resolution = (F.Width > 0 && F.Height > 0)
-		? FString::Printf(TEXT("%dx%d"), F.Width, F.Height) : TEXT("—");
+	// RESOLUTION is per-family: textures render WxH; meshes/materials carry a
+	// pre-formatted ResText ("12,345 tris" / "140 instr") from the collector.
+	const FString Resolution =
+		!F.ResText.IsEmpty() ? F.ResText :
+		(F.Width > 0 && F.Height > 0)
+			? FString::Printf(TEXT("%dx%d"), F.Width, F.Height) : TEXT("—");
 	const FString SavingsPct = (F.CurrentVramMb > 0.0 && F.VramMb > 0.0)
 		? FString::Printf(TEXT("%.0f%%"), (F.VramMb / F.CurrentVramMb) * 100.0)
 		: FString();
@@ -775,6 +803,14 @@ void SShintToolsPanel::RefreshLodFilteredList()
 			LodFilteredItems.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed);
 	if (LodFixSelected_Label.IsValid())
 		LodFixSelected_Label->SetText(LOCTEXT("AOFixN", "Fix"));
+	if (LodFixAll_Label.IsValid())
+	{
+		int32 Applicable = 0;
+		for (const FShintLodFindingPtr& It : LodFilteredItems)
+			if (It.IsValid() && IsLodFixApplicable(It->Finding)) ++Applicable;
+		LodFixAll_Label->SetText(FText::FromString(
+			FString::Printf(TEXT("Fix All (%d)"), Applicable)));
+	}
 }
 
 void SShintToolsPanel::RefreshLodStats()
@@ -782,18 +818,20 @@ void SShintToolsPanel::RefreshLodStats()
 	const FShintLodAuditResult& R = LastLodResult;
 
 	// Per-category issue counts (from findings) for the breakdown subtitles.
-	int32 TexIssues = 0, MeshIssues = 0;
+	int32 TexIssues = 0, MeshIssues = 0, MatIssues = 0;
 	for (const FShintLodFinding& F : R.Findings)
 	{
-		if (F.Category.Contains(TEXT("Texture")))   ++TexIssues;
-		else if (F.Category.Contains(TEXT("Mesh"))) ++MeshIssues;
+		if (F.Category.Contains(TEXT("Texture")))        ++TexIssues;
+		else if (F.Category.Contains(TEXT("Mesh")))      ++MeshIssues;
+		else if (F.Category.Contains(TEXT("Material")))  ++MatIssues;
 	}
 
 	if (LodFiles_Label.IsValid())
 		LodFiles_Label->SetText(FText::FromString(FmtN(R.AssetsAudited)));
 	if (LodFilesSub_Label.IsValid())
 		LodFilesSub_Label->SetText(FText::FromString(FString::Printf(
-			TEXT("Textures: %d   Meshes: %d"), R.TexturesAudited, R.MeshesAudited)));
+			TEXT("Tex: %d   Mesh: %d   Mat: %d"),
+			R.TexturesAudited, R.MeshesAudited, R.MaterialsAudited)));
 
 	if (LodMemImpact_Label.IsValid())
 		LodMemImpact_Label->SetText(FText::FromString(FmtImpact(R.TotalVramMb)));
@@ -830,7 +868,7 @@ void SShintToolsPanel::RefreshLodStats()
 		LodIssues_Label->SetText(FText::FromString(FmtN(R.IssuesFound)));
 	if (LodIssuesSub_Label.IsValid())
 		LodIssuesSub_Label->SetText(FText::FromString(FString::Printf(
-			TEXT("Textures: %d   Meshes: %d"), TexIssues, MeshIssues)));
+			TEXT("Tex: %d   Mesh: %d   Mat: %d"), TexIssues, MeshIssues, MatIssues)));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -838,20 +876,6 @@ void SShintToolsPanel::RefreshLodStats()
 // ─────────────────────────────────────────────────────────────────────────────
 namespace
 {
-	// Map the server's recommended compression string to a UE setting.
-	// Returns TC_MAX for unknown values (caller then skips the compression change).
-	TextureCompressionSettings LodMapRecCompression(const FString& In)
-	{
-		const FString S = In.TrimStartAndEnd().ToUpper();
-		if (S == TEXT("BC7"))                                   return TC_BC7;
-		if (S == TEXT("BC5")  || S == TEXT("NORMALMAP"))        return TC_Normalmap;
-		if (S == TEXT("BC4")  || S == TEXT("GRAYSCALE"))        return TC_Grayscale;
-		if (S == TEXT("BC6H") || S == TEXT("BC6") || S == TEXT("HDR")) return TC_HDR;
-		if (S == TEXT("BC1")  || S == TEXT("BC3") || S == TEXT("DXT1") ||
-		    S == TEXT("DXT5") || S == TEXT("DEFAULT"))          return TC_Default;
-		return TC_MAX;
-	}
-
 	void LodShowSuccessToast(const FString& Title, const FString& Detail)
 	{
 		FNotificationInfo Info(FText::FromString(Title));
@@ -949,6 +973,30 @@ FReply SShintToolsPanel::OnLodFixSelected()
 	if (Ok == 0 && Failed == 0)
 		ShintShowErrorToast(TEXT("Nothing selected"),
 			TEXT("Tick one or more rows, then press Fix."));
+	else if (Failed == 0)
+		LodShowSuccessToast(TEXT("Optimized copies created"),
+			FString::Printf(TEXT("%d optimised %s written; originals untouched."),
+				Ok, Ok == 1 ? TEXT("copy") : TEXT("copies")));
+	else
+		ShintShowErrorToast(
+			FString::Printf(TEXT("Fixed %d, %d failed"), Ok, Failed), LastErr);
+	return FReply::Handled();
+}
+
+FReply SShintToolsPanel::OnLodFixAll()
+{
+	int32 Ok = 0, Failed = 0;
+	FString LastErr;
+	for (const FShintLodFindingPtr& It : LodFilteredItems)
+	{
+		if (!It.IsValid() || !IsLodFixApplicable(It->Finding)) continue;
+		FString NewPath, Err;
+		if (ApplyLodFixDuplicate(It->Finding, NewPath, Err)) ++Ok;
+		else { ++Failed; LastErr = Err; }
+	}
+	if (Ok == 0 && Failed == 0)
+		ShintShowErrorToast(TEXT("Nothing to fix"),
+			TEXT("No finding in this tab has an auto-applicable fix."));
 	else if (Failed == 0)
 		LodShowSuccessToast(TEXT("Optimized copies created"),
 			FString::Printf(TEXT("%d optimised %s written; originals untouched."),

@@ -2,6 +2,47 @@
 
 ---
 
+## [1.2.1] — 2026-07-11 — Materials scanning fixed + Asset Optimizer polish
+
+### Fixed
+- **Materials tab no longer comes back empty after a scan.** Every material
+  rule gated on fields the collector never sent — `used_by_primitives`
+  (LR002/LR006/LR008 + LM003 need a consumer count; absent → 0 → abstain),
+  `instruction_count` (LM001/LR005), `texture_samples` (LM002) — so the Core
+  legitimately returned zero material findings. The collector now fills:
+  `used_by_primitives` (Asset Registry hard-referencer count), compiled
+  pixel/vertex instruction counts via `UMaterialEditingLibrary::GetStatistics`
+  (the same numbers the Material Editor stats panel shows;
+  `FMaterialStatsUtils::GetRepresentativeInstructionCounts` is not exported
+  and fails to link), `texture_samples` from the material graph's texture
+  nodes, `graph_node_count`, `static_switch_count` (+ permutation estimate)
+  and `layer_count` (master materials only, so instances don't duplicate
+  their parent's findings).
+
+### Added
+- **Per-family table columns.** GROUP / FORMAT / RESOLUTION are no longer
+  texture-only: meshes show Static/Skeletal · Nanite-or-LOD-count · LOD0
+  triangle count; materials show Master/Instance · blend mode · compiled
+  instruction count.
+- **Materials in the KPI breakdowns.** FILES and ISSUES subtitles now split
+  Tex / Mesh / Mat.
+- **"Fix All (N)" button** on the Asset Optimizer toolbar — applies every
+  auto-applicable fix in the current tab without ticking rows. N counts only
+  findings the duplicate-fix flow can actually apply, so it never spams
+  errors for server-fixable-but-client-inapplicable rules.
+
+### Changed
+- **Button style unified on the LOD Auditor language across Deep Code and
+  Asset Naming Bot** — flat Surface secondary buttons (Select All, Deselect
+  All, Fixable Only), default+white primary buttons (Fix all, Send to
+  Dashboard, Scan) — consistent padding (12,6), fonts and no per-button icon
+  colors.
+- Removed the decorative "Studio" badge chip above the Asset Optimizer KPI
+  tiles (tier gating is enforced functionally, not decoratively).
+- Replaced deprecated 5.7 API uses flagged by the build (`NaniteSettings`
+  direct access → `GetNaniteSettings()`, `GetUsedTextures`/
+  `GetMaterialResource` feature-level overloads → 5.7 signatures).
+
 ## [1.2.0] — 2026-07-11 — LOD Auditor Contract v2 fast-scan collection (Studio)
 
 ### Added
