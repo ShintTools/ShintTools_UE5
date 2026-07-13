@@ -43,6 +43,9 @@
 // Deep Scan (§20.2) — mesh-description geometry integrity + normal stats.
 #include "MeshDescription.h"
 #include "StaticMeshAttributes.h"
+#include "Serialization/JsonWriter.h"   // scan-cache persistence
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Metadata extractors — one per asset family. Each fills *Obj in place and
@@ -397,6 +400,82 @@ namespace
 		return true;
 	}
 
+	// Copy every field of Src onto Dst (shallow — the JSON values are shared
+	// pointers). Used to merge cached/computed Deep Scan fields onto the payload.
+	void MergeJsonFields(const TSharedRef<FJsonObject>& Dst,
+		const TSharedRef<FJsonObject>& Src)
+	{
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& It : Src->Values)
+			Dst->SetField(It.Key, It.Value);
+	}
+
+	// ── Deep Scan cache (§20.2) ──────────────────────────────────────────────
+	// Persists computed Deep Scan fields per asset in
+	// Saved/ShintTools/lod_scan_cache.json, keyed by the render data's
+	// DerivedDataKey (the DDC content hash — changes whenever the source mesh or
+	// its build settings change). An unchanged mesh skips the FMeshDescription
+	// load + recompute entirely, which is what makes a repeat Deep Scan cheap.
+	// Best-effort: any I/O or parse failure degrades to "always recompute".
+	class FLodScanCache
+	{
+	public:
+		explicit FLodScanCache(FString InPath) : Path(MoveTemp(InPath)) {}
+
+		void Load()
+		{
+			FString Text;
+			if (!FFileHelper::LoadFileToString(Text, *Path)) return;
+			const TSharedRef<TJsonReader<>> Reader =
+				TJsonReaderFactory<>::Create(Text);
+			FJsonSerializer::Deserialize(Reader, Root);
+			if (!Root.IsValid()) Root = MakeShared<FJsonObject>();
+		}
+
+		// Cached deep-scan fields when the stored DDC key matches; else null.
+		TSharedPtr<FJsonObject> Get(
+			const FString& AssetPath, const FString& DdcKey) const
+		{
+			if (!Root.IsValid() || DdcKey.IsEmpty()) return nullptr;
+			const TSharedPtr<FJsonObject>* Entry = nullptr;
+			if (!Root->TryGetObjectField(AssetPath, Entry) || !Entry) return nullptr;
+			FString StoredKey;
+			if (!(*Entry)->TryGetStringField(TEXT("ddc_key"), StoredKey)
+				|| StoredKey != DdcKey)
+				return nullptr;
+			const TSharedPtr<FJsonObject>* Fields = nullptr;
+			if (!(*Entry)->TryGetObjectField(TEXT("fields"), Fields) || !Fields)
+				return nullptr;
+			return *Fields;
+		}
+
+		void Put(const FString& AssetPath, const FString& DdcKey,
+			const TSharedRef<FJsonObject>& Fields)
+		{
+			if (DdcKey.IsEmpty()) return;
+			if (!Root.IsValid()) Root = MakeShared<FJsonObject>();
+			TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
+			Entry->SetStringField(TEXT("ddc_key"), DdcKey);
+			Entry->SetObjectField(TEXT("fields"), Fields);
+			Root->SetObjectField(AssetPath, Entry);
+			bDirty = true;
+		}
+
+		void Save()
+		{
+			if (!bDirty || !Root.IsValid()) return;
+			FString Out;
+			const TSharedRef<TJsonWriter<>> Writer =
+				TJsonWriterFactory<>::Create(&Out);
+			if (FJsonSerializer::Serialize(Root.ToSharedRef(), Writer))
+				FFileHelper::SaveStringToFile(Out, *Path);
+		}
+
+	private:
+		FString Path;
+		TSharedPtr<FJsonObject> Root;
+		bool bDirty = false;
+	};
+
 	// ── Deep Scan (§20.2) ────────────────────────────────────────────────────
 	// Loads the source FMeshDescription (editor-only) and computes the
 	// geometry-integrity + normal-attribute fields the fast scan can't see:
@@ -632,6 +711,13 @@ void FShintCoreClient::AuditLods(
 	TMap<FString, FLodAssetMeta>   MetaByPath;   // joined onto findings post-parse
 	int64 TotalVramBytes = 0;                    // resident texture VRAM (KPI tile)
 
+	// Deep Scan reuses cached per-mesh fields when the mesh's DDC key is
+	// unchanged, so a repeat scan only pays the FMeshDescription cost for
+	// assets edited since last time.
+	FLodScanCache ScanCache(FPaths::Combine(
+		FPaths::ProjectSavedDir(), TEXT("ShintTools"), TEXT("lod_scan_cache.json")));
+	if (bDeepScan) ScanCache.Load();
+
 	for (const FAssetData& AD : AllAssets)
 	{
 		TSharedRef<FJsonObject> Obj = MakeShared<FJsonObject>();
@@ -644,10 +730,24 @@ void FShintCoreClient::AuditLods(
 		{
 			bUnderstood = ExtractStaticMesh(SM, Obj);
 			// Deep Scan (opt-in): mesh-description geometry-integrity + normal
-			// stats that the fast scan can't see. Fills the fields the LG/LN
+			// stats that the fast scan can't see. Fills the fields the LG/LN/LW
 			// rule families read; absent otherwise, so those rules abstain.
+			// Cache-first: skip the recompute when the mesh's DDC key is
+			// unchanged since the last Deep Scan.
 			if (bUnderstood && bDeepScan)
-				DeepScanStaticMesh(SM, Obj);
+			{
+				const FString DdcKey = SM->GetRenderData()
+					? SM->GetRenderData()->DerivedDataKey : FString();
+				TSharedPtr<FJsonObject> DeepFields = ScanCache.Get(AssetPath, DdcKey);
+				if (!DeepFields.IsValid())
+				{
+					TSharedRef<FJsonObject> Fresh = MakeShared<FJsonObject>();
+					DeepScanStaticMesh(SM, Fresh);
+					ScanCache.Put(AssetPath, DdcKey, Fresh);
+					DeepFields = Fresh;
+				}
+				MergeJsonFields(Obj, DeepFields.ToSharedRef());
+			}
 			if (bUnderstood)
 			{
 				// Mesh columns: GROUP = mesh family, FORMAT = render path,
@@ -720,6 +820,8 @@ void FShintCoreClient::AuditLods(
 			Arr.Add(MakeShared<FJsonValueObject>(Obj));
 		}
 	}
+
+	if (bDeepScan) ScanCache.Save();
 
 	// Per-category file counts for the KPI breakdowns (textures vs meshes).
 	int32 NumTextures = 0, NumMeshes = 0, NumMaterials = 0;

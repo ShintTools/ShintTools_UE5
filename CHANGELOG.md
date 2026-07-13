@@ -2,6 +2,17 @@
 
 ---
 
+## [1.2.5] — 2026-07-13 — Deep Scan cache
+
+### Added
+- **Deep Scan result cache.** Computed per-mesh Deep Scan fields are persisted
+  in `Saved/ShintTools/lod_scan_cache.json`, keyed by the mesh render data's
+  `DerivedDataKey` (the DDC content hash — changes only when the source mesh or
+  its build settings change). A repeat Deep Scan now skips the
+  `FMeshDescription` load + geometry/UV recompute for every unchanged mesh, so
+  only assets edited since the last scan pay the cost. Best-effort: any cache
+  I/O or parse failure degrades cleanly to a full recompute.
+
 ## [1.2.4] — 2026-07-13 — Deep Scan: per-UV-channel stats
 
 ### Added
