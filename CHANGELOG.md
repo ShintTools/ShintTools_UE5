@@ -2,6 +2,33 @@
 
 ---
 
+## [1.2.2] — 2026-07-13 — Per-family tables + selection controls (Asset Optimizer)
+
+### Added
+- **Dedicated table layouts per asset type.** Each tab now renders its own
+  columns instead of reusing the texture layout with dashes:
+  - *Textures* — GROUP · RESOLUTION · FORMAT · CURRENT SIZE · POTENTIAL SIZE ·
+    SAVINGS (unchanged);
+  - *Meshes* — TYPE (Static/Skeletal) · TRIANGLES · RENDER PATH (Nanite /
+    LOD ×N) · EST. SAVINGS;
+  - *Materials* — TYPE (Master/Instance) · BLEND MODE · INSTRUCTIONS ·
+    EST. SAVINGS (shader instructions or MB).
+  The header rebuilds on tab switch; rows render only cells meaningful for
+  the family.
+- **Select All / Deselect All** buttons on the Asset Optimizer toolbar —
+  scoped to the current tab's visible rows, driving the checked-rows
+  "Fix (N)" bulk action.
+- **Scan-complete toast** with the per-family issue breakdown
+  (Tex · Mesh · Mat).
+- **Per-tab empty states** — after a scan, an empty tab says "No material
+  findings — materials look clean" instead of the pre-scan prompt.
+- CSV export gains `Detail` (triangles / instruction count) and
+  `Saving_Instr` columns.
+
+### Fixed
+- The Scan button is disabled while a scan is in flight (double-click fired
+  two overlapping audits).
+
 ## [1.2.1] — 2026-07-11 — Materials scanning fixed + Asset Optimizer polish
 
 ### Fixed

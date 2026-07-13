@@ -270,6 +270,7 @@ private:
 	void   RefreshLodFilteredList();        // re-apply tab + filters → visible rows
 	void   SetLodTab(ELodTab Tab);
 	int32  LodCheckedCount() const;         // selected rows (bulk Fix label)
+	void   SetLodAllChecked(bool bChecked); // Select All / Deselect All (current tab)
 	FReply OnLodFixRow(FShintLodFindingPtr Item);
 	FReply OnLodFixSelected();
 	FReply OnLodFixAll();                   // every applicable fix in the tab
@@ -434,6 +435,7 @@ private:
 	TSharedPtr<SButton>    AuditLodBtn;
 	TSharedPtr<STextBlock> AuditLodBtnLabel;
 	TSharedPtr<SWidget>    LodEmptyState;
+	TSharedPtr<class SBox> LodTableHeaderBox;  // per-tab column header host
 	// [LOD-STRIP-END]
 
 	TSharedPtr<STextBlock> CodeFiles_Label;
