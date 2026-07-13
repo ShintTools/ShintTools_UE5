@@ -273,7 +273,6 @@ private:
 	void   SetLodAllChecked(bool bChecked); // Select All / Deselect All (current tab)
 	FReply OnLodFixRow(FShintLodFindingPtr Item);
 	FReply OnLodFixSelected();
-	FReply OnLodFixAll();                   // every applicable fix in the tab
 	FReply OnLodExport();
 	// Writes an optimised *duplicate* of the finding's texture (original left
 	// untouched), applying the server's recommended max-size / compression.
@@ -378,6 +377,7 @@ private:
 	// LOD Auditor / Asset Optimizer UI state
 	EModuleState LodState        = EModuleState::Idle;
 	bool         bLodExplainTop  = false;     // "Explain top issues" toggle
+	bool         bLodDeepScan    = false;     // "Deep Scan" toggle (mesh-desc)
 	FString      LodProfile      = TEXT("default"); // "default" | "mobile"
 	ELodTab      LodActiveTab    = ELodTab::Textures;
 	FString      LodSearchText;
@@ -428,7 +428,6 @@ private:
 	TSharedPtr<STextBlock> LodIssues_Label;      // ISSUES — total
 	TSharedPtr<STextBlock> LodIssuesSub_Label;   //   "Textures: N  Meshes: N"
 	TSharedPtr<STextBlock> LodFixSelected_Label; // bulk "Fix (N)" (checked rows)
-	TSharedPtr<STextBlock> LodFixAll_Label;      // "Fix All (N)" (applicable rows)
 	// Retained for back-compat with older stat refs (unused by the new layout).
 	TSharedPtr<STextBlock> LodAudited_Label;
 	TSharedPtr<STextBlock> LodVramSaved_Label;

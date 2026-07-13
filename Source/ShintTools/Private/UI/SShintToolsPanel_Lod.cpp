@@ -154,16 +154,6 @@ namespace
 		return TC_MAX;
 	}
 
-	// True when the finding carries a change the duplicate-fix flow can actually
-	// apply (texture max-size / compression). Server-side auto_fixable findings
-	// without an applicable client action (e.g. mesh rules) are excluded so
-	// "Fix All" never spams per-row errors.
-	bool IsLodFixApplicable(const FShintLodFinding& F)
-	{
-		return F.bAutoFixable &&
-			(F.RecMaxSize > 0 || LodMapRecCompression(F.RecCompression) != TC_MAX);
-	}
-
 	void LodShowSuccessToast(const FString& Title, const FString& Detail)
 	{
 		FNotificationInfo Info(FText::FromString(Title));
@@ -214,6 +204,31 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodAuditSection()
 						SAssignNew(AuditLodBtnLabel, STextBlock)
 						.Text(LOCTEXT("AOScan", "Scan")).Font(F_Small())
 						.ColorAndOpacity(FSlateColor(C_White()))
+					]
+				]
+				// Deep Scan toggle — loads each mesh's source description to compute
+				// geometry-integrity + normal stats (degenerate/duplicate verts,
+				// non-manifold/open edges, tangent mirroring). Slower per mesh, so
+				// it's opt-in; off = the fast property/render-data scan only.
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				  .Padding(0.f, 0.f, 8.f, 0.f)
+				[
+					SNew(SCheckBox)
+					.IsChecked_Lambda([this]() {
+						return bLodDeepScan ? ECheckBoxState::Checked
+											: ECheckBoxState::Unchecked;
+					})
+					.OnCheckStateChanged_Lambda([this](ECheckBoxState S) {
+						bLodDeepScan = (S == ECheckBoxState::Checked);
+					})
+					.ToolTipText(LOCTEXT("AODeepTip",
+						"Load each mesh's source geometry to detect degenerate / "
+						"duplicate / overlapping verts, non-manifold & open edges, "
+						"and tangent issues. Slower — off uses the fast scan only."))
+					[
+						SNew(STextBlock).Text(LOCTEXT("AODeep", "Deep Scan"))
+						.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Gray()))
+						.Margin(FMargin(6.f, 0.f, 0.f, 0.f))
 					]
 				]
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
@@ -494,25 +509,13 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodToolbar()
 				]
 			]
 			// Bulk Fix (N) — applies the *checked* rows.
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
+			+ SHorizontalBox::Slot().AutoWidth()
 			[
 				SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
 				.OnClicked(this, &SShintToolsPanel::OnLodFixSelected)
 				[
 					SAssignNew(LodFixSelected_Label, STextBlock)
 					.Text(LOCTEXT("AOFixN", "Fix")).Font(F_Small())
-					.ColorAndOpacity(FSlateColor(C_White()))
-				]
-			]
-			// Fix All (N) — applies every applicable fix in the current tab,
-			// no row selection needed.
-			+ SHorizontalBox::Slot().AutoWidth()
-			[
-				SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
-				.OnClicked(this, &SShintToolsPanel::OnLodFixAll)
-				[
-					SAssignNew(LodFixAll_Label, STextBlock)
-					.Text(LOCTEXT("AOFixAll", "Fix All")).Font(F_Small())
 					.ColorAndOpacity(FSlateColor(C_White()))
 				]
 			]
@@ -839,7 +842,8 @@ FReply SShintToolsPanel::OnAuditLodsClicked()
 	if (LodEmptyState.IsValid()) LodEmptyState->SetVisibility(EVisibility::Visible);
 
 	CoreClient->AuditLods(LodProfile, bLodExplainTop,
-		FOnShintLodAuditComplete::CreateSP(this, &SShintToolsPanel::OnLodAuditComplete));
+		FOnShintLodAuditComplete::CreateSP(this, &SShintToolsPanel::OnLodAuditComplete),
+		bLodDeepScan);
 	return FReply::Handled();
 }
 
@@ -945,14 +949,6 @@ void SShintToolsPanel::RefreshLodFilteredList()
 			LodFilteredItems.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed);
 	if (LodFixSelected_Label.IsValid())
 		LodFixSelected_Label->SetText(LOCTEXT("AOFixN", "Fix"));
-	if (LodFixAll_Label.IsValid())
-	{
-		int32 Applicable = 0;
-		for (const FShintLodFindingPtr& It : LodFilteredItems)
-			if (It.IsValid() && IsLodFixApplicable(It->Finding)) ++Applicable;
-		LodFixAll_Label->SetText(FText::FromString(
-			FString::Printf(TEXT("Fix All (%d)"), Applicable)));
-	}
 }
 
 void SShintToolsPanel::RefreshLodStats()
@@ -1101,30 +1097,6 @@ FReply SShintToolsPanel::OnLodFixSelected()
 	if (Ok == 0 && Failed == 0)
 		ShintShowErrorToast(TEXT("Nothing selected"),
 			TEXT("Tick one or more rows, then press Fix."));
-	else if (Failed == 0)
-		LodShowSuccessToast(TEXT("Optimized copies created"),
-			FString::Printf(TEXT("%d optimised %s written; originals untouched."),
-				Ok, Ok == 1 ? TEXT("copy") : TEXT("copies")));
-	else
-		ShintShowErrorToast(
-			FString::Printf(TEXT("Fixed %d, %d failed"), Ok, Failed), LastErr);
-	return FReply::Handled();
-}
-
-FReply SShintToolsPanel::OnLodFixAll()
-{
-	int32 Ok = 0, Failed = 0;
-	FString LastErr;
-	for (const FShintLodFindingPtr& It : LodFilteredItems)
-	{
-		if (!It.IsValid() || !IsLodFixApplicable(It->Finding)) continue;
-		FString NewPath, Err;
-		if (ApplyLodFixDuplicate(It->Finding, NewPath, Err)) ++Ok;
-		else { ++Failed; LastErr = Err; }
-	}
-	if (Ok == 0 && Failed == 0)
-		ShintShowErrorToast(TEXT("Nothing to fix"),
-			TEXT("No finding in this tab has an auto-applicable fix."));
 	else if (Failed == 0)
 		LodShowSuccessToast(TEXT("Optimized copies created"),
 			FString::Printf(TEXT("%d optimised %s written; originals untouched."),

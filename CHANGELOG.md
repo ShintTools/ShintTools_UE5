@@ -2,6 +2,35 @@
 
 ---
 
+## [1.2.3] — 2026-07-13 — Deep Scan (mesh geometry integrity) + toolbar cleanup
+
+### Added
+- **Deep Scan (opt-in).** A "Deep Scan" toggle on the Asset Optimizer scan
+  bar. When on, each mesh's source `FMeshDescription` is loaded to compute the
+  geometry-integrity and normal fields the fast scan can't see, activating the
+  rule families that previously always abstained:
+  - `degenerate_triangle_count` (LG004), `duplicate_vertex_count` (LG005),
+    `overlapping_vertex_count` (LG006) — the last two via a two-resolution
+    spatial-hash grid (fine grid = weldable exact duplicates; coarse grid =
+    near-coincident);
+  - `non_manifold_edge_count` (LG007), `open_edge_count` (LG008) from the
+    edge→triangle adjacency;
+  - a `normal_stats` sub-object (LN001–LN006): has_normals, zero/NaN normal
+    counts, has_tangents, mirrored_tangent_ratio, hard_edge_ratio.
+  Meshes with no source description (cooked-only) are skipped and their rules
+  abstain, exactly as before — Deep Scan never changes fast-scan behaviour.
+  `MeshDescription` + `StaticMeshDescription` added to the build.
+
+### Removed
+- **"Fix All" button** on the Asset Optimizer toolbar (per-row Fix and the
+  checked-rows bulk "Fix (N)" remain).
+
+### Notes
+- Deep Scan runs synchronously on the game thread this round. Deferred to a
+  later phase: the worker-thread pool + scan cache (§20.2),
+  `internal_face_ratio` (LG009 hull ray-cast), and per-UV-channel
+  overlap/stretch/texel-density stats (LW islands).
+
 ## [1.2.2] — 2026-07-13 — Per-family tables + selection controls (Asset Optimizer)
 
 ### Added
