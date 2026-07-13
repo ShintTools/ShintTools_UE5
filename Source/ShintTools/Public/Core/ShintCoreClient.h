@@ -574,7 +574,7 @@ public:
 	 *                    to the top findings (Studio only; ~30s/finding on CPU).
 	 */
 	void AuditLods(const FString& Profile, bool bExplainTop,
-	               FOnShintLodAuditComplete OnComplete);
+	               FOnShintLodAuditComplete OnComplete, bool bDeepScan = false);
 	// [LOD-STRIP-END]
 
 	// ── Asset Naming Bot — external web dashboard ────────────────────────────

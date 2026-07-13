@@ -40,6 +40,10 @@
 #include "Materials/MaterialExpressionTextureBase.h"          // texture_samples (LM002)
 #include "Materials/MaterialExpressionStaticSwitchParameter.h" // static_switch_count (LM011)
 
+// Deep Scan (§20.2) — mesh-description geometry integrity + normal stats.
+#include "MeshDescription.h"
+#include "StaticMeshAttributes.h"
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Metadata extractors — one per asset family. Each fills *Obj in place and
 // returns true if the asset was understood (so the caller knows to send it).
@@ -392,6 +396,131 @@ namespace
 		}
 		return true;
 	}
+
+	// ── Deep Scan (§20.2) ────────────────────────────────────────────────────
+	// Loads the source FMeshDescription (editor-only) and computes the
+	// geometry-integrity + normal-attribute fields the fast scan can't see:
+	// degenerate/duplicate/overlapping verts, non-manifold/open edges, and the
+	// normal_stats sub-object. Fills the fields the LG004/005/006/007/008 and
+	// LN001–LN006 rules read. Absent when there is no source mesh description
+	// (cooked-only asset) — the rules then abstain, exactly as before.
+	//
+	// Deliberately NOT computed this round (expensive; the rules abstain until a
+	// later phase supplies them): internal_face_ratio (LG009 hull ray-cast) and
+	// the per-UV-channel overlap/stretch/texel-density stats (LW islands).
+	//
+	// Quantise-grid duplicate/overlap detection: a fine grid (1e-3 cm cell)
+	// counts weldable exact duplicates; a coarse grid (0.05 cm) counts
+	// near-coincident verts, and overlapping = coarse-near minus fine-duplicate.
+	// Cell hashing is O(n); the min-count thresholds on LG005/LG006 absorb the
+	// rare cross-cell-boundary miscount.
+	void DeepScanStaticMesh(UStaticMesh* Mesh, const TSharedRef<FJsonObject>& Obj)
+	{
+		if (!Mesh) return;
+		const FMeshDescription* MD = Mesh->GetMeshDescription(0);
+		if (!MD) return;   // no source data (cooked-only) — rules abstain
+
+		const FStaticMeshConstAttributes Attr(*MD);
+		TVertexAttributesConstRef<FVector3f> Positions = Attr.GetVertexPositions();
+		TVertexInstanceAttributesConstRef<FVector3f> Normals =
+			Attr.GetVertexInstanceNormals();
+		TVertexInstanceAttributesConstRef<FVector3f> Tangents =
+			Attr.GetVertexInstanceTangents();
+		TVertexInstanceAttributesConstRef<float> BinormalSigns =
+			Attr.GetVertexInstanceBinormalSigns();
+		TEdgeAttributesConstRef<bool> HardEdges = Attr.GetEdgeHardnesses();
+		TVertexInstanceAttributesConstRef<FVector2f> UVs =
+			Attr.GetVertexInstanceUVs();
+
+		// ── Geometry integrity: triangles ──
+		int32 Degenerate = 0;
+		for (const FTriangleID Tri : MD->Triangles().GetElementIDs())
+		{
+			TArrayView<const FVertexID> V = MD->GetTriangleVertices(Tri);
+			if (V.Num() < 3) continue;
+			const FVector3f P0 = Positions[V[0]];
+			const FVector3f P1 = Positions[V[1]];
+			const FVector3f P2 = Positions[V[2]];
+			// Twice the triangle area = |(P1-P0) x (P2-P0)|. Zero => degenerate.
+			if (FVector3f::CrossProduct(P1 - P0, P2 - P0).SizeSquared()
+					< UE_KINDA_SMALL_NUMBER)
+				++Degenerate;
+		}
+
+		// ── Geometry integrity: duplicate / overlapping vertices ──
+		auto CellKey = [](const FVector3f& P, float Cell) -> FIntVector
+		{
+			return FIntVector(
+				FMath::FloorToInt(P.X / Cell),
+				FMath::FloorToInt(P.Y / Cell),
+				FMath::FloorToInt(P.Z / Cell));
+		};
+		constexpr float FineCell   = 0.001f;   // weldable exact duplicates
+		constexpr float CoarseCell = 0.05f;    // near-coincident
+		TMap<FIntVector, int32> FineGrid, CoarseGrid;
+		for (const FVertexID Vtx : MD->Vertices().GetElementIDs())
+		{
+			const FVector3f P = Positions[Vtx];
+			++FineGrid.FindOrAdd(CellKey(P, FineCell));
+			++CoarseGrid.FindOrAdd(CellKey(P, CoarseCell));
+		}
+		int32 DupVerts = 0, NearVerts = 0;
+		for (const TPair<FIntVector, int32>& Cell : FineGrid)
+			if (Cell.Value > 1) DupVerts += Cell.Value - 1;
+		for (const TPair<FIntVector, int32>& Cell : CoarseGrid)
+			if (Cell.Value > 1) NearVerts += Cell.Value - 1;
+		const int32 OverlapVerts = FMath::Max(0, NearVerts - DupVerts);
+
+		// ── Geometry integrity: edges ──
+		int32 NonManifold = 0, OpenEdges = 0, HardCount = 0, EdgeTotal = 0;
+		const bool bHasHard = HardEdges.IsValid();
+		for (const FEdgeID Edge : MD->Edges().GetElementIDs())
+		{
+			++EdgeTotal;
+			const int32 NumTris = MD->GetNumEdgeConnectedTriangles(Edge);
+			if (NumTris > 2)      ++NonManifold;
+			else if (NumTris == 1) ++OpenEdges;
+			if (bHasHard && HardEdges[Edge]) ++HardCount;
+		}
+
+		// ── Normal / tangent attribute scan ──
+		const bool bHasNormals  = Normals.IsValid();
+		const bool bHasTangents = Tangents.IsValid();
+		const bool bHasBinormal = BinormalSigns.IsValid();
+		int32 ZeroNormals = 0, NanNormals = 0, Mirrored = 0, NumVI = 0;
+		for (const FVertexInstanceID VI : MD->VertexInstances().GetElementIDs())
+		{
+			++NumVI;
+			if (bHasNormals)
+			{
+				const FVector3f N = Normals[VI];
+				if (N.ContainsNaN())            ++NanNormals;
+				else if (N.IsNearlyZero(1e-4f)) ++ZeroNormals;
+			}
+			if (bHasBinormal && BinormalSigns[VI] < 0.f) ++Mirrored;
+		}
+
+		// ── Emit top-level geometry fields ──
+		Obj->SetNumberField(TEXT("degenerate_triangle_count"), Degenerate);   // LG004
+		Obj->SetNumberField(TEXT("duplicate_vertex_count"), DupVerts);        // LG005
+		Obj->SetNumberField(TEXT("overlapping_vertex_count"), OverlapVerts);  // LG006
+		Obj->SetNumberField(TEXT("non_manifold_edge_count"), NonManifold);    // LG007
+		Obj->SetNumberField(TEXT("open_edge_count"), OpenEdges);              // LG008
+		if (UVs.IsValid())
+			Obj->SetNumberField(TEXT("uv_channel_count"), UVs.GetNumChannels());
+
+		// ── Emit normal_stats sub-object (contract §6.3) ──
+		TSharedRef<FJsonObject> NS = MakeShared<FJsonObject>();
+		NS->SetBoolField(TEXT("has_normals"), bHasNormals);
+		NS->SetNumberField(TEXT("zero_normal_count"), ZeroNormals);
+		NS->SetNumberField(TEXT("nan_normal_count"), NanNormals);
+		NS->SetBoolField(TEXT("has_tangents"), bHasTangents);
+		NS->SetNumberField(TEXT("mirrored_tangent_ratio"),
+			NumVI > 0 ? (double)Mirrored / NumVI : 0.0);
+		NS->SetNumberField(TEXT("hard_edge_ratio"),
+			EdgeTotal > 0 ? (double)HardCount / EdgeTotal : 0.0);
+		Obj->SetObjectField(TEXT("normal_stats"), NS);
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -399,7 +528,8 @@ namespace
 // ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreClient::AuditLods(
-	const FString& Profile, bool bExplainTop, FOnShintLodAuditComplete OnComplete)
+	const FString& Profile, bool bExplainTop, FOnShintLodAuditComplete OnComplete,
+	bool bDeepScan)
 {
 	const double BenchStart = FPlatformTime::Seconds();
 	IAssetRegistry& AR =
@@ -434,6 +564,11 @@ void FShintCoreClient::AuditLods(
 		if (UStaticMesh* SM = Cast<UStaticMesh>(Loaded))
 		{
 			bUnderstood = ExtractStaticMesh(SM, Obj);
+			// Deep Scan (opt-in): mesh-description geometry-integrity + normal
+			// stats that the fast scan can't see. Fills the fields the LG/LN
+			// rule families read; absent otherwise, so those rules abstain.
+			if (bUnderstood && bDeepScan)
+				DeepScanStaticMesh(SM, Obj);
 			if (bUnderstood)
 			{
 				// Mesh columns: GROUP = mesh family, FORMAT = render path,
