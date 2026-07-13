@@ -2,6 +2,18 @@
 
 ---
 
+## [1.2.4] — 2026-07-13 — Deep Scan: per-UV-channel stats
+
+### Added
+- **Deep Scan now emits per-UV-channel stats**, activating more UV rules:
+  - `outside_unit_ratio` (LW009) — fraction of UV corners outside the 0–1 box;
+  - `packing_efficiency` (LW006) — used UV triangle area ÷ UV bounding-box area;
+  - `island_count` (LW005) — UV shells via union-find over UV-welded corners.
+  Emitted per channel in `uv_channels[]`. Deliberately left at defaults (so
+  their rules keep abstaining until a later phase): `overlap_ratio` (needs UV
+  rasterisation) and `texel_density_avg`/`texel_density_cv` (need the dominant
+  texture's resolution).
+
 ## [1.2.3] — 2026-07-13 — Deep Scan (mesh geometry integrity) + toolbar cleanup
 
 ### Added

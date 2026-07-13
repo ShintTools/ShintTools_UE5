@@ -520,6 +520,85 @@ namespace
 		NS->SetNumberField(TEXT("hard_edge_ratio"),
 			EdgeTotal > 0 ? (double)HardCount / EdgeTotal : 0.0);
 		Obj->SetObjectField(TEXT("normal_stats"), NS);
+
+		// ── Per-UV-channel stats (contract §6.2): the unambiguous subset ──
+		// outside_unit_ratio (LW009), packing_efficiency (LW006), island_count
+		// (LW005). Left at their safe defaults so their rules abstain:
+		// overlap_ratio (needs UV rasterisation) and texel_density_* (needs the
+		// dominant texture resolution) — both a later phase.
+		const int32 NumUV = UVs.IsValid() ? UVs.GetNumChannels() : 0;
+		if (NumUV > 0)
+		{
+			TArray<TSharedPtr<FJsonValue>> UvChannels;
+			for (int32 Ch = 0; Ch < NumUV; ++Ch)
+			{
+				int32 OutsideCorners = 0, TotalCorners = 0;
+				double UsedUvArea = 0.0;
+				FVector2f UvMin(FLT_MAX, FLT_MAX), UvMax(-FLT_MAX, -FLT_MAX);
+
+				// Union-find over UV-welded corners → connected shells (islands).
+				TMap<FIntPoint, int32> WeldId;
+				TArray<int32> Parent;
+				auto Find = [&Parent](int32 X) -> int32
+				{
+					while (Parent[X] != X)
+						{ Parent[X] = Parent[Parent[X]]; X = Parent[X]; }
+					return X;
+				};
+				auto Weld = [&](const FVector2f& UV) -> int32
+				{
+					const FIntPoint Key(FMath::RoundToInt(UV.X / 1e-4f),
+					                    FMath::RoundToInt(UV.Y / 1e-4f));
+					if (const int32* Found = WeldId.Find(Key)) return *Found;
+					const int32 Id = Parent.Num();
+					Parent.Add(Id); WeldId.Add(Key, Id); return Id;
+				};
+				auto Union = [&](int32 A, int32 B) { Parent[Find(A)] = Find(B); };
+
+				for (const FTriangleID Tri : MD->Triangles().GetElementIDs())
+				{
+					TArrayView<const FVertexInstanceID> VIs =
+						MD->GetTriangleVertexInstances(Tri);
+					if (VIs.Num() < 3) continue;
+					const FVector2f C0 = UVs.Get(VIs[0], Ch);
+					const FVector2f C1 = UVs.Get(VIs[1], Ch);
+					const FVector2f C2 = UVs.Get(VIs[2], Ch);
+					for (const FVector2f& UV : { C0, C1, C2 })
+					{
+						++TotalCorners;
+						if (UV.X < 0.f || UV.X > 1.f || UV.Y < 0.f || UV.Y > 1.f)
+							++OutsideCorners;
+						UvMin.X = FMath::Min(UvMin.X, UV.X);
+						UvMin.Y = FMath::Min(UvMin.Y, UV.Y);
+						UvMax.X = FMath::Max(UvMax.X, UV.X);
+						UvMax.Y = FMath::Max(UvMax.Y, UV.Y);
+					}
+					UsedUvArea += 0.5 * FMath::Abs(
+						(C1.X - C0.X) * (C2.Y - C0.Y)
+						- (C2.X - C0.X) * (C1.Y - C0.Y));
+					Union(Weld(C0), Weld(C1));
+					Union(Weld(C1), Weld(C2));
+				}
+
+				double BboxArea = 0.0;
+				if (UvMax.X > UvMin.X && UvMax.Y > UvMin.Y)
+					BboxArea = (double)(UvMax.X - UvMin.X) * (UvMax.Y - UvMin.Y);
+				const double Packing = BboxArea > 0.0
+					? FMath::Clamp(UsedUvArea / BboxArea, 0.0, 1.0) : 1.0;
+
+				TSet<int32> Roots;
+				for (int32 I = 0; I < Parent.Num(); ++I) Roots.Add(Find(I));
+
+				TSharedRef<FJsonObject> Uc = MakeShared<FJsonObject>();
+				Uc->SetNumberField(TEXT("channel"), Ch);
+				Uc->SetNumberField(TEXT("outside_unit_ratio"),
+					TotalCorners > 0 ? (double)OutsideCorners / TotalCorners : 0.0);
+				Uc->SetNumberField(TEXT("packing_efficiency"), Packing);
+				Uc->SetNumberField(TEXT("island_count"), Roots.Num());
+				UvChannels.Add(MakeShared<FJsonValueObject>(Uc));
+			}
+			Obj->SetArrayField(TEXT("uv_channels"), UvChannels);
+		}
 	}
 }
 
