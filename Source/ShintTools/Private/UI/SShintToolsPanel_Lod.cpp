@@ -54,8 +54,9 @@ namespace
 {
 	// Shared column proportions — the table header and every data row use these
 	// identical FillWidth values so the columns line up. (The checkbox and Fix
-	// columns are fixed AutoWidth and handled separately.)
-	namespace LodCol
+	// columns are fixed AutoWidth and handled separately.) Each tab renders its
+	// own table: only columns meaningful for that asset family are shown.
+	namespace LodCol            // Textures
 	{
 		constexpr float Asset = 2.8f;
 		constexpr float Group = 0.8f;
@@ -66,6 +67,26 @@ namespace
 		constexpr float Sav   = 1.0f;
 		constexpr float Sev   = 0.8f;
 		constexpr float Rec   = 2.2f;
+	}
+	namespace LodColMesh        // Meshes
+	{
+		constexpr float Asset = 2.8f;
+		constexpr float Type  = 0.8f;   // Static / Skeletal
+		constexpr float Tris  = 1.0f;   // LOD0 triangle count
+		constexpr float Lods  = 0.9f;   // Nanite / LOD xN
+		constexpr float Sav   = 1.0f;   // est. VRAM saving
+		constexpr float Sev   = 0.8f;
+		constexpr float Rec   = 2.8f;
+	}
+	namespace LodColMat         // Materials
+	{
+		constexpr float Asset = 2.8f;
+		constexpr float Type  = 0.8f;   // Master / Instance
+		constexpr float Blend = 0.9f;   // blend mode
+		constexpr float Instr = 1.0f;   // compiled instruction count
+		constexpr float Sav   = 1.0f;   // est. instruction saving
+		constexpr float Sev   = 0.8f;
+		constexpr float Rec   = 2.8f;
 	}
 
 	// Icon+label button content (same look as the other sections). File-local;
@@ -141,6 +162,17 @@ namespace
 	{
 		return F.bAutoFixable &&
 			(F.RecMaxSize > 0 || LodMapRecCompression(F.RecCompression) != TC_MAX);
+	}
+
+	void LodShowSuccessToast(const FString& Title, const FString& Detail)
+	{
+		FNotificationInfo Info(FText::FromString(Title));
+		Info.SubText              = FText::FromString(Detail);
+		Info.ExpireDuration       = 6.0f;
+		Info.bUseSuccessFailIcons = true;
+		TSharedPtr<SNotificationItem> N = FSlateNotificationManager::Get().AddNotification(Info);
+		if (N.IsValid()) N->SetCompletionState(SNotificationItem::CS_Success);
+		UE_LOG(LogShintTools, Log, TEXT("%s — %s"), *Title, *Detail);
 	}
 }
 
@@ -428,6 +460,28 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodToolbar()
 					[]() { return TArray<FString>{ TEXT("All Severities"), TEXT("Critical"), TEXT("High"), TEXT("Low") }; },
 					[this](const FString& V) { LodSeverityFilter = V; })
 			]
+			// Select All / Deselect All — operate on the current tab's rows and
+			// drive the checked-rows "Fix (N)" bulk action.
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 4.f, 0.f)
+			[
+				SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
+				.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+				.OnClicked_Lambda([this]() { SetLodAllChecked(true);  return FReply::Handled(); })
+				[
+					SNew(STextBlock).Text(LOCTEXT("AOSelAll", "Select All")).Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_Gray()))
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f)
+			[
+				SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
+				.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+				.OnClicked_Lambda([this]() { SetLodAllChecked(false); return FReply::Handled(); })
+				[
+					SNew(STextBlock).Text(LOCTEXT("AODesAll", "Deselect All")).Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_Gray()))
+				]
+			]
 			// Export
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
 			[
@@ -470,37 +524,62 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodToolbar()
 // ─────────────────────────────────────────────────────────────────────────────
 TSharedRef<SWidget> SShintToolsPanel::BuildLodTableHeader()
 {
-	#define LOD_HDR_CELL(TextKey, TextVal, Fill)                              \
-		+ SHorizontalBox::Slot().FillWidth(Fill).VAlign(VAlign_Center)        \
-		[                                                                     \
-			SNew(STextBlock).Text(LOCTEXT(TextKey, TextVal))                  \
-			.Font(FShintStyle::Fonts::Caption())                             \
-			.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))   \
-		]
+	// Shared shell: checkbox spacer + per-tab cells + Fix spacer. Each tab gets
+	// only the columns that mean something for its asset family (rebuilt on tab
+	// switch via LodTableHeaderBox).
+	TSharedRef<SHorizontalBox> Cells = SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 8.f, 0.f)
+		[ SNew(SBox).WidthOverride(20.f) ];
+
+	auto HdrCell = [&Cells](const FText& Label, float Fill)
+	{
+		Cells->AddSlot().FillWidth(Fill).VAlign(VAlign_Center)
+		[
+			SNew(STextBlock).Text(Label)
+			.Font(FShintStyle::Fonts::Caption())
+			.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
+		];
+	};
+
+	switch (LodActiveTab)
+	{
+	case ELodTab::Meshes:
+		HdrCell(LOCTEXT("AOColAsset", "ASSET"),          LodColMesh::Asset);
+		HdrCell(LOCTEXT("AOColMType", "TYPE"),           LodColMesh::Type);
+		HdrCell(LOCTEXT("AOColTris",  "TRIANGLES"),      LodColMesh::Tris);
+		HdrCell(LOCTEXT("AOColLods",  "RENDER PATH"),    LodColMesh::Lods);
+		HdrCell(LOCTEXT("AOColMSav",  "EST. SAVINGS"),   LodColMesh::Sav);
+		HdrCell(LOCTEXT("AOColSev",   "SEVERITY"),       LodColMesh::Sev);
+		HdrCell(LOCTEXT("AOColRec",   "RECOMMENDATION"), LodColMesh::Rec);
+		break;
+	case ELodTab::Materials:
+		HdrCell(LOCTEXT("AOColAsset", "ASSET"),          LodColMat::Asset);
+		HdrCell(LOCTEXT("AOColXType", "TYPE"),           LodColMat::Type);
+		HdrCell(LOCTEXT("AOColBlend", "BLEND MODE"),     LodColMat::Blend);
+		HdrCell(LOCTEXT("AOColInstr", "INSTRUCTIONS"),   LodColMat::Instr);
+		HdrCell(LOCTEXT("AOColXSav",  "EST. SAVINGS"),   LodColMat::Sav);
+		HdrCell(LOCTEXT("AOColSev",   "SEVERITY"),       LodColMat::Sev);
+		HdrCell(LOCTEXT("AOColRec",   "RECOMMENDATION"), LodColMat::Rec);
+		break;
+	default: // Textures
+		HdrCell(LOCTEXT("AOColAsset", "ASSET"),          LodCol::Asset);
+		HdrCell(LOCTEXT("AOColGroup", "GROUP"),          LodCol::Group);
+		HdrCell(LOCTEXT("AOColRes",   "RESOLUTION"),     LodCol::Res);
+		HdrCell(LOCTEXT("AOColFmt",   "FORMAT"),         LodCol::Fmt);
+		HdrCell(LOCTEXT("AOColCur",   "CURRENT SIZE"),   LodCol::Cur);
+		HdrCell(LOCTEXT("AOColPot",   "POTENTIAL SIZE"), LodCol::Pot);
+		HdrCell(LOCTEXT("AOColSav",   "SAVINGS"),        LodCol::Sav);
+		HdrCell(LOCTEXT("AOColSev",   "SEVERITY"),       LodCol::Sev);
+		HdrCell(LOCTEXT("AOColRec",   "RECOMMENDATION"), LodCol::Rec);
+		break;
+	}
+	Cells->AddSlot().AutoWidth().Padding(8.f, 0.f, 0.f, 0.f)
+	[ SNew(SBox).WidthOverride(48.f) ];
 
 	return SNew(SBorder)
 		.BorderImage(ST4::Solid(C_BG()))
 		.Padding(FMargin(8.f, 6.f))
-		[
-			SNew(SHorizontalBox)
-			// checkbox spacer
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 8.f, 0.f)
-			[ SNew(SBox).WidthOverride(20.f) ]
-			LOD_HDR_CELL("AOColAsset", "ASSET",          LodCol::Asset)
-			LOD_HDR_CELL("AOColGroup", "GROUP",          LodCol::Group)
-			LOD_HDR_CELL("AOColRes",   "RESOLUTION",     LodCol::Res)
-			LOD_HDR_CELL("AOColFmt",   "FORMAT",         LodCol::Fmt)
-			LOD_HDR_CELL("AOColCur",   "CURRENT SIZE",   LodCol::Cur)
-			LOD_HDR_CELL("AOColPot",   "POTENTIAL SIZE", LodCol::Pot)
-			LOD_HDR_CELL("AOColSav",   "SAVINGS",        LodCol::Sav)
-			LOD_HDR_CELL("AOColSev",   "SEVERITY",       LodCol::Sev)
-			LOD_HDR_CELL("AOColRec",   "RECOMMENDATION", LodCol::Rec)
-			// Fix spacer
-			+ SHorizontalBox::Slot().AutoWidth().Padding(8.f, 0.f, 0.f, 0.f)
-			[ SNew(SBox).WidthOverride(48.f) ]
-		];
-
-	#undef LOD_HDR_CELL
+		[ Cells ];
 }
 
 TSharedRef<SWidget> SShintToolsPanel::BuildLodResultsPanel()
@@ -509,13 +588,29 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodResultsPanel()
 	.HAlign(HAlign_Center).VAlign(VAlign_Center).MinDesiredHeight(64.f)
 	[
 		SNew(STextBlock)
-		.Text(LOCTEXT("AOEmpty", "Run a scan to see optimization findings."))
+		// Before any scan: generic prompt. After a scan: name the tab that has
+		// no findings, so an empty Materials tab reads as a clean result, not
+		// as a scan that didn't run.
+		.Text_Lambda([this]() -> FText {
+			if (LodFindingItems.IsEmpty())
+				return LOCTEXT("AOEmpty", "Run a scan to see optimization findings.");
+			switch (LodActiveTab)
+			{
+			case ELodTab::Meshes:    return LOCTEXT("AOEmptyMesh", "No mesh findings — meshes look clean.");
+			case ELodTab::Materials: return LOCTEXT("AOEmptyMat",  "No material findings — materials look clean.");
+			default:                 return LOCTEXT("AOEmptyTex",  "No texture findings — textures look clean.");
+			}
+		})
 		.Font(F_Small()).ColorAndOpacity(FSlateColor(C_DimGray()))
 	];
 
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
-		[ BuildLodTableHeader() ]
+		[
+			// Rebuilt on tab switch — each tab renders its own column set.
+			SAssignNew(LodTableHeaderBox, SBox)
+			[ BuildLodTableHeader() ]
+		]
 
 		+ SVerticalBox::Slot().AutoHeight()
 		[ LodEmptyState.ToSharedRef() ]
@@ -567,134 +662,153 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateLodFindingRow(
 		}
 	}
 
+	// Row skeleton: checkbox + ASSET cell, then the active tab's data cells,
+	// then SEVERITY / RECOMMENDATION / Fix. Cell widths mirror the matching
+	// per-tab header namespaces so the columns line up.
+	TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox)
+
+		// Checkbox
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
+		[
+			SNew(SBox).WidthOverride(20.f)
+			[
+				SNew(SCheckBox)
+				.IsChecked_Lambda([Item]() {
+					return Item->bChecked ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+				})
+				.OnCheckStateChanged_Lambda([this, Item](ECheckBoxState S) {
+					Item->bChecked = (S == ECheckBoxState::Checked);
+					if (LodFixSelected_Label.IsValid())
+						LodFixSelected_Label->SetText(FText::FromString(
+							FString::Printf(TEXT("Fix (%d)"), LodCheckedCount())));
+				})
+			]
+		];
+
+	// ASSET: thumbnail + name + path (same width across all three tabs).
+	Row->AddSlot().FillWidth(LodCol::Asset).VAlign(VAlign_Center)
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
+		[
+			SNew(SBox).WidthOverride(34.f).HeightOverride(34.f)
+			[ ThumbWidget ]
+		]
+		+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(STextBlock).Text(FText::FromString(AssetName))
+				.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White()))
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(STextBlock).Text(FText::FromString(F.AssetPath))
+				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
+			]
+		]
+	];
+
+	// Small helpers for the per-tab data cells.
+	auto TextCell = [&Row](const FString& Value, float Fill, bool bMono,
+		const FLinearColor& Color)
+	{
+		Row->AddSlot().FillWidth(Fill).VAlign(VAlign_Center)
+		[
+			SNew(STextBlock)
+			.Text(FText::FromString(Value.IsEmpty() ? TEXT("—") : Value))
+			.Font(bMono ? F_Mono() : F_Small())
+			.ColorAndOpacity(FSlateColor(Color))
+		];
+	};
+
+	switch (LodActiveTab)
+	{
+	case ELodTab::Meshes:
+		// TYPE · TRIANGLES · RENDER PATH · EST. SAVINGS
+		TextCell(F.Group,   LodColMesh::Type, false, C_Gray());
+		TextCell(F.ResText, LodColMesh::Tris, true,  C_Gray());
+		TextCell(F.Format,  LodColMesh::Lods, true,  C_Gray());
+		TextCell(F.VramMb > 0.0
+			? FString::Printf(TEXT("%.1f MB"), F.VramMb) : FString(),
+			LodColMesh::Sav, false, FShintStyle::Colors::SevLow());
+		break;
+	case ELodTab::Materials:
+		// TYPE · BLEND MODE · INSTRUCTIONS · EST. SAVINGS
+		TextCell(F.Group,   LodColMat::Type,  false, C_Gray());
+		TextCell(F.Format,  LodColMat::Blend, true,  C_Gray());
+		TextCell(F.ResText, LodColMat::Instr, true,  C_Gray());
+		TextCell(F.ShaderInstructions > 0
+			? FString::Printf(TEXT("%d instr"), F.ShaderInstructions)
+			: (F.VramMb > 0.0
+				? FString::Printf(TEXT("%.1f MB"), F.VramMb) : FString()),
+			LodColMat::Sav, false, FShintStyle::Colors::SevLow());
+		break;
+	default: // Textures — GROUP · RESOLUTION · FORMAT · CURRENT · POTENTIAL · SAVINGS
+		TextCell(F.Group,     LodCol::Group, false, C_Gray());
+		TextCell(Resolution,  LodCol::Res,   true,  C_Gray());
+		TextCell(F.Format,    LodCol::Fmt,   true,  C_Gray());
+		TextCell(FmtSizeMb(F.CurrentVramMb), LodCol::Cur, false,
+			FShintStyle::Colors::SevCritical());
+		TextCell(FmtSizeMb(F.PotentialVramMb), LodCol::Pot, false,
+			FShintStyle::Colors::SevLow());
+		Row->AddSlot().FillWidth(LodCol::Sav).VAlign(VAlign_Center)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(F.VramMb > 0.0
+					? FString::Printf(TEXT("%.1f MB"), F.VramMb) : TEXT("—")))
+				.Font(F_Small()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::SevLow()))
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(STextBlock).Text(FText::FromString(SavingsPct))
+				.Font(F_Label()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::SevLow()))
+			]
+		];
+		break;
+	}
+
+	const float SevFill = LodActiveTab == ELodTab::Meshes    ? LodColMesh::Sev :
+	                      LodActiveTab == ELodTab::Materials ? LodColMat::Sev  : LodCol::Sev;
+	const float RecFill = LodActiveTab == ELodTab::Meshes    ? LodColMesh::Rec :
+	                      LodActiveTab == ELodTab::Materials ? LodColMat::Rec  : LodCol::Rec;
+
+	// SEVERITY
+	TextCell(SeverityLabel(F.Severity), SevFill, false, SeverityColor(F.Severity));
+	// RECOMMENDATION
+	Row->AddSlot().FillWidth(RecFill).VAlign(VAlign_Center)
+	[
+		SNew(STextBlock).Text(FText::FromString(F.Message))
+		.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())).AutoWrapText(true)
+	];
+	// Fix
+	Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(8.f, 0.f, 0.f, 0.f)
+	[
+		SNew(SBox).WidthOverride(48.f)
+		[
+			SNew(SButton)
+			.Visibility(F.bAutoFixable ? EVisibility::Visible : EVisibility::Collapsed)
+			.ContentPadding(FMargin(8.f, 4.f))
+			.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+			.OnClicked_Lambda([this, Item]() { return OnLodFixRow(Item); })
+			[
+				SNew(STextBlock).Text(LOCTEXT("AOFix", "Fix")).Font(F_Label())
+				.ColorAndOpacity(FSlateColor(C_White()))
+			]
+		]
+	];
+
 	return SNew(STableRow<FShintLodFindingPtr>, Owner)
 		.Padding(FMargin(0.f, 1.f))
 		[
 			SNew(SBorder)
 			.BorderImage(ST4::Solid(C_BG()))
 			.Padding(FMargin(8.f, 8.f))
-			[
-				SNew(SHorizontalBox)
-
-				// Checkbox
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
-				[
-					SNew(SBox).WidthOverride(20.f)
-					[
-						SNew(SCheckBox)
-						.IsChecked_Lambda([Item]() {
-							return Item->bChecked ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
-						})
-						.OnCheckStateChanged_Lambda([this, Item](ECheckBoxState S) {
-							Item->bChecked = (S == ECheckBoxState::Checked);
-							if (LodFixSelected_Label.IsValid())
-								LodFixSelected_Label->SetText(FText::FromString(
-									FString::Printf(TEXT("Fix (%d)"), LodCheckedCount())));
-						})
-					]
-				]
-
-				// ASSET: thumbnail placeholder + name + path
-				+ SHorizontalBox::Slot().FillWidth(LodCol::Asset).VAlign(VAlign_Center)
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
-					[
-						SNew(SBox).WidthOverride(34.f).HeightOverride(34.f)
-						[ ThumbWidget ]
-					]
-					+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
-					[
-						SNew(SVerticalBox)
-						+ SVerticalBox::Slot().AutoHeight()
-						[
-							SNew(STextBlock).Text(FText::FromString(AssetName))
-							.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White()))
-						]
-						+ SVerticalBox::Slot().AutoHeight()
-						[
-							SNew(STextBlock).Text(FText::FromString(F.AssetPath))
-							.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
-						]
-					]
-				]
-
-				// GROUP
-				+ SHorizontalBox::Slot().FillWidth(LodCol::Group).VAlign(VAlign_Center)
-				[
-					SNew(STextBlock).Text(FText::FromString(F.Group))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Gray()))
-				]
-				// RESOLUTION
-				+ SHorizontalBox::Slot().FillWidth(LodCol::Res).VAlign(VAlign_Center)
-				[
-					SNew(STextBlock).Text(FText::FromString(Resolution))
-					.Font(F_Mono()).ColorAndOpacity(FSlateColor(C_Gray()))
-				]
-				// FORMAT
-				+ SHorizontalBox::Slot().FillWidth(LodCol::Fmt).VAlign(VAlign_Center)
-				[
-					SNew(STextBlock).Text(FText::FromString(F.Format))
-					.Font(F_Mono()).ColorAndOpacity(FSlateColor(C_Gray()))
-				]
-				// CURRENT SIZE
-				+ SHorizontalBox::Slot().FillWidth(LodCol::Cur).VAlign(VAlign_Center)
-				[
-					SNew(STextBlock).Text(FText::FromString(FmtSizeMb(F.CurrentVramMb)))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::SevCritical()))
-				]
-				// POTENTIAL SIZE
-				+ SHorizontalBox::Slot().FillWidth(LodCol::Pot).VAlign(VAlign_Center)
-				[
-					SNew(STextBlock).Text(FText::FromString(FmtSizeMb(F.PotentialVramMb)))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::SevLow()))
-				]
-				// SAVINGS (MB + %)
-				+ SHorizontalBox::Slot().FillWidth(LodCol::Sav).VAlign(VAlign_Center)
-				[
-					SNew(SVerticalBox)
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						SNew(STextBlock)
-						.Text(FText::FromString(F.VramMb > 0.0
-							? FString::Printf(TEXT("%.1f MB"), F.VramMb) : TEXT("—")))
-						.Font(F_Small()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::SevLow()))
-					]
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						SNew(STextBlock).Text(FText::FromString(SavingsPct))
-						.Font(F_Label()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::SevLow()))
-					]
-				]
-				// SEVERITY
-				+ SHorizontalBox::Slot().FillWidth(LodCol::Sev).VAlign(VAlign_Center)
-				[
-					SNew(STextBlock).Text(FText::FromString(SeverityLabel(F.Severity)))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(SeverityColor(F.Severity)))
-				]
-				// RECOMMENDATION
-				+ SHorizontalBox::Slot().FillWidth(LodCol::Rec).VAlign(VAlign_Center)
-				[
-					SNew(STextBlock).Text(FText::FromString(F.Message))
-					.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())).AutoWrapText(true)
-				]
-				// Fix
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.f, 0.f, 0.f, 0.f)
-				[
-					SNew(SBox).WidthOverride(48.f)
-					[
-						SNew(SButton)
-						.Visibility(F.bAutoFixable ? EVisibility::Visible : EVisibility::Collapsed)
-						.ContentPadding(FMargin(8.f, 4.f))
-						.ButtonColorAndOpacity(FSlateColor(C_Surface()))
-						.OnClicked_Lambda([this, Item]() { return OnLodFixRow(Item); })
-						[
-							SNew(STextBlock).Text(LOCTEXT("AOFix", "Fix")).Font(F_Label())
-							.ColorAndOpacity(FSlateColor(C_White()))
-						]
-					]
-				]
-			]
+			[ Row ]
 		];
 }
 
@@ -715,6 +829,7 @@ FReply SShintToolsPanel::OnAuditLodsClicked()
 	}
 
 	LodState = EModuleState::Running;
+	if (AuditLodBtn.IsValid()) AuditLodBtn->SetEnabled(false);
 	if (AuditLodBtnLabel.IsValid())
 		AuditLodBtnLabel->SetText(LOCTEXT("AOScanning", "Scanning…"));
 
@@ -731,6 +846,7 @@ FReply SShintToolsPanel::OnAuditLodsClicked()
 void SShintToolsPanel::OnLodAuditComplete(const FShintLodAuditResult& Result)
 {
 	LodState = Result.bSuccess ? EModuleState::Done : EModuleState::Error;
+	if (AuditLodBtn.IsValid()) AuditLodBtn->SetEnabled(true);
 	if (AuditLodBtnLabel.IsValid())
 		AuditLodBtnLabel->SetText(LOCTEXT("AOScan", "Scan"));
 
@@ -746,6 +862,19 @@ void SShintToolsPanel::OnLodAuditComplete(const FShintLodAuditResult& Result)
 	LastLodResult = Result;
 	PopulateLodFindingList(Result);
 	RefreshLodStats();
+
+	// Per-family completion summary, mirroring the KPI subtitle breakdown.
+	int32 TexIssues = 0, MeshIssues = 0, MatIssues = 0;
+	for (const FShintLodFinding& F : Result.Findings)
+	{
+		if (F.Category.Contains(TEXT("Texture")))        ++TexIssues;
+		else if (F.Category.Contains(TEXT("Mesh")))      ++MeshIssues;
+		else if (F.Category.Contains(TEXT("Material")))  ++MatIssues;
+	}
+	LodShowSuccessToast(TEXT("Scan complete"),
+		FString::Printf(TEXT("%d assets audited — %d issues (Tex %d · Mesh %d · Mat %d)."),
+			Result.AssetsAudited, Result.IssuesFound,
+			TexIssues, MeshIssues, MatIssues));
 }
 
 void SShintToolsPanel::PopulateLodFindingList(const FShintLodAuditResult& Result)
@@ -763,6 +892,8 @@ void SShintToolsPanel::PopulateLodFindingList(const FShintLodAuditResult& Result
 void SShintToolsPanel::SetLodTab(ELodTab Tab)
 {
 	LodActiveTab = Tab;
+	if (LodTableHeaderBox.IsValid())
+		LodTableHeaderBox->SetContent(BuildLodTableHeader());
 	RefreshLodFilteredList();
 }
 
@@ -772,6 +903,17 @@ int32 SShintToolsPanel::LodCheckedCount() const
 	for (const FShintLodFindingPtr& It : LodFilteredItems)
 		if (It.IsValid() && It->bChecked) ++N;
 	return N;
+}
+
+void SShintToolsPanel::SetLodAllChecked(bool bChecked)
+{
+	// Scoped to the current tab's visible rows — Select All on Textures must
+	// not silently queue hidden mesh/material rows into the bulk Fix.
+	for (const FShintLodFindingPtr& It : LodFilteredItems)
+		if (It.IsValid()) It->bChecked = bChecked;
+	if (LodFixSelected_Label.IsValid())
+		LodFixSelected_Label->SetText(FText::FromString(
+			FString::Printf(TEXT("Fix (%d)"), LodCheckedCount())));
 }
 
 void SShintToolsPanel::RefreshLodFilteredList()
@@ -874,20 +1016,6 @@ void SShintToolsPanel::RefreshLodStats()
 // ─────────────────────────────────────────────────────────────────────────────
 // Stage 3 — auto-fix (optimised duplicate) + export
 // ─────────────────────────────────────────────────────────────────────────────
-namespace
-{
-	void LodShowSuccessToast(const FString& Title, const FString& Detail)
-	{
-		FNotificationInfo Info(FText::FromString(Title));
-		Info.SubText              = FText::FromString(Detail);
-		Info.ExpireDuration       = 6.0f;
-		Info.bUseSuccessFailIcons = true;
-		TSharedPtr<SNotificationItem> N = FSlateNotificationManager::Get().AddNotification(Info);
-		if (N.IsValid()) N->SetCompletionState(SNotificationItem::CS_Success);
-		UE_LOG(LogShintTools, Log, TEXT("%s — %s"), *Title, *Detail);
-	}
-}
-
 // Writes an optimised *duplicate* (<Name>_Optimized) of the finding's texture
 // with the server's recommended max-size / compression applied; the original is
 // never modified. Returns false + OutError on failure.
@@ -1023,15 +1151,17 @@ FReply SShintToolsPanel::OnLodExport()
 	};
 
 	FString Csv = TEXT("Asset,Rule,Category,Severity,Group,Width,Height,Format,"
-		"CurrentVRAM_MB,PotentialVRAM_MB,Saving_MB,Recommendation\n");
+		"Detail,CurrentVRAM_MB,PotentialVRAM_MB,Saving_MB,Saving_Instr,"
+		"Recommendation\n");
 	for (const FShintLodFindingPtr& It : LodFindingItems)
 	{
 		if (!It.IsValid()) continue;
 		const FShintLodFinding& F = It->Finding;
-		Csv += FString::Printf(TEXT("%s,%s,%s,%s,%s,%d,%d,%s,%.2f,%.2f,%.2f,%s\n"),
+		Csv += FString::Printf(TEXT("%s,%s,%s,%s,%s,%d,%d,%s,%s,%.2f,%.2f,%.2f,%d,%s\n"),
 			*Esc(F.AssetPath), *Esc(F.RuleId), *Esc(F.Category), *Esc(F.Severity),
-			*Esc(F.Group), F.Width, F.Height, *Esc(F.Format),
-			F.CurrentVramMb, F.PotentialVramMb, F.VramMb, *Esc(F.Guidance));
+			*Esc(F.Group), F.Width, F.Height, *Esc(F.Format), *Esc(F.ResText),
+			F.CurrentVramMb, F.PotentialVramMb, F.VramMb, F.ShaderInstructions,
+			*Esc(F.Guidance));
 	}
 
 	const FString OutPath = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("ShintTools"),
