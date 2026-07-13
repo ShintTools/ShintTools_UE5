@@ -2,6 +2,28 @@
 
 ---
 
+## [1.2.6] — 2026-07-13 — LOD audit commandlet (CI/CD)
+
+### Added
+- **Headless LOD audit commandlet** for build pipelines (`UShintLodAuditCommandlet`):
+  ```
+  UnrealEditor-Cmd <Project>.uproject -run=ShintLodAudit \
+      -profile=<default|mobile> [-deep] -failon=<error|warning> \
+      [-json=<path>] [-csv=<path>]
+  ```
+  Reuses `FShintCoreClient::AuditLods` against the same local Core the editor
+  panel talks to (CI images start it via the shipped docker compose), pumps
+  HTTP to completion, writes the JSON artifact (client-metadata block + summary
+  + flattened findings) and/or CSV, and returns a CI-gateable exit code:
+  **0** clean · **1** findings at/above `-failon` · **2** infrastructure error
+  (Core unreachable / timeout) — the last is distinct from findings so CI can
+  retry instead of failing the build. Studio-only (stripped from
+  indie/marketplace with the rest of the LOD module).
+
+### Notes
+- Scope is `/Game` this round (`-scope=` path filtering, `-applyfixes`, and the
+  Perforce/BuildGraph wrappers from §20.7 remain for a later phase).
+
 ## [1.2.5] — 2026-07-13 — Deep Scan cache
 
 ### Added

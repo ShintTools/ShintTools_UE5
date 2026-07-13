@@ -63,11 +63,14 @@ MODULES = {
         "files": [
             "Source/ShintTools/Private/Core/ShintCoreClient_Lod.cpp",
             "Source/ShintTools/Private/UI/SShintToolsPanel_Lod.cpp",
+            "Source/ShintTools/Private/Commandlets/ShintLodAuditCommandlet.cpp",
+            "Source/ShintTools/Private/Commandlets/ShintLodAuditCommandlet.h",
         ],
         "symbols": [
             "ShintCoreClient_Lod", "SShintToolsPanel_Lod", "FShintLodFinding",
             "BuildLodAuditSection", "OnAuditLodsClicked", "LodAudit", "ELodTab",
             "ApplyLodFixDuplicate", "RefreshLodStats",
+            "ShintLodAuditCommandlet", "UShintLodAuditCommandlet",
             # Types / delegates / client API stripped from the headers.
             "FShintLodFindingItem", "FShintLodFindingPtr", "FShintLodAuditResult",
             "FOnShintLodAuditComplete", "AuditLods", "ParseLodAuditResponse",
