@@ -65,12 +65,36 @@ MODULES = {
             "Source/ShintTools/Private/UI/SShintToolsPanel_Lod.cpp",
             "Source/ShintTools/Private/Commandlets/ShintLodAuditCommandlet.cpp",
             "Source/ShintTools/Private/Commandlets/ShintLodAuditCommandlet.h",
+            # In-place auto-fix engine (§20.5) — Studio-only, whole-file paid.
+            "Source/ShintTools/Public/Core/ShintLodFixerRegistry.h",
+            "Source/ShintTools/Private/Core/ShintLodFixerRegistry.cpp",
+            "Source/ShintTools/Public/Core/ShintLodFixJournal.h",
+            "Source/ShintTools/Private/Core/ShintLodFixJournal.cpp",
+            "Source/ShintTools/Public/Core/ShintLodAutoFixLibrary.h",
+            "Source/ShintTools/Private/Core/ShintLodAutoFixLibrary.cpp",
+            # §21 Summary treemap widget — Studio-only, whole-file paid.
+            "Source/ShintTools/Public/UI/SShintTreemap.h",
+            "Source/ShintTools/Private/UI/SShintTreemap.cpp",
         ],
         "symbols": [
             "ShintCoreClient_Lod", "SShintToolsPanel_Lod", "FShintLodFinding",
             "BuildLodAuditSection", "OnAuditLodsClicked", "LodAudit", "ELodTab",
             "ApplyLodFixDuplicate", "RefreshLodStats",
             "ShintLodAuditCommandlet", "UShintLodAuditCommandlet",
+            # In-place auto-fix engine (§20.5): registry + journal + BP/Python lib.
+            "ShintLodFixerRegistry", "FShintLodFixerRegistry", "FShintLodFixResult",
+            "ShintLodFixJournal", "FShintLodFixJournal", "FShintLodJournalEntry",
+            "ShintLodAutoFixLibrary", "UShintLodAutoFixLibrary",
+            "FShintLodFixOutcome", "FShintLodFixRequest", "FShintLodFixBatchOutcome",
+            "ApplyFromFinding", "CanApply",
+            # §21 views + Summary treemap widget.
+            "SShintTreemap", "FShintTreemapItem", "ELodView",
+            "FShintLodRuleGroup", "FShintLodJournalRow",
+            "BuildLodViewNav", "BuildLodSummaryView", "BuildLodRulesView",
+            "BuildLodFixesView", "BuildLodBudgetsView", "RefreshLodTreemap",
+            "OnLodFixInPlace", "OnLodFixAllInPlace", "OnLodRevertFix",
+            "LodViewSwitcher", "LodTreemap", "LodActiveView", "LodRulesListView",
+            "LodFixesListView", "LodFixConfidence",
             # Types / delegates / client API stripped from the headers.
             "FShintLodFindingItem", "FShintLodFindingPtr", "FShintLodAuditResult",
             "FOnShintLodAuditComplete", "AuditLods", "ParseLodAuditResponse",

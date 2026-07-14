@@ -43,6 +43,7 @@
 // Deep Scan (§20.2) — mesh-description geometry integrity + normal stats.
 #include "MeshDescription.h"
 #include "StaticMeshAttributes.h"
+#include "Async/ParallelFor.h"        // internal_face_ratio raycast (worker-pool)
 #include "Serialization/JsonWriter.h"   // scan-cache persistence
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -392,6 +393,21 @@ namespace
 					Stats.NumPixelShaderInstructions);                          // LM001
 				Obj->SetNumberField(TEXT("base_pass_instructions"),
 					Stats.NumPixelShaderInstructions);                          // LM008
+
+				// ── shader_stats sub-object (§20.4; LS001 + texture-fetch rules) ──
+				// Only the two numbers UE exports cleanly: pixel-shader instruction
+				// count and total texture fetches. The deeper shader-stat fields
+				// (branch/loop counts, register pressure, dead-code ratio) need
+				// shader-compiler introspection that is NOT engine-exported, so they
+				// stay absent and the LS rules needing them abstain — the
+				// instruction- and fetch-budget rules fire.
+				TSharedRef<FJsonObject> Shader = MakeShared<FJsonObject>();
+				Shader->SetNumberField(TEXT("instruction_count"),
+					Stats.NumPixelShaderInstructions);
+				Shader->SetNumberField(TEXT("texture_fetch_count"),
+					Stats.NumPixelTextureSamples + Stats.NumVertexTextureSamples
+					+ Stats.NumVirtualTextureSamples);
+				Obj->SetObjectField(TEXT("shader_stats"), Shader);
 			}
 			if (Stats.NumVertexShaderInstructions > 0)
 				Obj->SetNumberField(TEXT("vertex_shader_instructions"),
@@ -477,6 +493,27 @@ namespace
 	};
 
 	// ── Deep Scan (§20.2) ────────────────────────────────────────────────────
+	// Möller–Trumbore ray/triangle intersection (single precision). Returns true
+	// and fills OutT (the ray parameter) when Origin + t*Dir hits triangle
+	// (A,B,C) for t > 0. Used by the internal_face_ratio parity ray-cast.
+	bool RayHitsTriangle(const FVector3f& Origin, const FVector3f& Dir,
+		const FVector3f& A, const FVector3f& B, const FVector3f& C, float& OutT)
+	{
+		const FVector3f E1 = B - A, E2 = C - A;
+		const FVector3f P  = FVector3f::CrossProduct(Dir, E2);
+		const float Det = FVector3f::DotProduct(E1, P);
+		if (FMath::Abs(Det) < 1e-8f) return false;   // ray parallel to triangle
+		const float Inv = 1.f / Det;
+		const FVector3f T = Origin - A;
+		const float U = FVector3f::DotProduct(T, P) * Inv;
+		if (U < 0.f || U > 1.f) return false;
+		const FVector3f Q = FVector3f::CrossProduct(T, E1);
+		const float V = FVector3f::DotProduct(Dir, Q) * Inv;
+		if (V < 0.f || U + V > 1.f) return false;
+		OutT = FVector3f::DotProduct(E2, Q) * Inv;
+		return OutT > 0.f;
+	}
+
 	// Loads the source FMeshDescription (editor-only) and computes the
 	// geometry-integrity + normal-attribute fields the fast scan can't see:
 	// degenerate/duplicate/overlapping verts, non-manifold/open edges, and the
@@ -484,9 +521,10 @@ namespace
 	// LN001–LN006 rules read. Absent when there is no source mesh description
 	// (cooked-only asset) — the rules then abstain, exactly as before.
 	//
-	// Deliberately NOT computed this round (expensive; the rules abstain until a
-	// later phase supplies them): internal_face_ratio (LG009 hull ray-cast) and
-	// the per-UV-channel overlap/stretch/texel-density stats (LW islands).
+	// Also computed now (§20.2 completion): internal_face_ratio (LG009/LG010 —
+	// bounded parity ray-cast, parallelised), per-UV-channel overlap_ratio (coarse
+	// UV rasterisation) and texel_density_avg/cv on channel 0 (from the mesh's
+	// dominant material texture resolution).
 	//
 	// Quantise-grid duplicate/overlap detection: a fine grid (1e-3 cm cell)
 	// counts weldable exact duplicates; a coarse grid (0.05 cm) counts
@@ -600,11 +638,93 @@ namespace
 			EdgeTotal > 0 ? (double)HardCount / EdgeTotal : 0.0);
 		Obj->SetObjectField(TEXT("normal_stats"), NS);
 
-		// ── Per-UV-channel stats (contract §6.2): the unambiguous subset ──
+		// ── internal_face_ratio (LG009/LG010) ──
+		// Parity ray-cast: cache each triangle's positions, then from a sample of
+		// face centroids nudge the point just outside the face (along the geometric
+		// normal) and cast +normal to infinity. An ODD number of mesh intersections
+		// means that point is still inside the solid → the face is buried/internal.
+		// Bounded: meshes above a triangle cap are skipped (field absent → rule
+		// abstains); origins are sub-sampled; the per-origin O(N) sweep runs on the
+		// task pool (ParallelFor) so a deep scan of a heavy mesh stays responsive.
+		{
+			const int32 TriCount = MD->Triangles().Num();
+			constexpr int32 MaxTrisForRaycast = 40000;
+			if (TriCount > 0 && TriCount <= MaxTrisForRaycast)
+			{
+				TArray<FVector3f> A, B, Cc;
+				A.Reserve(TriCount); B.Reserve(TriCount); Cc.Reserve(TriCount);
+				for (const FTriangleID Tri : MD->Triangles().GetElementIDs())
+				{
+					TArrayView<const FVertexID> V = MD->GetTriangleVertices(Tri);
+					if (V.Num() < 3)
+					{
+						A.Add(FVector3f::ZeroVector);
+						B.Add(FVector3f::ZeroVector);
+						Cc.Add(FVector3f::ZeroVector);
+						continue;
+					}
+					A.Add(Positions[V[0]]);
+					B.Add(Positions[V[1]]);
+					Cc.Add(Positions[V[2]]);
+				}
+				const int32 N = A.Num();
+				constexpr int32 MaxSamples = 2000;
+				const int32 Stride = FMath::Max(1, N / MaxSamples);
+
+				TArray<int32> SampleIdx;
+				for (int32 i = 0; i < N; i += Stride) SampleIdx.Add(i);
+
+				TArray<uint8> IsInternal;   // 0 = external/skipped, 1 = internal
+				IsInternal.SetNumZeroed(SampleIdx.Num());
+
+				ParallelFor(SampleIdx.Num(), [&](int32 s)
+				{
+					const int32 i = SampleIdx[s];
+					const FVector3f Ctr = (A[i] + B[i] + Cc[i]) / 3.f;
+					FVector3f Nrm = FVector3f::CrossProduct(B[i] - A[i], Cc[i] - A[i]);
+					if (Nrm.IsNearlyZero(1e-6f)) return;   // degenerate — leave 0
+					Nrm.Normalize();
+					const FVector3f Origin = Ctr + Nrm * 0.01f;   // 0.1 mm outside
+					int32 Hits = 0;
+					for (int32 j = 0; j < N; ++j)
+					{
+						if (j == i) continue;
+						float T;
+						if (RayHitsTriangle(Origin, Nrm, A[j], B[j], Cc[j], T)
+								&& T > 1e-4f)
+							++Hits;
+					}
+					if ((Hits & 1) == 1) IsInternal[s] = 1;   // odd → inside the solid
+				});
+
+				int32 Internal = 0;
+				for (uint8 F : IsInternal) Internal += F;
+				if (SampleIdx.Num() > 0)
+					Obj->SetNumberField(TEXT("internal_face_ratio"),
+						(double)Internal / SampleIdx.Num());
+			}
+		}
+
+		// Dominant texture resolution across the mesh's materials — the reference
+		// resolution for texel density (LW007/008): the largest texture dimension
+		// over all base textures assigned to the mesh's material slots.
+		int32 DomTexRes = 0;
+		for (const FStaticMaterial& SlotMat : Mesh->GetStaticMaterials())
+		{
+			if (!SlotMat.MaterialInterface) continue;
+			TArray<UTexture*> SlotTex;
+			SlotMat.MaterialInterface->GetUsedTextures(SlotTex);
+			for (UTexture* Tex : SlotTex)
+				if (const UTexture2D* T2 = Cast<UTexture2D>(Tex))
+					DomTexRes = FMath::Max(DomTexRes,
+						FMath::Max(T2->GetSizeX(), T2->GetSizeY()));
+		}
+
+		// ── Per-UV-channel stats (contract §6.2) ──
 		// outside_unit_ratio (LW009), packing_efficiency (LW006), island_count
-		// (LW005). Left at their safe defaults so their rules abstain:
-		// overlap_ratio (needs UV rasterisation) and texel_density_* (needs the
-		// dominant texture resolution) — both a later phase.
+		// (LW005), overlap_ratio (LW001/002 — coarse UV rasterisation), and on
+		// channel 0 texel_density_avg/cv (LW007/008 — from DomTexRes + per-tri
+		// UV vs world area).
 		const int32 NumUV = UVs.IsValid() ? UVs.GetNumChannels() : 0;
 		if (NumUV > 0)
 		{
@@ -633,6 +753,18 @@ namespace
 					Parent.Add(Id); WeldId.Add(Key, Id); return Id;
 				};
 				auto Union = [&](int32 A, int32 B) { Parent[Find(A)] = Find(B); };
+
+					// Overlap detection: rasterise UV triangles into a coarse grid
+					// over the [0,1) tile; a cell hit by >1 triangle is overlap.
+					constexpr int32 GridN = 128;
+					TArray<uint8> Cover;
+					Cover.SetNumZeroed(GridN * GridN);
+					int32 CoveredCells = 0, OverlapCells = 0;
+
+					// Texel density (channel 0 only): per-triangle texels/cm from the
+					// dominant texture resolution, UV area and world area.
+					double DensSum = 0.0, DensSqSum = 0.0;
+					int32 DensN = 0;
 
 				for (const FTriangleID Tri : MD->Triangles().GetElementIDs())
 				{
@@ -668,12 +800,81 @@ namespace
 				TSet<int32> Roots;
 				for (int32 I = 0; I < Parent.Num(); ++I) Roots.Add(Find(I));
 
+				// Second pass (this channel): UV-overlap rasterisation + texel density.
+				for (const FTriangleID Tri2 : MD->Triangles().GetElementIDs())
+				{
+					TArrayView<const FVertexInstanceID> V2 =
+						MD->GetTriangleVertexInstances(Tri2);
+					if (V2.Num() < 3) continue;
+					const FVector2f D0 = UVs.Get(V2[0], Ch);
+					const FVector2f D1 = UVs.Get(V2[1], Ch);
+					const FVector2f D2 = UVs.Get(V2[2], Ch);
+					const double TriUv = 0.5 * FMath::Abs((double)(
+						(D1.X - D0.X) * (D2.Y - D0.Y) - (D2.X - D0.X) * (D1.Y - D0.Y)));
+
+					// Rasterise into the coverage grid (barycentric point-in-tri).
+					{
+						const int32 X0 = FMath::Clamp(FMath::FloorToInt(FMath::Min3(D0.X, D1.X, D2.X) * GridN), 0, GridN - 1);
+						const int32 X1 = FMath::Clamp(FMath::FloorToInt(FMath::Max3(D0.X, D1.X, D2.X) * GridN), 0, GridN - 1);
+						const int32 Y0 = FMath::Clamp(FMath::FloorToInt(FMath::Min3(D0.Y, D1.Y, D2.Y) * GridN), 0, GridN - 1);
+						const int32 Y1 = FMath::Clamp(FMath::FloorToInt(FMath::Max3(D0.Y, D1.Y, D2.Y) * GridN), 0, GridN - 1);
+						const float Den = (D1.Y - D2.Y) * (D0.X - D2.X) + (D2.X - D1.X) * (D0.Y - D2.Y);
+						if (FMath::Abs(Den) > 1e-8f)
+						{
+							const float InvDen = 1.f / Den;
+							for (int32 Gy = Y0; Gy <= Y1; ++Gy)
+							for (int32 Gx = X0; Gx <= X1; ++Gx)
+							{
+								const float Px = (Gx + 0.5f) / GridN;
+								const float Py = (Gy + 0.5f) / GridN;
+								const float Wa = ((D1.Y - D2.Y) * (Px - D2.X) + (D2.X - D1.X) * (Py - D2.Y)) * InvDen;
+								const float Wb = ((D2.Y - D0.Y) * (Px - D2.X) + (D0.X - D2.X) * (Py - D2.Y)) * InvDen;
+								if (Wa >= 0.f && Wb >= 0.f && (Wa + Wb) <= 1.f)
+								{
+									uint8& Cell = Cover[Gy * GridN + Gx];
+									if (Cell == 0)      ++CoveredCells;
+									else if (Cell == 1) ++OverlapCells;
+									if (Cell < 255)     ++Cell;
+								}
+							}
+						}
+					}
+
+					// Texel density (channel 0): texels/cm from DomTexRes + UV vs world area.
+					if (Ch == 0 && DomTexRes > 0 && TriUv > 1e-12)
+					{
+						TArrayView<const FVertexID> TV2 = MD->GetTriangleVertices(Tri2);
+						if (TV2.Num() >= 3)
+						{
+							const FVector3f W0 = Positions[TV2[0]];
+							const FVector3f W1 = Positions[TV2[1]];
+							const FVector3f W2 = Positions[TV2[2]];
+							const double WorldArea = 0.5 * (double)FVector3f::CrossProduct(W1 - W0, W2 - W0).Size();
+							if (WorldArea > 1e-6)
+							{
+								const double Dens = DomTexRes * FMath::Sqrt(TriUv / WorldArea);
+								DensSum += Dens; DensSqSum += Dens * Dens; ++DensN;
+							}
+						}
+					}
+				}
+
 				TSharedRef<FJsonObject> Uc = MakeShared<FJsonObject>();
 				Uc->SetNumberField(TEXT("channel"), Ch);
 				Uc->SetNumberField(TEXT("outside_unit_ratio"),
 					TotalCorners > 0 ? (double)OutsideCorners / TotalCorners : 0.0);
 				Uc->SetNumberField(TEXT("packing_efficiency"), Packing);
 				Uc->SetNumberField(TEXT("island_count"), Roots.Num());
+				Uc->SetNumberField(TEXT("overlap_ratio"),
+					CoveredCells > 0 ? (double)OverlapCells / CoveredCells : 0.0);
+				if (Ch == 0 && DensN > 0)
+				{
+					const double Avg = DensSum / DensN;
+					const double Var = FMath::Max(0.0, DensSqSum / DensN - Avg * Avg);
+					Uc->SetNumberField(TEXT("texel_density_avg"), Avg);
+					Uc->SetNumberField(TEXT("texel_density_cv"),
+						Avg > 0.0 ? FMath::Sqrt(Var) / Avg : 0.0);
+				}
 				UvChannels.Add(MakeShared<FJsonValueObject>(Uc));
 			}
 			Obj->SetArrayField(TEXT("uv_channels"), UvChannels);
@@ -984,6 +1185,36 @@ FShintLodAuditResult FShintCoreClient::ParseLodAuditResponse(
 					TEXT("max_texture_size"), Finding.RecMaxSize);
 				(*Recommended)->TryGetStringField(
 					TEXT("compression"), Finding.RecCompression);
+
+				// Flatten every recommended scalar to string→string so the
+				// in-place fixer registry (§20.5) can dispatch on property keys
+				// without re-parsing the response. "confidence" is lifted out.
+				for (const auto& Pair : (*Recommended)->Values)
+				{
+					if (!Pair.Value.IsValid()) continue;
+					if (Pair.Key == TEXT("confidence"))
+					{
+						(*Recommended)->TryGetStringField(
+							TEXT("confidence"), Finding.Confidence);
+						continue;
+					}
+					FString AsStr;
+					switch (Pair.Value->Type)
+					{
+					case EJson::String:  AsStr = Pair.Value->AsString(); break;
+					case EJson::Boolean: AsStr = Pair.Value->AsBool() ? TEXT("true") : TEXT("false"); break;
+					case EJson::Number:
+					{
+						const double N = Pair.Value->AsNumber();
+						AsStr = (FMath::IsNearlyEqual(N, FMath::RoundToDouble(N)))
+							? FString::FromInt(FMath::RoundToInt(N))
+							: FString::SanitizeFloat(N);
+						break;
+					}
+					default: continue;   // objects/arrays are not fixer targets
+					}
+					Finding.Recommended.Add(Pair.Key, AsStr);
+				}
 			}
 
 			Out.Findings.Add(MoveTemp(Finding));
