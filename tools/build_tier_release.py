@@ -245,6 +245,14 @@ def _scrub_comments_shipped(text: str) -> str:
 _DEF_RE = re.compile(
     r"^[A-Za-z_][\w<>,*&:\s]*?\b[FSU]Shint\w*::(~?\w+)\s*\(", re.MULTILINE)
 
+# Method names too generic to grep bare: they collide with unrelated code in
+# kept files (every Slate widget's Construct, TMap/FString Find/Append calls,
+# the code validator's own ApplyFix). Safe to skip ONLY because the classes
+# defining them are whole-file stripped and their class names stay in the
+# manual symbol list — a surviving reference still needs the class name to
+# compile, so real leaks remain detectable.
+_GENERIC_METHODS = {"Construct", "Find", "Append", "ApplyFix"}
+
 
 def _auto_symbols(stage: Path, mods: list[str]) -> set[str]:
     """Derive leak symbols from the module's own files (pre-deletion): every
@@ -259,7 +267,7 @@ def _auto_symbols(stage: Path, mods: list[str]) -> set[str]:
                 continue
             txt = _strip_comments(p.read_text(encoding="utf-8", errors="ignore"))
             syms.update(_DEF_RE.findall(txt))
-    return syms
+    return syms - _GENERIC_METHODS
 
 
 def _strip_regions(text: str, sentinels: list[tuple[str, str]]) -> str:
