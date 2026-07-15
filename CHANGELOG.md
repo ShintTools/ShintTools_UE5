@@ -2,6 +2,31 @@
 
 ---
 
+## [1.3.0] — 2026-07-15 — LOD Auditor client complete (auto-fix + 5-view UX + deep-scan collectors)
+
+### Added
+- **In-place auto-fix engine** (`FShintLodFixerRegistry` + `UShintLodAutoFixLibrary`):
+  applies a finding's `recommended` settings directly to the asset inside a
+  `FScopedTransaction` (LOD count/reduction, build settings flags, Nanite,
+  texture LOD bias/group, material flags). `ApplyAllFixes` takes a confidence
+  floor (`high|medium|low`); every apply is journaled to
+  `Saved/ShintTools/lod_fix_journal.jsonl` (`FShintLodFixJournal`) and is
+  revertible per-entry from the UI.
+- **Five-view LOD Auditor UX** (`SWidgetSwitcher`): Summary (KPIs + VRAM
+  treemap), Assets, Rules (grouped by rule id, severity-ranked), Fixes
+  (journal + apply/revert), Budgets — with a custom squarified-treemap Slate
+  widget (`SShintTreemap`).
+- **Deep-scan collectors (Contract v2 complete):** per-material `shader_stats`
+  (instruction count + texture fetch count), per-UV-channel `overlap_ratio`
+  (128² grid rasterisation) and `texel_density_avg`/`texel_density_cv`
+  (channel 0, from dominant texture resolution), and top-level
+  `internal_face_ratio` (parity ray-cast, Möller–Trumbore, `ParallelFor`).
+
+### Notes
+- All new files/symbols registered in the tier strip (`lod` module) — Studio-only;
+  indie/marketplace trees stay clean.
+- Build-verified with UAT BuildPlugin (UE 5.7, SharedPCH).
+
 ## [1.2.6] — 2026-07-13 — LOD audit commandlet (CI/CD)
 
 ### Added

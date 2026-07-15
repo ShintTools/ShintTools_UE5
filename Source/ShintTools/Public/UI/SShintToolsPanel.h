@@ -126,6 +126,10 @@ using FShintLodFindingPtr = TSharedPtr<FShintLodFindingItem>;
 
 // Asset Optimizer result tab — findings are grouped by asset family.
 enum class ELodTab : uint8 { Textures, Meshes, Materials };
+
+// Top-level LOD Auditor destinations (§21). The Assets view hosts the
+// Textures/Meshes/Materials sub-tabs; the rest are new views.
+enum class ELodView : uint8 { Summary, Assets, Rules, Fixes, Budgets };
 // [LOD-STRIP-END]
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -196,6 +200,16 @@ private:
 	TSharedRef<SWidget> BuildLodTableHeader();
 	TSharedRef<ITableRow> GenerateLodFindingRow(
 		FShintLodFindingPtr Item, const TSharedRef<STableViewBase>& Owner);
+	// §21 — the five top-level LOD views + their nav.
+	TSharedRef<SWidget> BuildLodViewNav();       // Summary/Assets/Rules/Fixes/Budgets
+	TSharedRef<SWidget> BuildLodSummaryView();   // KPIs + VRAM treemap
+	TSharedRef<SWidget> BuildLodRulesView();     // findings grouped by rule
+	TSharedRef<SWidget> BuildLodFixesView();     // in-place fix journal + Revert
+	TSharedRef<SWidget> BuildLodBudgetsView();   // per-platform memory budgets
+	TSharedRef<ITableRow> GenerateLodRuleRow(
+		TSharedPtr<struct FShintLodRuleGroup> Item, const TSharedRef<STableViewBase>& Owner);
+	TSharedRef<ITableRow> GenerateLodJournalRow(
+		TSharedPtr<struct FShintLodJournalRow> Item, const TSharedRef<STableViewBase>& Owner);
 	// [LOD-STRIP-END]
 
 	// ── Row generators for SListView ──────────────────────────────────────────
@@ -279,6 +293,14 @@ private:
 	// Returns false + fills OutError on failure; OutNewPath = new asset path.
 	bool   ApplyLodFixDuplicate(const FShintLodFinding& Finding,
 	                            FString& OutNewPath, FString& OutError);
+	// §21 view switching + new-view refresh + in-place (registry) fix handlers.
+	void   SetLodView(ELodView View);
+	void   RefreshLodTreemap();       // rebuild the Summary treemap from findings
+	void   RefreshLodRulesList();     // regroup findings by rule id
+	void   RefreshLodFixesList();     // reload the in-place fix journal
+	FReply OnLodFixInPlace(FShintLodFindingPtr Item);   // registry apply (one row)
+	FReply OnLodFixAllInPlace();                        // registry apply (batch)
+	FReply OnLodRevertFix(TSharedPtr<struct FShintLodJournalRow> Row);
 	// [LOD-STRIP-END]
 
 	// ── HTTP callbacks ────────────────────────────────────────────────────────
@@ -435,6 +457,16 @@ private:
 	TSharedPtr<STextBlock> AuditLodBtnLabel;
 	TSharedPtr<SWidget>    LodEmptyState;
 	TSharedPtr<class SBox> LodTableHeaderBox;  // per-tab column header host
+
+	// §21 — top-level view switching + new destinations.
+	ELodView LodActiveView = ELodView::Summary;
+	TSharedPtr<class SWidgetSwitcher>  LodViewSwitcher;
+	TSharedPtr<class SShintTreemap>    LodTreemap;
+	TArray<TSharedPtr<struct FShintLodRuleGroup>>  LodRuleGroups;
+	TSharedPtr<SListView<TSharedPtr<struct FShintLodRuleGroup>>>  LodRulesListView;
+	TArray<TSharedPtr<struct FShintLodJournalRow>> LodJournalRows;
+	TSharedPtr<SListView<TSharedPtr<struct FShintLodJournalRow>>> LodFixesListView;
+	FString LodFixConfidence = TEXT("high");   // Fix-All confidence floor
 	// [LOD-STRIP-END]
 
 	TSharedPtr<STextBlock> CodeFiles_Label;

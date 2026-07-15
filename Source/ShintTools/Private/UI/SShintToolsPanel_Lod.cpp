@@ -45,7 +45,14 @@
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Views/SListView.h"
 #include "Widgets/Images/SImage.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
+#include "Widgets/Notifications/SProgressBar.h"
 #include "Styling/AppStyle.h"
+
+// §21 — Summary treemap + in-place auto-fix engine (§20.5) driving the Fixes view.
+#include "SShintTreemap.h"
+#include "ShintLodFixerRegistry.h"
+#include "ShintLodFixJournal.h"
 #include "Misc/Paths.h"          // FPaths::GetCleanFilename (asset display name)
 
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
@@ -187,10 +194,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodAuditSection()
 					LOCTEXT("AOSub", "Audit textures · meshes · materials for memory + frame-time savings · apply fixes"))
 			]
 
-			// KPI tile row
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S3)
-			[ BuildLodKpiRow() ]
-
 			// Scan bar — Scan button (fill) + target-platform selector.
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S3)
 			[
@@ -278,13 +281,34 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodAuditSection()
 				]
 			]
 
-			// Tabs + filters + bulk actions
+			// Top-level view nav — Summary / Assets / Rules / Fixes / Budgets (§21)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 10.f)
-			[ BuildLodToolbar() ]
+			[ BuildLodViewNav() ]
 
-			// Table header + results
+			// Active view (all five built once; the switcher keeps them alive so
+			// KPI/treemap/list handles stay valid regardless of which is showing).
 			+ SVerticalBox::Slot().AutoHeight()
-			[ BuildLodResultsPanel() ]
+			[
+				SAssignNew(LodViewSwitcher, SWidgetSwitcher)
+
+				// 0 — Summary
+				+ SWidgetSwitcher::Slot()[ BuildLodSummaryView() ]
+
+				// 1 — Assets (the existing tabs + filters + table)
+				+ SWidgetSwitcher::Slot()
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 10.f)
+					[ BuildLodToolbar() ]
+					+ SVerticalBox::Slot().AutoHeight()
+					[ BuildLodResultsPanel() ]
+				]
+
+				// 2 — Rules   3 — Fixes   4 — Budgets
+				+ SWidgetSwitcher::Slot()[ BuildLodRulesView() ]
+				+ SWidgetSwitcher::Slot()[ BuildLodFixesView() ]
+				+ SWidgetSwitcher::Slot()[ BuildLodBudgetsView() ]
+			]
 		];
 }
 
@@ -866,6 +890,8 @@ void SShintToolsPanel::OnLodAuditComplete(const FShintLodAuditResult& Result)
 	LastLodResult = Result;
 	PopulateLodFindingList(Result);
 	RefreshLodStats();
+	RefreshLodTreemap();     // Summary view — VRAM-by-asset picture
+	RefreshLodRulesList();   // Rules view — findings grouped by rule
 
 	// Per-family completion summary, mirroring the KPI subtitle breakdown.
 	int32 TexIssues = 0, MeshIssues = 0, MatIssues = 0;
@@ -1145,6 +1171,587 @@ FReply SShintToolsPanel::OnLodExport()
 		ShintShowErrorToast(TEXT("Export failed"),
 			FString::Printf(TEXT("Could not write %s"), *OutPath));
 	return FReply::Handled();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §21 — top-level views (Summary / Assets / Rules / Fixes / Budgets)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Row models for the Rules + Fixes list views (defined here; the header only
+// forward-declares them).
+struct FShintLodRuleGroup
+{
+	FString RuleId;
+	FString RuleName;
+	FString Severity;      // worst severity seen across the group
+	int32   Count   = 0;
+	double  VramMb  = 0.0; // summed estimated saving
+};
+
+struct FShintLodJournalRow
+{
+	FString Id;
+	FString AssetName;
+	FString RuleId;
+	FString Timestamp;
+	int32   Props = 0;
+};
+
+namespace
+{
+	// Asset family accent for the treemap / badges.
+	FLinearColor LodCategoryColor(const FString& Category)
+	{
+		if (Category.Contains(TEXT("Texture")))  return FLinearColor(0.16f, 0.52f, 0.55f);
+		if (Category.Contains(TEXT("Mesh")))     return FLinearColor(0.82f, 0.53f, 0.22f);
+		if (Category.Contains(TEXT("Material"))) return FLinearColor(0.46f, 0.41f, 0.74f);
+		return FLinearColor(0.40f, 0.42f, 0.46f);
+	}
+
+	// "/Game/Foo/Bar.Bar" → "Bar".
+	FString LodAssetName(const FString& Path)
+	{
+		FString Name = Path;
+		int32 Slash;
+		if (Name.FindLastChar(TEXT('/'), Slash)) Name = Name.RightChop(Slash + 1);
+		int32 Dot;
+		if (Name.FindChar(TEXT('.'), Dot))       Name = Name.Left(Dot);
+		return Name;
+	}
+
+	// Severity ordering for "worst wins" grouping (higher = more severe).
+	int32 LodSevRank(const FString& S)
+	{
+		const FString L = S.ToLower();
+		if (L == TEXT("error"))   return 3;
+		if (L == TEXT("warning")) return 2;
+		return 1;
+	}
+}
+
+// ── View nav ─────────────────────────────────────────────────────────────────
+TSharedRef<SWidget> SShintToolsPanel::BuildLodViewNav()
+{
+	auto NavBtn = [this](const FText& Label, ELodView View) -> TSharedRef<SWidget>
+	{
+		return SNew(SButton)
+			.ContentPadding(FMargin(16.f, 8.f))
+			.ButtonColorAndOpacity_Lambda([this, View]() {
+				return FSlateColor(LodActiveView == View ? C_Surface() : C_BG());
+			})
+			.OnClicked_Lambda([this, View]() { SetLodView(View); return FReply::Handled(); })
+			[
+				SNew(STextBlock).Text(Label).Font(F_Small())
+				.ColorAndOpacity_Lambda([this, View]() {
+					return FSlateColor(LodActiveView == View ? C_White() : C_Gray());
+				})
+			];
+	};
+
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
+		[ NavBtn(LOCTEXT("LodNavSummary", "Summary"), ELodView::Summary) ]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
+		[ NavBtn(LOCTEXT("LodNavAssets",  "Assets"),  ELodView::Assets) ]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
+		[ NavBtn(LOCTEXT("LodNavRules",   "Rules"),   ELodView::Rules) ]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
+		[ NavBtn(LOCTEXT("LodNavFixes",   "Fixes"),   ELodView::Fixes) ]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[ NavBtn(LOCTEXT("LodNavBudgets", "Budgets"), ELodView::Budgets) ];
+}
+
+void SShintToolsPanel::SetLodView(ELodView View)
+{
+	LodActiveView = View;
+	if (LodViewSwitcher.IsValid())
+		LodViewSwitcher->SetActiveWidgetIndex(static_cast<int32>(View));
+	// The Fixes view mirrors an on-disk journal that other flows (per-row fix,
+	// commandlet) also append to — reload it whenever the user opens the view.
+	if (View == ELodView::Fixes)
+		RefreshLodFixesList();
+}
+
+// ── Summary view — KPI tiles + VRAM treemap ─────────────────────────────────
+TSharedRef<SWidget> SShintToolsPanel::BuildLodSummaryView()
+{
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S3)
+		[ BuildLodKpiRow() ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SBorder)
+			.BorderImage(ST4::Outline(FShintStyle::Colors::BgCard(),
+				FShintStyle::Colors::BorderSubtle(), FShintStyle::Radius::Card))
+			.Padding(FMargin(14.f))
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("LodTreemapTitle", "VRAM BY ASSET"))
+					.Font(F_Label())
+					.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
+				]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(SBox).HeightOverride(260.f)
+					[ SAssignNew(LodTreemap, SShintTreemap).MinDesiredHeight(260.f) ]
+				]
+			]
+		];
+}
+
+void SShintToolsPanel::RefreshLodTreemap()
+{
+	if (!LodTreemap.IsValid()) return;
+
+	// One cell per asset, weighted by its heaviest resident-VRAM finding.
+	TMap<FString, FShintTreemapItem> ByAsset;
+	for (const FShintLodFinding& F : LastLodResult.Findings)
+	{
+		if (F.CurrentVramMb <= 0.0) continue;
+		FShintTreemapItem& It = ByAsset.FindOrAdd(F.AssetPath);
+		if (F.CurrentVramMb > It.Value)
+		{
+			It.Label  = LodAssetName(F.AssetPath);
+			It.Detail = FString::Printf(TEXT("%.1f MB"), F.CurrentVramMb);
+			It.Value  = F.CurrentVramMb;
+			It.Color  = LodCategoryColor(F.Category);
+		}
+	}
+	TArray<FShintTreemapItem> Items;
+	ByAsset.GenerateValueArray(Items);
+	LodTreemap->SetItems(Items);
+}
+
+// ── Rules view — findings grouped by rule id ────────────────────────────────
+TSharedRef<SWidget> SShintToolsPanel::BuildLodRulesView()
+{
+	return SNew(SVerticalBox)
+		// Column header
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)
+		[
+			SNew(SBorder).BorderImage(ST4::Solid(C_BG())).Padding(FMargin(10.f, 6.f))
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.0f)
+				[ SNew(STextBlock).Text(LOCTEXT("LodRuleHdrId", "RULE")).Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())) ]
+				+ SHorizontalBox::Slot().FillWidth(3.0f)
+				[ SNew(STextBlock).Text(LOCTEXT("LodRuleHdrName", "DESCRIPTION")).Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())) ]
+				+ SHorizontalBox::Slot().FillWidth(0.9f).HAlign(HAlign_Right)
+				[ SNew(STextBlock).Text(LOCTEXT("LodRuleHdrCount", "COUNT")).Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())) ]
+				+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right)
+				[ SNew(STextBlock).Text(LOCTEXT("LodRuleHdrSev", "SEVERITY")).Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())) ]
+				+ SHorizontalBox::Slot().FillWidth(1.1f).HAlign(HAlign_Right)
+				[ SNew(STextBlock).Text(LOCTEXT("LodRuleHdrVram", "EST. SAVING")).Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())) ]
+			]
+		]
+		// Empty hint
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Center).MinDesiredHeight(48.f)
+			.Visibility_Lambda([this]() {
+				return LodRuleGroups.Num() == 0 ? EVisibility::Visible : EVisibility::Collapsed;
+			})
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("LodRulesEmpty", "Run a scan to see findings grouped by rule."))
+				.Font(F_Small()).ColorAndOpacity(FSlateColor(C_DimGray()))
+			]
+		]
+		// List
+		+ SVerticalBox::Slot().AutoHeight().MaxHeight(560.f)
+		[
+			SAssignNew(LodRulesListView, SListView<TSharedPtr<FShintLodRuleGroup>>)
+			.ListItemsSource(&LodRuleGroups)
+			.SelectionMode(ESelectionMode::None)
+			.OnGenerateRow(this, &SShintToolsPanel::GenerateLodRuleRow)
+		];
+}
+
+TSharedRef<ITableRow> SShintToolsPanel::GenerateLodRuleRow(
+	TSharedPtr<FShintLodRuleGroup> Item, const TSharedRef<STableViewBase>& Owner)
+{
+	const FLinearColor SevCol = SeverityColor(Item->Severity);
+	return SNew(STableRow<TSharedPtr<FShintLodRuleGroup>>, Owner)
+		.Padding(FMargin(0.f, 2.f))
+		[
+			SNew(SBorder).BorderImage(ST4::Solid(C_Surface())).Padding(FMargin(10.f, 8.f))
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+				[ SNew(STextBlock).Text(FText::FromString(Item->RuleId))
+					.Font(FShintStyle::Fonts::Caption()).ColorAndOpacity(FSlateColor(SevCol)) ]
+				+ SHorizontalBox::Slot().FillWidth(3.0f).VAlign(VAlign_Center)
+				[ SNew(STextBlock).Text(FText::FromString(Item->RuleName))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White()))
+					.OverflowPolicy(ETextOverflowPolicy::Ellipsis) ]
+				+ SHorizontalBox::Slot().FillWidth(0.9f).HAlign(HAlign_Right).VAlign(VAlign_Center)
+				[ SNew(STextBlock).Text(FText::AsNumber(Item->Count))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White())) ]
+				+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right).VAlign(VAlign_Center)
+				[ SNew(STextBlock).Text(FText::FromString(SeverityLabel(Item->Severity)))
+					.Font(F_Label()).ColorAndOpacity(FSlateColor(SevCol)) ]
+				+ SHorizontalBox::Slot().FillWidth(1.1f).HAlign(HAlign_Right).VAlign(VAlign_Center)
+				[ SNew(STextBlock).Text(FText::FromString(FmtSizeMb(Item->VramMb)))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::SevLow())) ]
+			]
+		];
+}
+
+void SShintToolsPanel::RefreshLodRulesList()
+{
+	TMap<FString, TSharedPtr<FShintLodRuleGroup>> Groups;
+	for (const FShintLodFinding& F : LastLodResult.Findings)
+	{
+		TSharedPtr<FShintLodRuleGroup>& G = Groups.FindOrAdd(F.RuleId);
+		if (!G.IsValid())
+		{
+			G = MakeShared<FShintLodRuleGroup>();
+			G->RuleId   = F.RuleId;
+			G->RuleName = F.RuleName.IsEmpty() ? F.Message : F.RuleName;
+			G->Severity = F.Severity;
+		}
+		++G->Count;
+		G->VramMb += F.VramMb;
+		if (LodSevRank(F.Severity) > LodSevRank(G->Severity))
+			G->Severity = F.Severity;
+	}
+
+	LodRuleGroups.Reset();
+	Groups.GenerateValueArray(LodRuleGroups);
+	LodRuleGroups.Sort([](const TSharedPtr<FShintLodRuleGroup>& A,
+		const TSharedPtr<FShintLodRuleGroup>& B)
+	{
+		const int32 SA = LodSevRank(A->Severity), SB = LodSevRank(B->Severity);
+		if (SA != SB) return SA > SB;
+		return A->Count > B->Count;
+	});
+	if (LodRulesListView.IsValid()) LodRulesListView->RequestListRefresh();
+}
+
+// ── Fixes view — in-place auto-fix engine (§20.5): batch apply + journal + revert
+TSharedRef<SWidget> SShintToolsPanel::BuildLodFixesView()
+{
+	return SNew(SVerticalBox)
+		// Action bar: Fix All (in place) + confidence floor selector.
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 8.f, 0.f)
+			[
+				SNew(SButton).ContentPadding(FMargin(14.f, 8.f))
+				.OnClicked(this, &SShintToolsPanel::OnLodFixAllInPlace)
+				.ToolTipText(LOCTEXT("LodFixAllTip",
+					"Apply every auto-fixable finding at or above the selected "
+					"confidence directly to the source assets. Each change is a "
+					"single Undo step and is journalled for Revert."))
+				[
+					SNew(STextBlock).Text(LOCTEXT("LodFixAll", "Fix All (in place)"))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White()))
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SComboButton).ContentPadding(FMargin(12.f, 7.f))
+				.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+				.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget>
+				{
+					const TArray<TPair<FText, FString>> Levels = {
+						{ LOCTEXT("LodConfHigh",   "High confidence only"), TEXT("high") },
+						{ LOCTEXT("LodConfMedium", "Medium and up"),        TEXT("medium") },
+						{ LOCTEXT("LodConfLow",    "All (incl. low)"),      TEXT("low") },
+					};
+					TSharedRef<SVerticalBox> Menu = SNew(SVerticalBox);
+					for (const TPair<FText, FString>& L : Levels)
+					{
+						Menu->AddSlot().AutoHeight()
+						[
+							SNew(SButton).ButtonColorAndOpacity(FSlateColor(C_Surface()))
+							.ContentPadding(FMargin(12.f, 6.f))
+							.OnClicked_Lambda([this, Conf = L.Value]() {
+								LodFixConfidence = Conf; return FReply::Handled();
+							})
+							[
+								SNew(STextBlock).Text(L.Key).Font(F_Label())
+								.ColorAndOpacity(FSlateColor(C_White()))
+							]
+						];
+					}
+					return SNew(SBorder).BorderImage(ST4::Solid(C_Surface())).Padding(2.f)[ Menu ];
+				})
+				.ButtonContent()
+				[
+					SNew(STextBlock)
+					.Text_Lambda([this]() {
+						return FText::FromString(FString::Printf(
+							TEXT("Confidence: %s"), *LodFixConfidence));
+					})
+					.Font(FShintStyle::Fonts::Caption())
+					.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
+				]
+			]
+		]
+		// Journal column header
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)
+		[
+			SNew(SBorder).BorderImage(ST4::Solid(C_BG())).Padding(FMargin(10.f, 6.f))
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(2.6f)
+				[ SNew(STextBlock).Text(LOCTEXT("LodFixHdrAsset", "ASSET")).Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())) ]
+				+ SHorizontalBox::Slot().FillWidth(1.0f)
+				[ SNew(STextBlock).Text(LOCTEXT("LodFixHdrRule", "RULE")).Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())) ]
+				+ SHorizontalBox::Slot().FillWidth(0.8f).HAlign(HAlign_Right)
+				[ SNew(STextBlock).Text(LOCTEXT("LodFixHdrProps", "PROPS")).Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())) ]
+				+ SHorizontalBox::Slot().FillWidth(1.8f)
+				[ SNew(STextBlock).Text(LOCTEXT("LodFixHdrWhen", "WHEN")).Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())) ]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(8.f, 0.f, 0.f, 0.f)
+				[ SNew(SBox).WidthOverride(72.f) ]
+			]
+		]
+		// Empty hint
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Center).MinDesiredHeight(48.f)
+			.Visibility_Lambda([this]() {
+				return LodJournalRows.Num() == 0 ? EVisibility::Visible : EVisibility::Collapsed;
+			})
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("LodFixEmpty", "No fixes applied yet. Fix All, or use Fix on a row, to populate the journal."))
+				.Font(F_Small()).ColorAndOpacity(FSlateColor(C_DimGray()))
+			]
+		]
+		// Journal list
+		+ SVerticalBox::Slot().AutoHeight().MaxHeight(520.f)
+		[
+			SAssignNew(LodFixesListView, SListView<TSharedPtr<FShintLodJournalRow>>)
+			.ListItemsSource(&LodJournalRows)
+			.SelectionMode(ESelectionMode::None)
+			.OnGenerateRow(this, &SShintToolsPanel::GenerateLodJournalRow)
+		];
+}
+
+TSharedRef<ITableRow> SShintToolsPanel::GenerateLodJournalRow(
+	TSharedPtr<FShintLodJournalRow> Item, const TSharedRef<STableViewBase>& Owner)
+{
+	return SNew(STableRow<TSharedPtr<FShintLodJournalRow>>, Owner)
+		.Padding(FMargin(0.f, 2.f))
+		[
+			SNew(SBorder).BorderImage(ST4::Solid(C_Surface())).Padding(FMargin(10.f, 6.f))
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(2.6f).VAlign(VAlign_Center)
+				[ SNew(STextBlock).Text(FText::FromString(Item->AssetName))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White()))
+					.OverflowPolicy(ETextOverflowPolicy::Ellipsis) ]
+				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+				[ SNew(STextBlock).Text(FText::FromString(Item->RuleId))
+					.Font(FShintStyle::Fonts::Caption()).ColorAndOpacity(FSlateColor(C_Gray())) ]
+				+ SHorizontalBox::Slot().FillWidth(0.8f).HAlign(HAlign_Right).VAlign(VAlign_Center)
+				[ SNew(STextBlock).Text(FText::AsNumber(Item->Props))
+					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White())) ]
+				+ SHorizontalBox::Slot().FillWidth(1.8f).VAlign(VAlign_Center)
+				[ SNew(STextBlock).Text(FText::FromString(Item->Timestamp))
+					.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray())) ]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(8.f, 0.f, 0.f, 0.f).VAlign(VAlign_Center)
+				[
+					SNew(SBox).WidthOverride(72.f)
+					[
+						SNew(SButton).ContentPadding(FMargin(10.f, 5.f)).HAlign(HAlign_Center)
+						.OnClicked(this, &SShintToolsPanel::OnLodRevertFix, Item)
+						[
+							SNew(STextBlock).Text(LOCTEXT("LodRevert", "Revert"))
+							.Font(F_Label()).ColorAndOpacity(FSlateColor(C_White()))
+						]
+					]
+				]
+			]
+		];
+}
+
+void SShintToolsPanel::RefreshLodFixesList()
+{
+	LodJournalRows.Reset();
+	const TArray<FShintLodJournalEntry> Entries = FShintLodFixJournal::LoadAll();
+	// Newest first (LoadAll is chronological).
+	for (int32 i = Entries.Num() - 1; i >= 0; --i)
+	{
+		const FShintLodJournalEntry& E = Entries[i];
+		TSharedPtr<FShintLodJournalRow> Row = MakeShared<FShintLodJournalRow>();
+		Row->Id        = E.Id;
+		Row->AssetName = LodAssetName(E.AssetPath);
+		Row->RuleId    = E.RuleId;
+		Row->Timestamp = E.Timestamp;
+		Row->Props     = E.After.Num();
+		LodJournalRows.Add(Row);
+	}
+	if (LodFixesListView.IsValid()) LodFixesListView->RequestListRefresh();
+}
+
+FReply SShintToolsPanel::OnLodFixInPlace(FShintLodFindingPtr Item)
+{
+	if (!Item.IsValid()) return FReply::Handled();
+	const FShintLodFixResult R = FShintLodFixerRegistry::ApplyFromFinding(Item->Finding);
+	if (!R.Error.IsEmpty())
+		ShintShowErrorToast(TEXT("Fix failed"), R.Error);
+	else if (R.bApplied)
+		LodShowSuccessToast(TEXT("Fix applied"),
+			FString::Printf(TEXT("%s — %d property(ies) changed%s."),
+				*LodAssetName(Item->Finding.AssetPath), R.PropertiesChanged,
+				R.bRebuilt ? TEXT(", rebuilt") : TEXT("")));
+	RefreshLodFixesList();
+	return FReply::Handled();
+}
+
+FReply SShintToolsPanel::OnLodFixAllInPlace()
+{
+	auto ConfRank = [](const FString& C) -> int32 {
+		if (C.Equals(TEXT("low"),    ESearchCase::IgnoreCase)) return 1;
+		if (C.Equals(TEXT("medium"), ESearchCase::IgnoreCase)) return 2;
+		return 3;   // high / unspecified
+	};
+	const int32 FloorRank = ConfRank(LodFixConfidence);
+
+	int32 Applied = 0, Skipped = 0, Failed = 0, Props = 0;
+	for (const FShintLodFindingPtr& Item : LodFindingItems)
+	{
+		if (!Item.IsValid()) continue;
+		const FShintLodFinding& F = Item->Finding;
+		if (!F.bAutoFixable || F.Recommended.Num() == 0) { ++Skipped; continue; }
+		if (ConfRank(F.Confidence) < FloorRank)          { ++Skipped; continue; }
+		if (!FShintLodFixerRegistry::CanApply(F.AssetPath, F.Recommended)) { ++Skipped; continue; }
+
+		const FShintLodFixResult R = FShintLodFixerRegistry::ApplyFromFinding(F);
+		if (!R.Error.IsEmpty())      ++Failed;
+		else if (R.bApplied)         { ++Applied; Props += R.PropertiesChanged; }
+		else                         ++Skipped;
+	}
+
+	RefreshLodFixesList();
+	if (Failed > 0)
+		ShintShowErrorToast(TEXT("Fix All finished with errors"),
+			FString::Printf(TEXT("%d applied, %d failed, %d skipped."),
+				Applied, Failed, Skipped));
+	else
+		LodShowSuccessToast(TEXT("Fix All complete"),
+			FString::Printf(TEXT("%d asset(s) fixed (%d properties), %d skipped."),
+				Applied, Props, Skipped));
+	return FReply::Handled();
+}
+
+FReply SShintToolsPanel::OnLodRevertFix(TSharedPtr<FShintLodJournalRow> Row)
+{
+	if (!Row.IsValid()) return FReply::Handled();
+	const FShintLodFixResult R = FShintLodFixerRegistry::RevertFix(Row->Id);
+	if (!R.Error.IsEmpty())
+		ShintShowErrorToast(TEXT("Revert failed"), R.Error);
+	else
+		LodShowSuccessToast(TEXT("Reverted"),
+			FString::Printf(TEXT("%s restored (%d property(ies))."),
+				*Row->AssetName, R.PropertiesChanged));
+	RefreshLodFixesList();
+	return FReply::Handled();
+}
+
+// ── Budgets view — per-platform memory budget vs current usage ───────────────
+TSharedRef<SWidget> SShintToolsPanel::BuildLodBudgetsView()
+{
+	// Profile-based texture-VRAM budget (MB). Deliberately conservative defaults;
+	// the bar reads live from LastLodResult so it updates without a rebuild.
+	auto BudgetMb = [this]() -> double {
+		return LodProfile == TEXT("mobile") ? 1024.0 : 4096.0;
+	};
+
+	auto UsageBar = [this, BudgetMb](const FText& Label,
+		TFunction<double()> CurrentFn) -> TSharedRef<SWidget>
+	{
+		return SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+				[ SNew(STextBlock).Text(Label).Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_White())) ]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.Text_Lambda([BudgetMb, CurrentFn]() {
+						return FText::FromString(FString::Printf(TEXT("%.0f / %.0f MB"),
+							CurrentFn(), BudgetMb()));
+					})
+					.Font(FShintStyle::Fonts::Caption())
+					.ColorAndOpacity_Lambda([BudgetMb, CurrentFn]() {
+						const double B = BudgetMb();
+						const bool bOver = B > 0.0 && CurrentFn() > B;
+						return FSlateColor(bOver ? FShintStyle::Colors::SevCritical()
+												 : FShintStyle::Colors::TextMuted());
+					})
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SBox).HeightOverride(10.f)
+				[
+					SNew(SProgressBar)
+					.Percent_Lambda([BudgetMb, CurrentFn]() -> TOptional<float> {
+						const double B = BudgetMb();
+						return B > 0.0 ? (float)FMath::Clamp(CurrentFn() / B, 0.0, 1.0) : 0.f;
+					})
+					.FillColorAndOpacity_Lambda([BudgetMb, CurrentFn]() {
+						const double B = BudgetMb();
+						const double Frac = B > 0.0 ? CurrentFn() / B : 0.0;
+						if (Frac >= 1.0)  return FSlateColor(FShintStyle::Colors::SevCritical());
+						if (Frac >= 0.85) return FSlateColor(FLinearColor(0.95f, 0.65f, 0.20f));
+						return FSlateColor(FShintStyle::Colors::SevLow());
+					})
+				]
+			];
+	};
+
+	return SNew(SBorder)
+		.BorderImage(ST4::Outline(FShintStyle::Colors::BgCard(),
+			FShintStyle::Colors::BorderSubtle(), FShintStyle::Radius::Card))
+		.Padding(FMargin(16.f, 14.f))
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 12.f)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]() {
+					return FText::FromString(FString::Printf(
+						TEXT("MEMORY BUDGET — %s"),
+						LodProfile == TEXT("mobile") ? TEXT("MOBILE") : TEXT("DESKTOP")));
+				})
+				.Font(F_Label()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
+			]
+			// Current resident texture VRAM vs budget.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 14.f)
+			[ UsageBar(LOCTEXT("LodBudgetCurrent", "Texture VRAM (current)"),
+				[this]() { return LastLodResult.TotalVramMb; }) ]
+			// Projected VRAM after applying all recommended savings.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 14.f)
+			[ UsageBar(LOCTEXT("LodBudgetProjected", "Texture VRAM (after fixes)"),
+				[this]() {
+					return FMath::Max(0.0,
+						LastLodResult.TotalVramMb - LastLodResult.EstimatedVramSavedMb);
+				}) ]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]() {
+					return FText::FromString(FString::Printf(
+						TEXT("Estimated saving available: %.1f MB across %d issue(s). "
+						     "Switch platform in the Scan bar to compare budgets."),
+						LastLodResult.EstimatedVramSavedMb, LastLodResult.IssuesFound));
+				})
+				.Font(F_Label())
+				.ColorAndOpacity(FSlateColor(C_DimGray()))
+				.AutoWrapText(true)
+			]
+		];
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -263,6 +263,15 @@ struct FShintLodFinding
 	// leaves the original untouched. Absent for non-size rules (left 0/empty).
 	int32   RecMaxSize = 0;     // recommended.max_texture_size  (LT003 oversized)
 	FString RecCompression;    // recommended.compression       (LT001/LT007)
+
+	// ── In-place auto-fix descriptor (§20.5) ─────────────────────────────────
+	// The full flattened "recommended" dict (string→string) drives the in-place
+	// fixer registry: each recognised key (compression, recompute_normals,
+	// two_sided, …) maps to one property write / build-settings change. Empty
+	// for rules the server did not mark auto-fixable. Confidence gates batch
+	// apply (§13.5: high pre-checked, medium unchecked, low per-row confirm).
+	TMap<FString, FString> Recommended;
+	FString Confidence;        // "high" | "medium" | "low" (default treated high)
 };
 
 struct FShintLodAuditResult
