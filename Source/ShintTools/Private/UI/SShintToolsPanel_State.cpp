@@ -29,6 +29,38 @@
 
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
 
+namespace
+{
+	/**
+	 * Count the DISTINCT files referenced by a list of issue rows.
+	 *
+	 * This is the Unity client's rule, kept identical on purpose so both
+	 * engines headline the same number for the same project: Unity's
+	 * DynamicToolPanel keys a dictionary by each issue's path and shows its
+	 * Count, i.e. a file with five issues still counts once.
+	 *
+	 * Templated on the row type + path member so the Code and Asset panels
+	 * share one definition (their rows name the field differently). Lives in
+	 * this TU only — an anon-namespace helper duplicated across panel TUs
+	 * collides under a full unity build.
+	 */
+	template <typename RowType>
+	int32 CountUniqueFiles(const TArray<TSharedPtr<RowType>>& Rows,
+	                       FString RowType::* PathField)
+	{
+		TSet<FString> Seen;
+		Seen.Reserve(Rows.Num());
+		for (const TSharedPtr<RowType>& Row : Rows)
+		{
+			if (Row.IsValid())
+			{
+				Seen.Add((*Row).*PathField);
+			}
+		}
+		return Seen.Num();
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HandleValidateResult
 //
@@ -417,7 +449,15 @@ void SShintToolsPanel::ApplyAssetFilter()
 // ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::RefreshCodeStats()
 {
-	if (CodeFiles_Label.IsValid())    CodeFiles_Label->SetText(FText::FromString(FmtN(LastCodeResult.FilesScanned)));
+	// FILES counts the DISTINCT files that actually carry an issue — same
+	// rule as the Unity client (DynamicToolPanel keys a dict by issue path
+	// and shows its Count), so the two engines report the same number for
+	// the same project. LastCodeResult.FilesScanned is a different quantity
+	// (every file the Core looked at, issue or not) and made UE5 headline a
+	// much larger number than Unity for an identical scan.
+	if (CodeFiles_Label.IsValid())
+		CodeFiles_Label->SetText(FText::FromString(
+			FmtN(CountUniqueFiles(AllCodeItems, &FShintIssueItem::FilePath))));
 	if (CodeErrors_Label.IsValid())   CodeErrors_Label->SetText(FText::FromString(FmtN(LastCodeResult.TotalErrors)));
 	if (CodeWarnings_Label.IsValid()) CodeWarnings_Label->SetText(FText::FromString(FmtN(LastCodeResult.TotalWarnings)));
 }
@@ -430,11 +470,8 @@ void SShintToolsPanel::RefreshAssetStats()
 	// headline number and break the free-tier 500-asset promise. AssetInvalid:
 	// total flagged rows, kept as-is so the user can see "37 issues across 19
 	// assets".
-	TSet<FString> Unique;
-	Unique.Reserve(AllAssetItems.Num());
-	for (const FShintAssetItemPtr& It : AllAssetItems)
-		if (It.IsValid()) Unique.Add(It->AssetPath);
-	const int32 UniqueAssets = Unique.Num();
+	const int32 UniqueAssets = CountUniqueFiles(AllAssetItems,
+	                                            &FShintAssetItem::AssetPath);
 	const int32 IssueRows    = AllAssetItems.Num();
 	if (AssetTotal_Label.IsValid())   AssetTotal_Label->SetText(FText::FromString(FmtN(UniqueAssets)));
 	if (AssetInvalid_Label.IsValid()) AssetInvalid_Label->SetText(FText::FromString(FmtN(IssueRows)));

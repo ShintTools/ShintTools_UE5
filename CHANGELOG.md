@@ -2,6 +2,24 @@
 
 ---
 
+## [1.3.1] — 2026-07-15 — Unity parity: file counting + asset type icons
+
+### Fixed
+- **Code Validator FILES now counts distinct files with issues**, matching the
+  Unity client (whose `DynamicToolPanel` keys a dict by each issue's path and
+  shows its Count). It previously showed `FilesScanned` from the Core — every
+  file the scanner *looked at* — so UE5 headlined a much larger number than
+  Unity for the same project. The Asset Namer already counted distinct assets;
+  both panels now share one `CountUniqueFiles` helper.
+
+### Added
+- **Asset-type icon in each Asset Namer row**, left of the type name — visual
+  parity with the Unity client. Resolved from the editor's registered
+  `ClassIcon.<Class>` brushes using the asset type the row already carries, so
+  it costs a style lookup: no AssetRegistry query, no UClass resolution, no
+  asset load even when a scan flags tens of thousands of rows. Unknown types
+  fall back to the generic class icon.
+
 ## [1.3.0] — 2026-07-15 — LOD Auditor client complete (auto-fix + 5-view UX + deep-scan collectors)
 
 ### Added
