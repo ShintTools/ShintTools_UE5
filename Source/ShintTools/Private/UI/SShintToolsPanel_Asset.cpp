@@ -31,8 +31,40 @@
 #include "Styling/AppStyle.h"
 
 #include "Misc/Paths.h"
+#include "Widgets/Images/SImage.h"
 
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
+
+namespace
+{
+	/**
+	 * Editor class icon for an asset-type name, for the glyph shown to the
+	 * left of each row — visual parity with the Unity client, which puts the
+	 * type's sprite before the asset name.
+	 *
+	 * FShintAssetItem::AssetType already carries the UE class name
+	 * ("Texture2D", "StaticMesh", "Blueprint"), which is exactly the key the
+	 * editor style registers its class icons under, so this is a plain style
+	 * lookup: no AssetRegistry query, no UClass resolution, no asset load —
+	 * it stays cheap even when a scan flags tens of thousands of rows.
+	 *
+	 * GetOptionalBrush (not GetBrush) because an unknown type must fall back
+	 * to the generic icon rather than render the missing-resource checkerboard.
+	 */
+	const FSlateBrush* ShintAssetTypeIcon(const FString& AssetType)
+	{
+		if (!AssetType.IsEmpty())
+		{
+			const FName Key(*FString::Printf(TEXT("ClassIcon.%s"), *AssetType));
+			if (const FSlateBrush* Found =
+				FAppStyle::Get().GetOptionalBrush(Key, nullptr, nullptr))
+			{
+				return Found;
+			}
+		}
+		return FAppStyle::Get().GetBrush("ClassIcon.Default");
+	}
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Section root
@@ -390,6 +422,17 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateAssetIssueRow(
 						[
 							SNew(STextBlock).Text(FText::FromString(TEXT("⚠"))).Font(F_Small())
 							.ColorAndOpacity(FSlateColor(C_Yellow()))
+						]
+
+						// Asset-type sprite, immediately left of the type name —
+						// mirrors the Unity client's row anatomy.
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+						  .Padding(0.f, 0.f, 6.f, 0.f)
+						[
+							SNew(SBox).WidthOverride(16.f).HeightOverride(16.f)
+							[
+								SNew(SImage).Image(ShintAssetTypeIcon(Item->AssetType))
+							]
 						]
 						+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f)
 						[

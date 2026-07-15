@@ -20,10 +20,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // LLM pivot — POST /agent/explain
 //
-// One issue in, one explanation out. The SSE streaming path was removed
-// because the 1.3B model could not reliably emit the JSON tool-call
-// protocol it required. The wait is now a single 30-45s spinner on the
-// panel side; latency lives entirely on the server.
+// One issue in, one explanation out. This is the BLOCKING variant, kept for
+// callers that want the whole text in one callback. The Explain modal does
+// NOT use it: it calls RequestExplainIssueStream below and renders tokens as
+// they arrive (see SShintToolsPanel_Explain.cpp). Latency lives entirely on
+// the server — most rules are now answered from its prefab cache in
+// milliseconds, and only an uncovered rule pays a live generation.
 //
 // The Issue we forward is the SAME object the panel received from
 // /validate/* — server-enriched with rule_name + rule_explanation. We do
