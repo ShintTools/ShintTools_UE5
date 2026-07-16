@@ -584,6 +584,10 @@ public:
 	 */
 	void AuditLods(const FString& Profile, bool bExplainTop,
 	               FOnShintLodAuditComplete OnComplete, bool bDeepScan = false);
+	// Public so the batched-audit driver (a file-local helper in
+	// ShintCoreClient_Lod.cpp, which chains one request per asset chunk) can
+	// parse each batch response. Pure static JSON->struct helper, no state.
+	static FShintLodAuditResult ParseLodAuditResponse(const FShintRequestResult& Raw);
 	// [LOD-STRIP-END]
 
 	// ── Asset Naming Bot — external web dashboard ────────────────────────────
@@ -670,9 +674,6 @@ private:
 	static FString MethodToString(EShintHttpMethod Method);
 	static FShintValidateResult  ParseValidateResponse (const FShintRequestResult& Raw);
 	static FShintAssetScanResult ParseAssetScanResponse(const FShintRequestResult& Raw);
-	// [LOD-STRIP-BEGIN]
-	static FShintLodAuditResult  ParseLodAuditResponse (const FShintRequestResult& Raw);
-	// [LOD-STRIP-END]
 	static FShintFixResult       ParseFixResponse      (const FShintRequestResult& Raw);
 	static FShintFixResult       ParseTreeSitterFixResponse(const FShintRequestResult& Raw);
 	// Slice B helpers — populate one snapshot from a JSON object that matches

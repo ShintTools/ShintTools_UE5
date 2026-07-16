@@ -886,40 +886,50 @@ namespace
 // AuditLods — gather + POST
 // ─────────────────────────────────────────────────────────────────────────────
 
-void FShintCoreClient::AuditLods(
-	const FString& Profile, bool bExplainTop, FOnShintLodAuditComplete OnComplete,
-	bool bDeepScan)
+namespace
 {
-	const double BenchStart = FPlatformTime::Seconds();
-	IAssetRegistry& AR =
-		FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+	// One HTTP request carries at most this many assets. A whole-project LOD
+	// audit of thousands of meshes used to load EVERY asset and POST them in a
+	// single request: the editor ran out of memory building/serialising the
+	// giant payload, and the one body routinely blew past the 90 s request
+	// timeout — the "crashea con cientos de archivos" report. Batching bounds
+	// both. Crucially the batches are chained through async completions, so the
+	// editor's GC reclaims the previous batch's loaded UObjects before the next
+	// batch loads its own — memory stays flat regardless of project size.
+	// Mirrors the Unity client's SCAN_BATCH.
+	constexpr int32 kLodAuditBatchSize = 150;
 
-	FARFilter Filter;
-	Filter.PackagePaths.Add(TEXT("/Game"));
-	Filter.bRecursivePaths = true;
-	// Only the families the LOD rules audit — avoids loading every Blueprint
-	// and data asset in the project just to skip it.
-	Filter.ClassPaths.Add(UStaticMesh::StaticClass()->GetClassPathName());
-	Filter.ClassPaths.Add(USkeletalMesh::StaticClass()->GetClassPathName());
-	Filter.ClassPaths.Add(UTexture2D::StaticClass()->GetClassPathName());
-	Filter.ClassPaths.Add(UMaterialInterface::StaticClass()->GetClassPathName());
-	Filter.bRecursiveClasses = true;
+	// Everything an in-flight batched audit needs, kept alive across the async
+	// request chain by a TSharedRef captured in each completion lambda.
+	struct FLodAuditBatch
+	{
+		TSharedRef<FShintCoreClient> Client;
+		TArray<FAssetData>           Assets;
+		int32                        Cursor = 0;
 
-	TArray<FAssetData> AllAssets;
-	AR.GetAssets(Filter, AllAssets);
+		// Request config — identical on every batch.
+		FString ProjectName, ApiKeyMongo, BaseUrl, Profile;
+		bool    bExplainTop = false;
+		bool    bDeepScan   = false;
 
-	TArray<TSharedPtr<FJsonValue>> Arr;
-	TMap<FString, FLodAssetMeta>   MetaByPath;   // joined onto findings post-parse
-	int64 TotalVramBytes = 0;                    // resident texture VRAM (KPI tile)
+		// Accumulated across all batches; joined/finalised once at the end.
+		FShintLodAuditResult          Aggregate;
+		TMap<FString, FLodAssetMeta>  MetaByPath;
+		int64 TotalVramBytes = 0;
+		int32 NumTextures = 0, NumMeshes = 0, NumMaterials = 0;
 
-	// Deep Scan reuses cached per-mesh fields when the mesh's DDC key is
-	// unchanged, so a repeat scan only pays the FMeshDescription cost for
-	// assets edited since last time.
-	FLodScanCache ScanCache(FPaths::Combine(
-		FPaths::ProjectSavedDir(), TEXT("ShintTools"), TEXT("lod_scan_cache.json")));
-	if (bDeepScan) ScanCache.Load();
+		FLodScanCache             ScanCache;
+		double                    BenchStart = 0.0;
+		FOnShintLodAuditComplete  OnComplete;
 
-	for (const FAssetData& AD : AllAssets)
+		FLodAuditBatch(TSharedRef<FShintCoreClient> InClient, FString CachePath)
+			: Client(MoveTemp(InClient)), ScanCache(MoveTemp(CachePath)) {}
+	};
+
+	// Extract one asset into JSON and fold its metadata/counters into the batch.
+	// Returns true when the asset was understood (and appended to Arr).
+	bool BuildLodAssetJson(const FAssetData& AD, IAssetRegistry& AR,
+	                       FLodAuditBatch& S, TArray<TSharedPtr<FJsonValue>>& Arr)
 	{
 		TSharedRef<FJsonObject> Obj = MakeShared<FJsonObject>();
 		const FString AssetPath = AD.PackageName.ToString();
@@ -930,29 +940,23 @@ void FShintCoreClient::AuditLods(
 		if (UStaticMesh* SM = Cast<UStaticMesh>(Loaded))
 		{
 			bUnderstood = ExtractStaticMesh(SM, Obj);
-			// Deep Scan (opt-in): mesh-description geometry-integrity + normal
-			// stats that the fast scan can't see. Fills the fields the LG/LN/LW
-			// rule families read; absent otherwise, so those rules abstain.
-			// Cache-first: skip the recompute when the mesh's DDC key is
-			// unchanged since the last Deep Scan.
-			if (bUnderstood && bDeepScan)
+			if (bUnderstood && S.bDeepScan)
 			{
 				const FString DdcKey = SM->GetRenderData()
 					? SM->GetRenderData()->DerivedDataKey : FString();
-				TSharedPtr<FJsonObject> DeepFields = ScanCache.Get(AssetPath, DdcKey);
+				TSharedPtr<FJsonObject> DeepFields = S.ScanCache.Get(AssetPath, DdcKey);
 				if (!DeepFields.IsValid())
 				{
 					TSharedRef<FJsonObject> Fresh = MakeShared<FJsonObject>();
 					DeepScanStaticMesh(SM, Fresh);
-					ScanCache.Put(AssetPath, DdcKey, Fresh);
+					S.ScanCache.Put(AssetPath, DdcKey, Fresh);
 					DeepFields = Fresh;
 				}
 				MergeJsonFields(Obj, DeepFields.ToSharedRef());
 			}
 			if (bUnderstood)
 			{
-				// Mesh columns: GROUP = mesh family, FORMAT = render path,
-				// RESOLUTION = LOD0 triangle count.
+				++S.NumMeshes;
 				FLodAssetMeta Meta;
 				Meta.Group = TEXT("Static");
 				const int32 NumLods = SM->GetNumLODs();
@@ -967,7 +971,7 @@ void FShintCoreClient::AuditLods(
 				if (SM->GetRenderData())
 					Meta.ResText = FString::Printf(TEXT("%s tris"),
 						*FText::AsNumber(SM->GetNumTriangles(0)).ToString());
-				MetaByPath.Add(AssetPath, MoveTemp(Meta));
+				S.MetaByPath.Add(AssetPath, MoveTemp(Meta));
 			}
 		}
 		else if (UTexture2D* T = Cast<UTexture2D>(Loaded))
@@ -975,7 +979,8 @@ void FShintCoreClient::AuditLods(
 			bUnderstood = ExtractTexture(T, Obj);
 			if (bUnderstood)
 			{
-				TotalVramBytes += (int64)T->CalcTextureMemorySizeEnum(TMC_AllMips);
+				++S.NumTextures;
+				S.TotalVramBytes += (int64)T->CalcTextureMemorySizeEnum(TMC_AllMips);
 				FLodAssetMeta Meta;
 				Meta.Width  = T->GetSizeX();
 				Meta.Height = T->GetSizeY();
@@ -985,7 +990,7 @@ void FShintCoreClient::AuditLods(
 					: TEXT("World");
 				Meta.Format = StripPrefix(
 					CompressionToString(T->CompressionSettings), TEXT("TC_"));
-				MetaByPath.Add(AssetPath, MoveTemp(Meta));
+				S.MetaByPath.Add(AssetPath, MoveTemp(Meta));
 			}
 		}
 		else if (UMaterialInterface* M = Cast<UMaterialInterface>(Loaded))
@@ -993,8 +998,7 @@ void FShintCoreClient::AuditLods(
 			bUnderstood = ExtractMaterial(M, Obj, AR, AssetPath);
 			if (bUnderstood)
 			{
-				// Material columns: GROUP = Master/Instance, FORMAT = blend mode,
-				// RESOLUTION = compiled instruction count when available.
+				++S.NumMaterials;
 				FLodAssetMeta Meta;
 				Meta.Group  = M->IsA<UMaterialInstance>()
 					? TEXT("Instance") : TEXT("Master");
@@ -1002,90 +1006,175 @@ void FShintCoreClient::AuditLods(
 				double Instr = 0.0;
 				if (Obj->TryGetNumberField(TEXT("instruction_count"), Instr) && Instr > 0.0)
 					Meta.ResText = FString::Printf(TEXT("%d instr"), (int32)Instr);
-				MetaByPath.Add(AssetPath, MoveTemp(Meta));
+				S.MetaByPath.Add(AssetPath, MoveTemp(Meta));
 			}
 		}
-		// SkeletalMesh: send the bare path + type so LA002 (no-LOD) can fire;
-		// detailed skeletal metadata extraction is a follow-up.
 		else if (Loaded && Loaded->IsA<USkeletalMesh>())
 		{
 			Obj->SetStringField(TEXT("asset_type"), TEXT("SkeletalMesh"));
 			bUnderstood = true;
+			++S.NumMeshes;
 			FLodAssetMeta Meta;
 			Meta.Group = TEXT("Skeletal");
-			MetaByPath.Add(AssetPath, MoveTemp(Meta));
+			S.MetaByPath.Add(AssetPath, MoveTemp(Meta));
 		}
 
 		if (bUnderstood)
-		{
 			Arr.Add(MakeShared<FJsonValueObject>(Obj));
-		}
+		return bUnderstood;
 	}
 
-	if (bDeepScan) ScanCache.Save();
+	void SendLodAuditBatch(TSharedRef<FLodAuditBatch> S);
 
-	// Per-category file counts for the KPI breakdowns (textures vs meshes).
-	int32 NumTextures = 0, NumMeshes = 0, NumMaterials = 0;
-	for (const TSharedPtr<FJsonValue>& V : Arr)
+	// All batches done (or one failed): join collected metadata onto the
+	// findings, fill the KPI totals, persist the deep-scan cache, and fire the
+	// single completion the caller is waiting on.
+	void FinalizeLodAudit(TSharedRef<FLodAuditBatch> S)
 	{
-		const TSharedPtr<FJsonObject> O = V->AsObject();
-		FString T;
-		if (O.IsValid()) O->TryGetStringField(TEXT("asset_type"), T);
-		if (T == TEXT("Texture2D")) ++NumTextures;
-		else if (T == TEXT("StaticMesh") || T == TEXT("SkeletalMesh")) ++NumMeshes;
-		else if (T == TEXT("Material") || T == TEXT("MaterialInstance")) ++NumMaterials;
+		if (S->bDeepScan) S->ScanCache.Save();
+
+		S->Aggregate.TexturesAudited  = S->NumTextures;
+		S->Aggregate.MeshesAudited    = S->NumMeshes;
+		S->Aggregate.MaterialsAudited = S->NumMaterials;
+		S->Aggregate.TotalVramMb      = (double)S->TotalVramBytes / (1024.0 * 1024.0);
+
+		for (FShintLodFinding& F : S->Aggregate.Findings)
+		{
+			if (const FLodAssetMeta* M = S->MetaByPath.Find(F.AssetPath))
+			{
+				F.Width  = M->Width;
+				F.Height = M->Height;
+				F.ResText = M->ResText;
+				if (F.Group.IsEmpty())  F.Group  = M->Group;
+				if (F.Format.IsEmpty()) F.Format = M->Format;
+			}
+		}
+
+		UE_LOG(LogShintTools, Verbose,
+			TEXT("[BENCH] AuditLods: %.2f s, %d assets sent, %d findings (batched)"),
+			FPlatformTime::Seconds() - S->BenchStart, S->Cursor,
+			S->Aggregate.Findings.Num());
+		S->OnComplete.ExecuteIfBound(S->Aggregate);
 	}
 
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
-	Body->SetStringField(TEXT("engine"),       TEXT("unreal"));
-	Body->SetStringField(TEXT("api_key"),      Config.ApiKeyMongo);
-	Body->SetStringField(TEXT("profile"),      Profile.IsEmpty() ? TEXT("default") : Profile);
-	Body->SetBoolField(TEXT("explain"),        bExplainTop);
-	Body->SetNumberField(TEXT("max_explanations"), 5);
-	Body->SetArrayField(TEXT("assets"),        Arr);
+	// Process the next chunk of assets and POST it; on completion, chain to the
+	// next chunk. Runs on the game thread (the HTTP manager dispatches request
+	// completions there), so GetAsset()/Slate stay safe.
+	void SendLodAuditBatch(TSharedRef<FLodAuditBatch> S)
+	{
+		if (S->Cursor >= S->Assets.Num())
+		{
+			FinalizeLodAudit(S);
+			return;
+		}
 
-	const FString BodyStr = SerializeJson(Body);
-	const int32 SentAssets = Arr.Num();
+		IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
+			TEXT("AssetRegistry")).Get();
+
+		TArray<TSharedPtr<FJsonValue>> Arr;
+		const int32 End = FMath::Min(S->Cursor + kLodAuditBatchSize, S->Assets.Num());
+		for (int32 i = S->Cursor; i < End; ++i)
+			BuildLodAssetJson(S->Assets[i], AR, *S, Arr);
+		S->Cursor = End;
+
+		// An all-skipped batch (e.g. a folder of unsupported assets) still needs
+		// to advance the chain — recurse straight to the next chunk, no request.
+		if (Arr.Num() == 0)
+		{
+			SendLodAuditBatch(S);
+			return;
+		}
+
+		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+		Body->SetStringField(TEXT("project_name"), S->ProjectName);
+		Body->SetStringField(TEXT("engine"),       TEXT("unreal"));
+		Body->SetStringField(TEXT("api_key"),      S->ApiKeyMongo);
+		Body->SetStringField(TEXT("profile"),
+			S->Profile.IsEmpty() ? TEXT("default") : S->Profile);
+		// Explain enriches each batch's own top findings. Kept per-batch so the
+		// crash fix stays behaviour-preserving for the common (explain-off) path;
+		// with the prefab cache a hit is now ~ms, so per-batch explain is cheap.
+		Body->SetBoolField(TEXT("explain"),          S->bExplainTop);
+		Body->SetNumberField(TEXT("max_explanations"), 5);
+		Body->SetArrayField(TEXT("assets"),          Arr);
+
+		S->Client->SendRequest(S->BaseUrl + TEXT("/assets/lod/audit"),
+			EShintHttpMethod::POST, FShintCoreClient::SerializeJson(Body),
+			FOnShintRequestComplete::CreateLambda(
+				[S](const FShintRequestResult& Raw) mutable
+			{
+				FShintLodAuditResult R = FShintCoreClient::ParseLodAuditResponse(Raw);
+
+				// A hard HTTP/transport failure on any batch aborts the whole
+				// audit with that error, rather than silently returning partial
+				// findings that would look like a complete, clean-ish result.
+				if (R.StatusCode != 200 || !R.ErrorMessage.IsEmpty())
+				{
+					S->Aggregate.bSuccess     = false;
+					S->Aggregate.StatusCode   = R.StatusCode;
+					S->Aggregate.ErrorMessage = R.ErrorMessage;
+					FinalizeLodAudit(S);
+					return;
+				}
+
+				S->Aggregate.Findings.Append(MoveTemp(R.Findings));
+				S->Aggregate.AssetsAudited += R.AssetsAudited;
+				S->Aggregate.IssuesFound   += R.IssuesFound;
+				S->Aggregate.AutoFixable   += R.AutoFixable;
+				S->Aggregate.EstimatedVramSavedMb            += R.EstimatedVramSavedMb;
+				S->Aggregate.EstimatedShaderInstructionsSaved += R.EstimatedShaderInstructionsSaved;
+				if (S->Aggregate.StatusCode == 0) S->Aggregate.StatusCode = R.StatusCode;
+
+				SendLodAuditBatch(S);
+			}));
+	}
+}
+
+void FShintCoreClient::AuditLods(
+	const FString& Profile, bool bExplainTop, FOnShintLodAuditComplete OnComplete,
+	bool bDeepScan)
+{
+	IAssetRegistry& AR =
+		FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+
+	FARFilter Filter;
+	Filter.PackagePaths.Add(TEXT("/Game"));
+	Filter.bRecursivePaths = true;
+	// Only the families the LOD rules audit — avoids loading every Blueprint
+	// and data asset in the project just to skip it.
+	Filter.ClassPaths.Add(UStaticMesh::StaticClass()->GetClassPathName());
+	Filter.ClassPaths.Add(USkeletalMesh::StaticClass()->GetClassPathName());
+	Filter.ClassPaths.Add(UTexture2D::StaticClass()->GetClassPathName());
+	Filter.ClassPaths.Add(UMaterialInterface::StaticClass()->GetClassPathName());
+	Filter.bRecursiveClasses = true;
+
+	TSharedRef<FLodAuditBatch> State = MakeShared<FLodAuditBatch>(
+		AsShared(),
+		FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("ShintTools"),
+			TEXT("lod_scan_cache.json")));
+	AR.GetAssets(Filter, State->Assets);
+
+	State->ProjectName = Config.ProjectName;
+	State->ApiKeyMongo = Config.ApiKeyMongo;
+	State->BaseUrl     = Config.GetBaseUrl();
+	State->Profile     = Profile;
+	State->bExplainTop = bExplainTop;
+	State->bDeepScan   = bDeepScan;
+	State->BenchStart  = FPlatformTime::Seconds();
+	State->OnComplete  = OnComplete;
+	// Optimistic: stays true unless a batch reports a hard failure. An empty
+	// project (no auditable assets) therefore finishes as a clean success, not
+	// an error.
+	State->Aggregate.bSuccess = true;
+	if (bDeepScan) State->ScanCache.Load();
 
 	UE_LOG(LogShintTools, Verbose,
-		TEXT("ShintCoreClient: LOD audit of %d assets (profile=%s explain=%s)"),
-		SentAssets, *Profile, bExplainTop ? TEXT("true") : TEXT("false"));
+		TEXT("ShintCoreClient: LOD audit of %d assets in batches of %d "
+		     "(profile=%s explain=%s)"),
+		State->Assets.Num(), kLodAuditBatchSize, *Profile,
+		bExplainTop ? TEXT("true") : TEXT("false"));
 
-	SendRequest(Config.GetBaseUrl() + TEXT("/assets/lod/audit"),
-		EShintHttpMethod::POST, BodyStr,
-		FOnShintRequestComplete::CreateLambda(
-			[OnComplete, BenchStart, SentAssets, NumTextures, NumMeshes,
-			 NumMaterials, TotalVramBytes, MetaByPath = MoveTemp(MetaByPath)]
-			(const FShintRequestResult& Raw) mutable
-		{
-			FShintLodAuditResult R = ParseLodAuditResponse(Raw);
-			R.TexturesAudited  = NumTextures;
-			R.MeshesAudited    = NumMeshes;
-			R.MaterialsAudited = NumMaterials;
-			R.TotalVramMb      = (double)TotalVramBytes / (1024.0 * 1024.0);
-
-			// Join the collection-pass metadata onto each finding so the Asset
-			// Optimizer table has resolution / group / format without a server
-			// round-trip. Parse already filled Format from current.compression
-			// when present; only fall back to the collected value if it didn't.
-			for (FShintLodFinding& F : R.Findings)
-			{
-				if (const FLodAssetMeta* M = MetaByPath.Find(F.AssetPath))
-				{
-					F.Width  = M->Width;
-					F.Height = M->Height;
-					F.ResText = M->ResText;
-					if (F.Group.IsEmpty())  F.Group  = M->Group;
-					if (F.Format.IsEmpty()) F.Format = M->Format;
-				}
-			}
-
-			UE_LOG(LogShintTools, Verbose,
-				TEXT("[BENCH] AuditLods: %.2f s, %d assets sent, %d findings"),
-				FPlatformTime::Seconds() - BenchStart, SentAssets, R.Findings.Num());
-			OnComplete.ExecuteIfBound(R);
-		}));
+	SendLodAuditBatch(State);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

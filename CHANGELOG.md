@@ -2,6 +2,23 @@
 
 ---
 
+## [1.3.2] — 2026-07-15 — LOD Auditor: batched scan (fixes crash on large projects)
+
+### Fixed
+- **LOD Auditor no longer crashes on large projects.** `AuditLods` used to load
+  every mesh/texture/material under `/Game` at once and POST them in a **single**
+  request — on a project with hundreds/thousands of assets the editor ran out of
+  memory building and serialising the giant payload, and the one body routinely
+  exceeded the 90 s request timeout. The scan now runs in **batches of 150
+  assets**, chained through the async request completions: because the editor's
+  GC reclaims each batch's loaded assets before the next batch loads, memory
+  stays flat regardless of project size, and no single request is large enough
+  to time out. Findings and KPIs are aggregated across batches and delivered in
+  the same single `OnLodAuditComplete` the panel already waits on — the batching
+  is invisible to the UI. A hard HTTP failure on any batch aborts the audit with
+  that error instead of returning partial results that look complete. Mirrors the
+  Unity client's `SCAN_BATCH` design.
+
 ## [1.3.1] — 2026-07-15 — Unity parity: file counting + asset type icons
 
 ### Fixed
