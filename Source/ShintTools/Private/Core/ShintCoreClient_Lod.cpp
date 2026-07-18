@@ -1300,7 +1300,26 @@ FShintLodAuditResult FShintCoreClient::ParseLodAuditResponse(
 							: FString::SanitizeFloat(N);
 						break;
 					}
-					default: continue;   // objects/arrays are not fixer targets
+					case EJson::Array:
+					{
+						// A few structural fixers consume list recommendations
+						// (screen_sizes ladder, LD007). Re-serialise the array to a
+						// compact JSON string the fixer parses back; other list keys
+						// (advisory) simply won't match an applier and are ignored.
+						const TArray<TSharedPtr<FJsonValue>>& Arr = Pair.Value->AsArray();
+						AsStr = TEXT("[");
+						for (int32 ai = 0; ai < Arr.Num(); ++ai)
+						{
+							if (ai > 0) AsStr += TEXT(",");
+							if (Arr[ai].IsValid() && Arr[ai]->Type == EJson::Number)
+								AsStr += FString::SanitizeFloat(Arr[ai]->AsNumber());
+							else if (Arr[ai].IsValid() && Arr[ai]->Type == EJson::String)
+								AsStr += FString::Printf(TEXT("\"%s\""), *Arr[ai]->AsString());
+						}
+						AsStr += TEXT("]");
+						break;
+					}
+					default: continue;   // objects are not fixer targets
 					}
 					Finding.Recommended.Add(Pair.Key, AsStr);
 				}

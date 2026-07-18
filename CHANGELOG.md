@@ -2,6 +2,48 @@
 
 ---
 
+## [1.3.5] — 2026-07-18 — LOD Auditor: real in-editor auto-fixes for Mesh findings
+
+### Added
+- **The client now applies real Mesh fixes in-editor** instead of skipping
+  them. 1.3.4 correctly stopped showing a Fix button on findings nothing
+  could apply; this release implements the actual editor operations behind
+  the Core's Mesh recommendations, so those findings are fixable rather than
+  advisory:
+  - **Property fixes (undoable + Revert-able via the fix Journal):**
+    - `nanite_enabled` → enable Nanite on the mesh (LD012).
+    - `fallback_percent` → set the Nanite fallback triangle percentage (LD013).
+    - `complex_as_simple` → switch collision off "complex as simple" to
+      Simple-and-Complex (LD011).
+  - **Structural fixes (undoable via Ctrl+Z within the session; recorded in
+    History, not Journal-revertible since they rewrite geometry):**
+    - `lod_count` (`>= N` / `<= N` / `N`) → generate or reduce the LOD chain
+      to the target level count with a clean halving reduction ladder
+      (LD001 / LD004 / LD005).
+    - `lods` / `triangle_ratio_band` → regenerate the existing chain with a
+      proper monotonic reduction (LD002 / LD006).
+    - `screen_sizes` → apply the recommended LOD screen-size ladder (LD007).
+    - `has_simple_collision` → generate a simple collision hull (18-DOP) when
+      a placed mesh has none (LD011).
+  - Routed through the `UStaticMeshEditorSubsystem`; structural ops share the
+    same Fix / Fix Selected / Fix All buttons as the property fixes.
+- Recommendation **lists** from the Core (e.g. the LD007 screen-size ladder)
+  now reach the fixer — the client serialises array recommendations to JSON
+  instead of dropping them.
+
+### Notes
+- **Materials remain advisory by design.** The Core's auto-fixable Material
+  rules recommend graph-level changes — reduce sampler/instruction/node
+  counts, dedupe texture samplers, drop unused usage flags — that cannot be
+  applied safely as an automated property write (they require editing the
+  material graph, or reference analysis the client does not perform). Those
+  findings continue to show guidance without a Fix button. This is a real
+  limitation of what can be automated, not a skipped case.
+- Verified with UAT BuildPlugin (UE_5.7, BUILD SUCCESSFUL). Added the
+  `StaticMeshEditor` module dependency.
+
+---
+
 ## [1.3.4] — 2026-07-18 — LOD Auditor: only offer "Fix" where a fix can actually be applied
 
 ### Fixed

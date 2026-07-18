@@ -10,12 +10,20 @@
 #include "Engine/Texture2D.h"
 #include "Engine/TextureDefines.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/EngineTypes.h"                 // FMeshNaniteSettings
 #include "Materials/Material.h"
 #include "Materials/MaterialInterface.h"
+#include "PhysicsEngine/BodySetup.h"            // UBodySetup / ECollisionTraceFlag (LD011)
+#include "StaticMeshEditorSubsystem.h"          // structural LOD ops (LD001/004/005/007/011)
+#include "StaticMeshEditorSubsystemHelpers.h"   // FStaticMeshReductionOptions, EScriptCollisionShapeType
+#include "Editor.h"                             // GEditor->GetEditorSubsystem
 
 #include "UObject/UObjectGlobals.h"
 #include "UObject/Package.h"
 #include "ScopedTransaction.h"
+
+#include "Serialization/JsonReader.h"          // screen_sizes JSON array parse
+#include "Serialization/JsonSerializer.h"
 
 #define LOCTEXT_NAMESPACE "ShintLodFixer"
 
@@ -23,6 +31,27 @@ namespace
 {
 	// ── value parsing ────────────────────────────────────────────────────────
 	bool ParseBool(const FString& V) { return V == TEXT("true") || V == TEXT("1"); }
+
+	// The Core expresses several numeric recommendations as an operator + value
+	// ("lod_count: >= 2", "fallback_percent: <= 30"), or as a bare number. Pull
+	// the first signed number out; returns false when there is none (an advisory
+	// string like "align sizes or confirm intent" has no number → not applicable).
+	bool ParseNumber(const FString& V, double& Out)
+	{
+		FString Digits;
+		for (int32 i = 0; i < V.Len(); ++i)
+		{
+			const TCHAR C = V[i];
+			if (FChar::IsDigit(C) || C == TEXT('.') ||
+			    (C == TEXT('-') && Digits.IsEmpty()))
+				Digits.AppendChar(C);
+			else if (!Digits.IsEmpty())
+				break;   // stop at the first gap after we started collecting
+		}
+		if (Digits.IsEmpty()) return false;
+		Out = FCString::Atod(*Digits);
+		return true;
+	}
 
 	// Enum <-> name via UE reflection. Accepts short ("TC_Normalmap") or full
 	// ("TextureCompressionSettings::TC_Normalmap") names; returns INDEX_NONE on
@@ -165,6 +194,61 @@ namespace
 				bOutRebuild = true; ++Changed;
 			}
 		}
+
+		// ── mesh-level properties (not build settings) ───────────────────────
+		// Nanite enable (LD012) and fallback percent (LD013). These live on the
+		// mesh's NaniteSettings, and — like build settings — are reimport-class,
+		// so a change forces one rebuild. Snapshotted for symmetric Revert.
+		FMeshNaniteSettings Nanite = Mesh->GetNaniteSettings();
+		bool bNaniteDirty = false;
+		if (const FString* V = Rec.Find(TEXT("nanite_enabled")))
+		{
+			const bool New = ParseBool(*V);
+			if ((Nanite.bEnabled != 0) != New)
+			{
+				OutBefore.Add(TEXT("nanite_enabled"),
+					Nanite.bEnabled ? TEXT("true") : TEXT("false"));
+				Nanite.bEnabled = New; bNaniteDirty = true;
+				bOutRebuild = true; ++Changed;
+			}
+		}
+		if (const FString* V = Rec.Find(TEXT("fallback_percent")))
+		{
+			double Pct = 0.0;
+			// Core sends a percentage (e.g. "<= 30"); FallbackPercentTriangles is 0..1.
+			if (ParseNumber(*V, Pct))
+			{
+				const float New = FMath::Clamp(static_cast<float>(Pct) / 100.f, 0.f, 1.f);
+				if (!FMath::IsNearlyEqual(Nanite.FallbackPercentTriangles, New))
+				{
+					OutBefore.Add(TEXT("fallback_percent"),
+						FString::SanitizeFloat(Nanite.FallbackPercentTriangles * 100.f));
+					Nanite.FallbackPercentTriangles = New; bNaniteDirty = true;
+					bOutRebuild = true; ++Changed;
+				}
+			}
+		}
+		if (bNaniteDirty) Mesh->SetNaniteSettings(Nanite);
+
+		// Complex-as-simple collision (LD011): switch the trace flag away from
+		// cooking the render mesh into physics. Not a rebuild — physics-only.
+		if (const FString* V = Rec.Find(TEXT("complex_as_simple")))
+		{
+			if (UBodySetup* Body = Mesh->GetBodySetup())
+			{
+				const bool WantCaS = ParseBool(*V);   // recommended is usually "false"
+				const bool CurCaS  = (Body->CollisionTraceFlag == CTF_UseComplexAsSimple);
+				if (CurCaS != WantCaS)
+				{
+					Body->Modify();
+					OutBefore.Add(TEXT("complex_as_simple"),
+						CurCaS ? TEXT("true") : TEXT("false"));
+					Body->CollisionTraceFlag =
+						WantCaS ? CTF_UseComplexAsSimple : CTF_UseSimpleAndComplex;
+					++Changed;
+				}
+			}
+		}
 		return Changed;
 	}
 #endif // WITH_EDITORONLY_DATA
@@ -215,6 +299,109 @@ namespace
 	{
 		return StaticLoadObject(UObject::StaticClass(), nullptr, *AssetPath);
 	}
+
+	// ── structural static-mesh ops (LOD chain / collision generation) ─────────
+	// These rewrite geometry or add collision via the editor subsystem; unlike a
+	// property write they can't be reverted by replaying a Before snapshot, so
+	// they are NOT journalled with revertible state — the caller wraps them in an
+	// FScopedTransaction (Ctrl+Z) and the History row records them as applied.
+	// Returns the number of structural changes made. Set *bOutStructural* so the
+	// caller knows the change isn't property-revertible.
+
+	// Which keys are handled here (vs the property applier).
+	bool HasStructuralKey(const TMap<FString, FString>& Rec)
+	{
+		static const TCHAR* Keys[] = {
+			TEXT("lod_count"), TEXT("lods"), TEXT("triangle_ratio_band"),
+			TEXT("screen_sizes"), TEXT("has_simple_collision") };
+		for (const TCHAR* K : Keys)
+			if (Rec.Contains(K)) return true;
+		return false;
+	}
+
+	TArray<float> ParseFloatArray(const FString& Json)
+	{
+		TArray<float> Out;
+		TArray<TSharedPtr<FJsonValue>> Arr;
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Json);
+		if (FJsonSerializer::Deserialize(Reader, Arr))
+			for (const TSharedPtr<FJsonValue>& V : Arr)
+				if (V.IsValid() && (V->Type == EJson::Number))
+					Out.Add(static_cast<float>(V->AsNumber()));
+		return Out;
+	}
+
+#if WITH_EDITORONLY_DATA
+	int32 ApplyStructuralStaticMesh(UStaticMesh* Mesh, const TMap<FString, FString>& Rec)
+	{
+		if (!GEditor) return 0;
+		UStaticMeshEditorSubsystem* SM =
+			GEditor->GetEditorSubsystem<UStaticMeshEditorSubsystem>();
+		if (!SM) return 0;
+
+		int32 Changed = 0;
+		const int32 CurrentLods = SM->GetLodCount(Mesh);
+
+		// Determine a target LOD count from lod_count (">= N" / "<= N" / "N"), or
+		// from a "regenerate the chain" rule (lods / triangle_ratio_band), which
+		// rebuilds the current number of levels with a clean reduction ladder.
+		int32 TargetLods = 0;
+		if (const FString* V = Rec.Find(TEXT("lod_count")))
+		{
+			double N = 0.0;
+			if (ParseNumber(*V, N) && N >= 1.0)
+			{
+				const int32 Want = FMath::Clamp(static_cast<int32>(N), 1, 8);
+				const bool bAtLeast = V->Contains(TEXT(">="));
+				const bool bAtMost  = V->Contains(TEXT("<="));
+				if (bAtLeast)      TargetLods = (CurrentLods < Want) ? Want : 0;
+				else if (bAtMost)  TargetLods = (CurrentLods > Want) ? Want : 0;
+				else               TargetLods = (CurrentLods != Want) ? Want : 0;
+			}
+		}
+		else if (Rec.Contains(TEXT("lods")) || Rec.Contains(TEXT("triangle_ratio_band")))
+		{
+			// Regenerate the existing chain (LD002/LD006). Need ≥2 to matter.
+			TargetLods = (CurrentLods >= 2) ? CurrentLods : 2;
+		}
+
+		if (TargetLods > 0)
+		{
+			// Default reduction ladder: LOD0 full, each level halves the triangles.
+			// bAutoComputeLODScreenSize lets the engine place the switch points.
+			FStaticMeshReductionOptions Options;
+			Options.bAutoComputeLODScreenSize = true;
+			float Percent = 1.0f;
+			for (int32 i = 0; i < TargetLods; ++i)
+			{
+				FStaticMeshReductionSettings S;
+				S.PercentTriangles = Percent;
+				Options.ReductionSettings.Add(S);
+				Percent *= 0.5f;
+			}
+			SM->SetLods(Mesh, Options);
+			++Changed;
+		}
+
+		// Explicit screen-size ladder (LD007) — applied after any regeneration so
+		// it overrides the auto-computed sizes.
+		if (const FString* V = Rec.Find(TEXT("screen_sizes")))
+		{
+			const TArray<float> Sizes = ParseFloatArray(*V);
+			if (Sizes.Num() >= 2 && SM->SetLodScreenSizes(Mesh, Sizes))
+				++Changed;
+		}
+
+		// Generate a simple collision hull (LD011) when the mesh has none.
+		if (const FString* V = Rec.Find(TEXT("has_simple_collision")))
+		{
+			if (ParseBool(*V) &&
+			    SM->AddSimpleCollisions(Mesh, EScriptCollisionShapeType::NDOP18) >= 0)
+				++Changed;
+		}
+		return Changed;
+	}
+#endif // WITH_EDITORONLY_DATA
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -230,8 +417,12 @@ bool FShintLodFixerRegistry::IsAutoApplicable(const TMap<FString, FString>& Rec)
 		if (K == TEXT("recompute_normals")   || K == TEXT("recompute_tangents") ||
 		    K == TEXT("remove_degenerates")  || K == TEXT("use_full_precision_uvs") ||
 		    K == TEXT("generate_lightmap_uvs")|| K == TEXT("srgb") ||
-		    K == TEXT("never_stream")        || K == TEXT("two_sided"))
+		    K == TEXT("never_stream")        || K == TEXT("two_sided") ||
+		    K == TEXT("nanite_enabled")      || K == TEXT("complex_as_simple"))
 			return true;
+
+		// has_simple_collision is only a fix when the recommendation is to ADD one.
+		if (K == TEXT("has_simple_collision") && ParseBool(V)) return true;
 
 		// Enum keys: applicable only if the recommended value resolves to a real
 		// enum entry. A prose hint ("ASTC_6x6 (color) or ETC2_RGBA") does not.
@@ -244,6 +435,17 @@ bool FShintLodFixerRegistry::IsAutoApplicable(const TMap<FString, FString>& Rec)
 		// like "align sizes or confirm intent" parses to 0 and is not a fix).
 		if (K == TEXT("max_texture_size") && FCString::Atoi(*V) > 0)   return true;
 		if (K == TEXT("build_scale")      && FCString::Atof(*V) > 0.f) return true;
+
+		// Structural mesh keys: a fix when a target number can be read
+		// (lod_count / fallback_percent), or when it's a "regenerate the chain"
+		// marker (lods / triangle_ratio_band), or a parseable screen-size ladder.
+		double NumTmp = 0.0;
+		if ((K == TEXT("lod_count") || K == TEXT("fallback_percent")) && ParseNumber(V, NumTmp))
+			return true;
+		if (K == TEXT("lods") || K == TEXT("triangle_ratio_band"))
+			return true;
+		if (K == TEXT("screen_sizes") && ParseFloatArray(V).Num() >= 2)
+			return true;
 	}
 	return false;
 }
@@ -265,7 +467,11 @@ bool FShintLodFixerRegistry::CanApply(
 	static const TSet<FString> MeshKeys = {
 		TEXT("recompute_normals"), TEXT("recompute_tangents"),
 		TEXT("remove_degenerates"), TEXT("use_full_precision_uvs"),
-		TEXT("generate_lightmap_uvs"), TEXT("build_scale") };
+		TEXT("generate_lightmap_uvs"), TEXT("build_scale"),
+		// mesh-level property + structural keys
+		TEXT("nanite_enabled"), TEXT("fallback_percent"), TEXT("complex_as_simple"),
+		TEXT("lod_count"), TEXT("lods"), TEXT("triangle_ratio_band"),
+		TEXT("screen_sizes"), TEXT("has_simple_collision") };
 	static const TSet<FString> MaterialKeys = {
 		TEXT("two_sided"), TEXT("blend_mode") };
 
@@ -302,7 +508,23 @@ FShintLodFixResult FShintLodFixerRegistry::ApplyFix(
 
 	TMap<FString, FString> Before;
 	bool bRebuild = false;
-	const int32 Changed = ApplyAll(Asset, Recommended, Before, bRebuild);
+	int32 Changed = ApplyAll(Asset, Recommended, Before, bRebuild);
+
+	// Structural mesh ops (LOD chain regen/reduce, screen sizes, collision) don't
+	// fit the property-snapshot model, so they run only when no property write
+	// applied and are recorded as non-revertible (Before stays empty → Revert is
+	// a no-op; in-session undo is Ctrl+Z). Kept in the SAME transaction.
+	bool bStructural = false;
+#if WITH_EDITORONLY_DATA
+	if (Changed == 0)
+	{
+		if (UStaticMesh* Mesh = Cast<UStaticMesh>(Asset))
+		{
+			const int32 StructChanged = ApplyStructuralStaticMesh(Mesh, Recommended);
+			if (StructChanged > 0) { Changed = StructChanged; bStructural = true; }
+		}
+	}
+#endif
 
 	if (Changed == 0)
 	{
@@ -311,16 +533,20 @@ FShintLodFixResult FShintLodFixerRegistry::ApplyFix(
 		return Out;   // bApplied=false, no error: idempotent no-op
 	}
 
-	// PostEditChange rebuilds platform/render data (reimport-class) and fires SCC
-	// checkout hooks; MarkPackageDirty so the change persists to the .uasset.
-	Asset->PostEditChange();
+	// Property writes need PostEditChange to rebuild render/platform data; the
+	// structural subsystem calls already ran their own build, so only fire it
+	// for the property path (a redundant PostEditChange after SetLods is wasteful).
+	if (!bStructural)
+	{
+		Asset->PostEditChange();
+	}
 	Asset->MarkPackageDirty();
 
 	// Journal AFTER the write succeeds, capturing the exact Before/After so
-	// Revert is a faithful inverse.
+	// Revert is a faithful inverse. Structural changes carry no Before snapshot.
 	FShintLodJournalEntry Entry;
 	Entry.AssetPath       = AssetPath;
-	Entry.RuleId          = RuleId;
+	Entry.RuleId          = bStructural ? (RuleId + TEXT(" (structural)")) : RuleId;
 	Entry.TransactionName = Label.ToString();
 	Entry.bRebuild        = bRebuild;
 	Entry.Before          = Before;
@@ -334,9 +560,9 @@ FShintLodFixResult FShintLodFixerRegistry::ApplyFix(
 	Out.PropertiesChanged = Changed;
 
 	UE_LOG(LogShintTools, Verbose,
-		TEXT("ShintLodFix: %s on %s — %d prop(s)%s [journal %s]"),
+		TEXT("ShintLodFix: %s on %s — %d change(s)%s%s [journal %s]"),
 		*RuleId, *AssetPath, Changed, bRebuild ? TEXT(", rebuilt") : TEXT(""),
-		*Out.JournalId);
+		bStructural ? TEXT(", structural") : TEXT(""), *Out.JournalId);
 	return Out;
 }
 
