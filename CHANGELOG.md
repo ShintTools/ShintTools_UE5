@@ -2,6 +2,30 @@
 
 ---
 
+## [1.3.3] — 2026-07-18 — LOD Auditor: fix "Fix" button on Mesh/Material findings
+
+### Fixed
+- **Applying a fix on a Mesh or Material finding always reported "Auto-fix
+  failed".** Every row's Fix button (in all three tabs — Textures, Meshes,
+  Materials — plus the batch "Fix Selected") was wired to
+  `ApplyLodFixDuplicate`, a texture-only flow that duplicates the asset with
+  the recommended size/compression applied and leaves the original
+  untouched. Mesh and material recommendations (recompute normals, two-sided,
+  blend mode, …) have no such duplicate concept, so that path rejected them
+  unconditionally with "This finding has no auto-applicable texture
+  size/compression change" — shown to the user as a flat failure. The
+  in-place fixer (`FShintLodFixerRegistry`, full Transaction + Journal
+  revert support) already handled meshes and materials correctly, but was
+  only reachable from the separate "Fix All" button — never from the
+  per-row Fix button most users actually click. `OnLodFixRow` and
+  `OnLodFixSelected` now check `FShintLodFixerRegistry::CanApply` first and
+  dispatch there for mesh/material (and any non-size/compression texture)
+  findings, falling back to the non-destructive duplicate flow only for the
+  texture size/compression case it was built for. Verified with UAT
+  BuildPlugin (UE_5.7, BUILD SUCCESSFUL).
+
+---
+
 ## [1.3.2] — 2026-07-15 — LOD Auditor: batched scan (fixes crash on large projects)
 
 ### Fixed

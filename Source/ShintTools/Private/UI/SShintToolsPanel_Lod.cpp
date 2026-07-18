@@ -1100,6 +1100,18 @@ bool SShintToolsPanel::ApplyLodFixDuplicate(
 FReply SShintToolsPanel::OnLodFixRow(FShintLodFindingPtr Item)
 {
 	if (!Item.IsValid()) return FReply::Handled();
+
+	// Meshes and materials (and any texture finding that isn't a size/
+	// compression change) have no notion of a "duplicate" — the recommended
+	// property lives on the mesh's build settings or the material itself, so
+	// ApplyLodFixDuplicate always rejected them with "no auto-applicable
+	// texture size/compression change", which every mesh/material row's Fix
+	// button hit unconditionally. Route those through the in-place registry
+	// (Transaction + Journal, so it's still undoable/revertible); keep the
+	// non-destructive duplicate path for the textures it was built for.
+	if (FShintLodFixerRegistry::CanApply(Item->Finding.AssetPath, Item->Finding.Recommended))
+		return OnLodFixInPlace(Item);
+
 	FString NewPath, Err;
 	if (ApplyLodFixDuplicate(Item->Finding, NewPath, Err))
 		LodShowSuccessToast(TEXT("Optimized copy created"),
@@ -1116,20 +1128,31 @@ FReply SShintToolsPanel::OnLodFixSelected()
 	for (const FShintLodFindingPtr& It : LodFilteredItems)
 	{
 		if (!It.IsValid() || !It->bChecked) continue;
+		const FShintLodFinding& F = It->Finding;
+
+		// Same dispatch as OnLodFixRow — see its comment.
+		if (FShintLodFixerRegistry::CanApply(F.AssetPath, F.Recommended))
+		{
+			const FShintLodFixResult R = FShintLodFixerRegistry::ApplyFromFinding(F);
+			if (!R.Error.IsEmpty()) { ++Failed; LastErr = R.Error; }
+			else                    ++Ok;   // applied or idempotent no-op — not a failure
+			continue;
+		}
+
 		FString NewPath, Err;
-		if (ApplyLodFixDuplicate(It->Finding, NewPath, Err)) ++Ok;
+		if (ApplyLodFixDuplicate(F, NewPath, Err)) ++Ok;
 		else { ++Failed; LastErr = Err; }
 	}
 	if (Ok == 0 && Failed == 0)
 		ShintShowErrorToast(TEXT("Nothing selected"),
 			TEXT("Tick one or more rows, then press Fix."));
 	else if (Failed == 0)
-		LodShowSuccessToast(TEXT("Optimized copies created"),
-			FString::Printf(TEXT("%d optimised %s written; originals untouched."),
-				Ok, Ok == 1 ? TEXT("copy") : TEXT("copies")));
+		LodShowSuccessToast(TEXT("Fix Selected complete"),
+			FString::Printf(TEXT("%d finding(s) fixed."), Ok));
 	else
 		ShintShowErrorToast(
 			FString::Printf(TEXT("Fixed %d, %d failed"), Ok, Failed), LastErr);
+	RefreshLodFixesList();
 	return FReply::Handled();
 }
 
