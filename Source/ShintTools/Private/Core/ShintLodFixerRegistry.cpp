@@ -218,6 +218,37 @@ namespace
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+bool FShintLodFixerRegistry::IsAutoApplicable(const TMap<FString, FString>& Rec)
+{
+	for (const auto& Pair : Rec)
+	{
+		const FString& K = Pair.Key;
+		const FString& V = Pair.Value;
+
+		// Bool-valued property keys: any value ParseBool accepts is applicable
+		// (recompute_normals:false is a legitimate "turn it off" fix).
+		if (K == TEXT("recompute_normals")   || K == TEXT("recompute_tangents") ||
+		    K == TEXT("remove_degenerates")  || K == TEXT("use_full_precision_uvs") ||
+		    K == TEXT("generate_lightmap_uvs")|| K == TEXT("srgb") ||
+		    K == TEXT("never_stream")        || K == TEXT("two_sided"))
+			return true;
+
+		// Enum keys: applicable only if the recommended value resolves to a real
+		// enum entry. A prose hint ("ASTC_6x6 (color) or ETC2_RGBA") does not.
+		if (K == TEXT("compression") && EnumFromName<TextureCompressionSettings>(V) != INDEX_NONE) return true;
+		if (K == TEXT("lod_group")   && EnumFromName<TextureGroup>(V) != INDEX_NONE) return true;
+		if (K == TEXT("mip_gen")     && EnumFromName<TextureMipGenSettings>(V) != INDEX_NONE) return true;
+		if (K == TEXT("blend_mode")  && EnumFromName<EBlendMode>(V) != INDEX_NONE) return true;
+
+		// Numeric keys: applicable only for a positive value (an advisory string
+		// like "align sizes or confirm intent" parses to 0 and is not a fix).
+		if (K == TEXT("max_texture_size") && FCString::Atoi(*V) > 0)   return true;
+		if (K == TEXT("build_scale")      && FCString::Atof(*V) > 0.f) return true;
+	}
+	return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 bool FShintLodFixerRegistry::CanApply(
 	const FString& AssetPath, const TMap<FString, FString>& Recommended)
 {

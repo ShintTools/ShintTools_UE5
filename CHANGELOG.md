@@ -2,6 +2,38 @@
 
 ---
 
+## [1.3.4] — 2026-07-18 — LOD Auditor: only offer "Fix" where a fix can actually be applied
+
+### Fixed
+- **"Auto-fix failed / This finding has no auto-applicable texture
+  size/compression change" on Mesh and Material findings.** 1.3.3 routed the
+  Fix button to the in-place registry, but the button was still *shown* on
+  every finding the server marked `auto_fixable` — and the Core marks many
+  mesh/material rules auto-fixable with **advisory** recommendations
+  (`sampler_count: <= 8`, `lod_count: >= 2`, `nanite_enabled: true`, a prose
+  compression hint) that map to **no** editable asset property. Clicking Fix
+  on those still fell through to the texture path and failed. In particular
+  **no material rule emits an applicable property** (`two_sided` / `blend_mode`),
+  so every material Fix button was guaranteed to fail.
+  - The Fix button is now gated on a new value-aware check,
+    `FShintLodFixerRegistry::IsAutoApplicable`, which returns true only when a
+    recommended key maps to a real property **and** its value is
+    machine-applicable (a resolvable enum name, a positive number, or a bool
+    key). Advisory findings no longer show a Fix button — their guidance is
+    still shown; they simply require a manual/structural change (regenerate
+    LODs, reduce material complexity) the editor can't automate.
+  - Findings that *are* applicable (recompute normals/tangents, lightmap-UV
+    generation on meshes; compression, size, sRGB, LOD group, never-stream on
+    textures) fix in place as before, wrapped in the undoable Transaction +
+    Journal.
+  - The single-row, "Fix Selected", and "Fix All" paths all share the same
+    check; a clicked-but-already-optimal asset now reports "Already optimal"
+    instead of doing nothing, and a genuinely non-automatable finding reports
+    "Manual fix required" instead of the misleading texture error.
+  - Verified with UAT BuildPlugin (UE_5.7, BUILD SUCCESSFUL).
+
+---
+
 ## [1.3.3] — 2026-07-18 — LOD Auditor: fix "Fix" button on Mesh/Material findings
 
 ### Fixed
