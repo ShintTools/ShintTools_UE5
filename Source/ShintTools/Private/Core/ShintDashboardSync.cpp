@@ -342,3 +342,69 @@ void FShintDashboardSync::SendAssetNaming(
 			}),
 		BuildAuthHeaders(Cfg));
 }
+
+// [LOD-STRIP-BEGIN]
+void FShintDashboardSync::SendLodAudit(
+	const FShintLodAuditResult& LastResult,
+	FOnShintWebDashboardComplete OnComplete)
+{
+	const FShintCoreConfig& Cfg = Client.GetConfig();
+	if (ShortCircuitOnMissingConfig(Cfg, OnComplete))
+	{
+		return;
+	}
+
+	// Metrics-only: per-finding metadata + the aggregate KPIs the panel shows.
+	// Asset paths are logical /Game/... object paths (not local filesystem
+	// paths), so they carry no user-machine layout. No mesh/texture bytes,
+	// guidance text or AI output travel.
+	TArray<TSharedPtr<FJsonValue>> FindingsArr;
+	FindingsArr.Reserve(LastResult.Findings.Num());
+	for (const FShintLodFinding& F : LastResult.Findings)
+	{
+		TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
+		O->SetStringField(TEXT("asset_path"),          F.AssetPath);
+		O->SetStringField(TEXT("rule_id"),             F.RuleId);
+		O->SetStringField(TEXT("rule_name"),           F.RuleName);
+		O->SetStringField(TEXT("category"),            F.Category);
+		O->SetStringField(TEXT("severity"),            F.Severity);
+		O->SetStringField(TEXT("message"),             F.Message);
+		O->SetBoolField  (TEXT("auto_fixable"),        F.bAutoFixable);
+		O->SetNumberField(TEXT("vram_mb"),             F.VramMb);
+		O->SetNumberField(TEXT("shader_instructions"), F.ShaderInstructions);
+		FindingsArr.Add(MakeShared<FJsonValueObject>(O));
+	}
+
+	TSharedRef<FJsonObject> Stats = MakeShared<FJsonObject>();
+	Stats->SetNumberField(TEXT("assets_audited"),          LastResult.AssetsAudited);
+	Stats->SetNumberField(TEXT("issues_found"),            LastResult.IssuesFound);
+	Stats->SetNumberField(TEXT("auto_fixable"),            LastResult.AutoFixable);
+	Stats->SetNumberField(TEXT("textures"),                LastResult.TexturesAudited);
+	Stats->SetNumberField(TEXT("meshes"),                  LastResult.MeshesAudited);
+	Stats->SetNumberField(TEXT("materials"),               LastResult.MaterialsAudited);
+	Stats->SetNumberField(TEXT("total_vram_mb"),           LastResult.TotalVramMb);
+	Stats->SetNumberField(TEXT("estimated_vram_saved_mb"), LastResult.EstimatedVramSavedMb);
+	Stats->SetNumberField(TEXT("estimated_shader_saved"),
+		LastResult.EstimatedShaderInstructionsSaved);
+
+	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("project_name"), Cfg.ProjectName);
+	Body->SetStringField(TEXT("engine"),       TEXT("unreal"));
+	Body->SetArrayField (TEXT("findings"),     FindingsArr);
+	Body->SetObjectField(TEXT("stats"),        Stats);
+
+	const FString Url = Cfg.DashboardUrl
+		/ TEXT("api/public/lod-auditor/analyze");
+	UE_LOG(LogShintTools, Verbose,
+		TEXT("Dashboard: sending %d LOD findings to %s"),
+		FindingsArr.Num(), *Url);
+
+	Client.SendRequest(Url, EShintHttpMethod::POST,
+		FShintCoreClient::SerializeJson(Body),
+		FOnShintRequestComplete::CreateLambda(
+			[OnComplete](const FShintRequestResult& Raw) mutable {
+				OnComplete.ExecuteIfBound(MakeResultFromRaw(Raw));
+			}),
+		BuildAuthHeaders(Cfg));
+}
+// [LOD-STRIP-END]

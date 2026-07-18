@@ -12,6 +12,9 @@
 class FShintCoreClient;
 struct FShintValidateResult;
 struct FShintAssetScanResult;
+// [LOD-STRIP-BEGIN]
+struct FShintLodAuditResult;
+// [LOD-STRIP-END]
 
 /**
  * Result of a POST to the external shint.tools dashboard.
@@ -75,6 +78,23 @@ public:
 	 */
 	void SendAssetNaming(const FShintAssetScanResult& LastResult,
 		FOnShintWebDashboardComplete OnComplete);
+
+	// [LOD-STRIP-BEGIN]
+	/**
+	 * Sends the LOD Auditor RESULTS (metrics only) to the dashboard.
+	 * Privacy: per-finding metadata + aggregate KPIs are sent; no asset bytes.
+	 * Endpoint: POST {DashboardUrl}/api/public/lod-auditor/analyze
+	 * Body: { project_name, engine,
+	 *         findings: [{asset_path, rule_id, rule_name, category, severity,
+	 *                     message, auto_fixable, vram_mb, shader_instructions}],
+	 *         stats:    {assets_audited, issues_found, auto_fixable,
+	 *                    textures, meshes, materials, total_vram_mb,
+	 *                    estimated_vram_saved_mb, estimated_shader_saved} }
+	 * Auth:  Authorization: Bearer <per-project key>
+	 */
+	void SendLodAudit(const FShintLodAuditResult& LastResult,
+		FOnShintWebDashboardComplete OnComplete);
+	// [LOD-STRIP-END]
 
 private:
 	FShintCoreClient& Client;
