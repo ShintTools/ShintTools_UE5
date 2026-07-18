@@ -68,6 +68,9 @@ public class ShintTools : ModuleRules
 			"MaterialEditor",
 			"MeshDescription",
 			"StaticMeshDescription",
+			// UStaticMeshEditorSubsystem — in-place LOD auto-fix structural ops
+			// (generate/reduce LOD chain, screen sizes, simple collision).
+			"StaticMeshEditor",
 
 			// Editor modules
 			"EditorStyle",
