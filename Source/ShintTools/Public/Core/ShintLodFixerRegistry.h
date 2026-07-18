@@ -42,6 +42,17 @@ public:
 	// class supports — i.e. the finding is genuinely applicable in-editor.
 	static bool CanApply(const FString& AssetPath, const TMap<FString, FString>& Recommended);
 
+	// Cheap, asset-free applicability probe for the row UI: true only when at
+	// least one recommended key maps to a real property AND its value is
+	// machine-applicable (a resolvable enum name, a positive number, or a bool
+	// key). The Core marks many rules `auto_fixable` with ADVISORY recommended
+	// values ("sampler_count: <= 8", "lod_count: >= 2", a prose compression
+	// hint) that no property write can satisfy — gating the Fix button on
+	// `auto_fixable` therefore showed a button that always failed. Gate on this
+	// instead. Does not load the asset (safe to call per-row during Slate
+	// construction); the class is confirmed later by CanApply on click.
+	static bool IsAutoApplicable(const TMap<FString, FString>& Recommended);
+
 	// Apply the recommended property changes to the asset at AssetPath. Wraps a
 	// transaction + journal snapshot. `RuleId`/`RuleName` label the journal and
 	// transaction. No-op (bApplied=false, empty Error) when nothing is applicable.

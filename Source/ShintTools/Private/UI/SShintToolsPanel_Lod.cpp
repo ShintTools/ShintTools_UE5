@@ -818,7 +818,13 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateLodFindingRow(
 		SNew(SBox).WidthOverride(48.f)
 		[
 			SNew(SButton)
-			.Visibility(F.bAutoFixable ? EVisibility::Visible : EVisibility::Collapsed)
+			// Show Fix only when a fix can actually be applied in-editor — not
+			// merely when the server flagged the rule auto_fixable. Many mesh/
+			// material rules are auto_fixable with advisory recommendations
+			// (reduce samplers, add LODs) that no property write satisfies;
+			// showing Fix on those produced the "Auto-fix failed" toast.
+			.Visibility(FShintLodFixerRegistry::IsAutoApplicable(F.Recommended)
+				? EVisibility::Visible : EVisibility::Collapsed)
 			.ContentPadding(FMargin(8.f, 4.f))
 			.ButtonColorAndOpacity(FSlateColor(C_Surface()))
 			.OnClicked_Lambda([this, Item]() { return OnLodFixRow(Item); })
@@ -1101,36 +1107,61 @@ FReply SShintToolsPanel::OnLodFixRow(FShintLodFindingPtr Item)
 {
 	if (!Item.IsValid()) return FReply::Handled();
 
+	const FShintLodFinding& F = Item->Finding;
+
 	// Meshes and materials (and any texture finding that isn't a size/
 	// compression change) have no notion of a "duplicate" — the recommended
 	// property lives on the mesh's build settings or the material itself, so
-	// ApplyLodFixDuplicate always rejected them with "no auto-applicable
-	// texture size/compression change", which every mesh/material row's Fix
-	// button hit unconditionally. Route those through the in-place registry
-	// (Transaction + Journal, so it's still undoable/revertible); keep the
-	// non-destructive duplicate path for the textures it was built for.
-	if (FShintLodFixerRegistry::CanApply(Item->Finding.AssetPath, Item->Finding.Recommended))
+	// ApplyLodFixDuplicate always rejected them. Route those through the
+	// in-place registry (Transaction + Journal, so it's still undoable/
+	// revertible); keep the non-destructive duplicate path for the texture
+	// size/compression case it was built for.
+	if (FShintLodFixerRegistry::CanApply(F.AssetPath, F.Recommended))
 		return OnLodFixInPlace(Item);
 
-	FString NewPath, Err;
-	if (ApplyLodFixDuplicate(Item->Finding, NewPath, Err))
-		LodShowSuccessToast(TEXT("Optimized copy created"),
-			FString::Printf(TEXT("Wrote %s — original untouched."), *NewPath));
-	else
-		ShintShowErrorToast(TEXT("Auto-fix failed"), Err);
+	if (F.RecMaxSize > 0 || !F.RecCompression.IsEmpty())
+	{
+		FString NewPath, Err;
+		if (ApplyLodFixDuplicate(F, NewPath, Err))
+			LodShowSuccessToast(TEXT("Optimized copy created"),
+				FString::Printf(TEXT("Wrote %s — original untouched."), *NewPath));
+		else
+			ShintShowErrorToast(TEXT("Auto-fix failed"), Err);
+		return FReply::Handled();
+	}
+
+	// Neither path applies: the recommendation is advisory (regenerate LODs,
+	// reduce material complexity, …) — an honest message, not a false failure.
+	// With the Fix button now gated on IsAutoApplicable this should be
+	// unreachable from the button, but a stale/edge finding still lands here.
+	ShintShowErrorToast(TEXT("Manual fix required"),
+		TEXT("This recommendation can't be applied automatically in-editor — "
+		     "it needs a structural change (e.g. regenerate LODs, reduce "
+		     "material complexity). See the recommendation for details."));
 	return FReply::Handled();
 }
 
 FReply SShintToolsPanel::OnLodFixSelected()
 {
-	int32 Ok = 0, Failed = 0;
+	int32 Ok = 0, Failed = 0, Skipped = 0;
 	FString LastErr;
 	for (const FShintLodFindingPtr& It : LodFilteredItems)
 	{
 		if (!It.IsValid() || !It->bChecked) continue;
 		const FShintLodFinding& F = It->Finding;
 
-		// Same dispatch as OnLodFixRow — see its comment.
+		// A checked row whose recommendation isn't auto-applicable (advisory
+		// mesh/material finding) is skipped, not counted as a failure — its
+		// Fix button is hidden anyway; this just keeps a manual multi-select
+		// honest instead of erroring on it.
+		if (!FShintLodFixerRegistry::IsAutoApplicable(F.Recommended)
+			&& F.RecMaxSize <= 0 && F.RecCompression.IsEmpty())
+		{
+			++Skipped;
+			continue;
+		}
+
+		// Same dispatch as OnLodFixRow.
 		if (FShintLodFixerRegistry::CanApply(F.AssetPath, F.Recommended))
 		{
 			const FShintLodFixResult R = FShintLodFixerRegistry::ApplyFromFinding(F);
@@ -1143,12 +1174,15 @@ FReply SShintToolsPanel::OnLodFixSelected()
 		if (ApplyLodFixDuplicate(F, NewPath, Err)) ++Ok;
 		else { ++Failed; LastErr = Err; }
 	}
-	if (Ok == 0 && Failed == 0)
+	if (Ok == 0 && Failed == 0 && Skipped == 0)
 		ShintShowErrorToast(TEXT("Nothing selected"),
 			TEXT("Tick one or more rows, then press Fix."));
 	else if (Failed == 0)
 		LodShowSuccessToast(TEXT("Fix Selected complete"),
-			FString::Printf(TEXT("%d finding(s) fixed."), Ok));
+			FString::Printf(TEXT("%d finding(s) fixed%s."), Ok,
+				Skipped > 0
+					? *FString::Printf(TEXT(", %d skipped (manual)"), Skipped)
+					: TEXT("")));
 	else
 		ShintShowErrorToast(
 			FString::Printf(TEXT("Fixed %d, %d failed"), Ok, Failed), LastErr);
@@ -1625,6 +1659,12 @@ FReply SShintToolsPanel::OnLodFixInPlace(FShintLodFindingPtr Item)
 			FString::Printf(TEXT("%s — %d property(ies) changed%s."),
 				*LodAssetName(Item->Finding.AssetPath), R.PropertiesChanged,
 				R.bRebuilt ? TEXT(", rebuilt") : TEXT("")));
+	else
+		// Applicable key, but the asset already matches the recommended value
+		// (stale finding) — give feedback instead of a silent click.
+		LodShowSuccessToast(TEXT("Already optimal"),
+			FString::Printf(TEXT("%s already matches the recommended settings."),
+				*LodAssetName(Item->Finding.AssetPath)));
 	RefreshLodFixesList();
 	return FReply::Handled();
 }
@@ -1645,6 +1685,9 @@ FReply SShintToolsPanel::OnLodFixAllInPlace()
 		const FShintLodFinding& F = Item->Finding;
 		if (!F.bAutoFixable || F.Recommended.Num() == 0) { ++Skipped; continue; }
 		if (ConfRank(F.Confidence) < FloorRank)          { ++Skipped; continue; }
+		// Cheap asset-free pre-filter first: skips advisory findings without
+		// loading their asset (CanApply below does load it to confirm class).
+		if (!FShintLodFixerRegistry::IsAutoApplicable(F.Recommended))      { ++Skipped; continue; }
 		if (!FShintLodFixerRegistry::CanApply(F.AssetPath, F.Recommended)) { ++Skipped; continue; }
 
 		const FShintLodFixResult R = FShintLodFixerRegistry::ApplyFromFinding(F);
