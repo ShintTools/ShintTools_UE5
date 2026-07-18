@@ -331,6 +331,54 @@ namespace
 				UE::AssetRegistry::EDependencyCategory::Package,
 				UE::AssetRegistry::EDependencyQuery::Hard);
 			Obj->SetNumberField(TEXT("used_by_primitives"), Referencers.Num());
+
+			// ── usage_flags_unused (LM012) — CONSERVATIVE referencer analysis ────
+			// A checked bUsedWith* flag that no referencer needs only wastes shader
+			// permutations; but CLEARING a flag that IS needed makes the material
+			// render as default at runtime. A false "unused" is therefore far worse
+			// than a miss, so we abstain aggressively: only a small set of flags is
+			// determinable from asset references at all, and the moment ANY
+			// Blueprint or Level references the material we abstain entirely —
+			// those can spawn components whose usage we can't see here.
+			if (const UMaterial* BaseMat = Mat->GetMaterial())
+			{
+				// flag member name -> (usage enum, asset class that REQUIRES it).
+				struct FSafeFlag { const TCHAR* Name; EMaterialUsage Usage; const TCHAR* ReqClass; };
+				static const FSafeFlag SafeFlags[] = {
+					{ TEXT("bUsedWithSkeletalMesh"),        MATUSAGE_SkeletalMesh,        TEXT("SkeletalMesh") },
+					{ TEXT("bUsedWithGeometryCollections"), MATUSAGE_GeometryCollections, TEXT("GeometryCollection") },
+					{ TEXT("bUsedWithHairStrands"),         MATUSAGE_HairStrands,         TEXT("GroomAsset") },
+				};
+
+				bool bHiddenUsage = false;      // a BP / level could hide a consumer
+				TSet<FString> ReferencerClasses;
+				for (const FName& Ref : Referencers)
+				{
+					TArray<FAssetData> RefAssets;
+					AR.GetAssetsByPackageName(Ref, RefAssets);
+					for (const FAssetData& RD : RefAssets)
+					{
+						const FString Cls = RD.AssetClassPath.GetAssetName().ToString();
+						ReferencerClasses.Add(Cls);
+						if (Cls == TEXT("Blueprint") || Cls == TEXT("World") ||
+						    Cls == TEXT("Level"))
+							bHiddenUsage = true;
+					}
+				}
+
+				if (!bHiddenUsage)
+				{
+					TArray<TSharedPtr<FJsonValue>> Unused;
+					for (const FSafeFlag& F : SafeFlags)
+					{
+						if (BaseMat->GetUsageByFlag(F.Usage) &&
+						    !ReferencerClasses.Contains(F.ReqClass))
+							Unused.Add(MakeShared<FJsonValueString>(F.Name));
+					}
+					if (Unused.Num() > 0)
+						Obj->SetArrayField(TEXT("usage_flags_unused"), Unused);
+				}
+			}
 		}
 
 		// ── Graph stats (master materials only) ─────────────────────────────────

@@ -301,6 +301,10 @@ private:
 	FReply OnLodFixInPlace(FShintLodFindingPtr Item);   // registry apply (one row)
 	FReply OnLodFixAllInPlace();                        // registry apply (batch)
 	FReply OnLodRevertFix(TSharedPtr<struct FShintLodJournalRow> Row);
+	// Push the LOD audit RESULTS (metrics only) to the external dashboard.
+	FReply OnSendLodToDashboardClicked();
+	void   OnLodDashboardComplete(const FShintWebDashboardResult& Result);
+	TSharedPtr<class STextBlock> SendLodBtnLabel;
 	// [LOD-STRIP-END]
 
 	// ── HTTP callbacks ────────────────────────────────────────────────────────

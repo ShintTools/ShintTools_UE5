@@ -20,6 +20,7 @@
 
 #include "UObject/UObjectGlobals.h"
 #include "UObject/Package.h"
+#include "UObject/UnrealType.h"                 // FBoolProperty / FindFProperty (LM012)
 #include "ScopedTransaction.h"
 
 #include "Serialization/JsonReader.h"          // screen_sizes JSON array parse
@@ -51,6 +52,29 @@ namespace
 		if (Digits.IsEmpty()) return false;
 		Out = FCString::Atod(*Digits);
 		return true;
+	}
+
+	// JSON array <-> container helpers (used by the material usage-flag fixer and
+	// the structural mesh ops; defined up here so every applier below can call
+	// them regardless of definition order).
+	TArray<FString> ParseStringArray(const FString& Json)
+	{
+		TArray<FString> Out;
+		TArray<TSharedPtr<FJsonValue>> Arr;
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Json);
+		if (FJsonSerializer::Deserialize(Reader, Arr))
+			for (const TSharedPtr<FJsonValue>& V : Arr)
+				if (V.IsValid() && (V->Type == EJson::String))
+					Out.Add(V->AsString());
+		return Out;
+	}
+
+	FString StringArrayToJson(const TArray<FString>& In)
+	{
+		FString Out = TEXT("[");
+		for (int32 i = 0; i < In.Num(); ++i)
+			Out += FString::Printf(TEXT("%s\"%s\""), i ? TEXT(",") : TEXT(""), *In[i]);
+		return Out + TEXT("]");
 	}
 
 	// Enum <-> name via UE reflection. Accepts short ("TC_Normalmap") or full
@@ -254,7 +278,7 @@ namespace
 #endif // WITH_EDITORONLY_DATA
 
 	int32 ApplyToMaterial(UMaterial* Mat, const TMap<FString, FString>& Rec,
-		TMap<FString, FString>& OutBefore, bool& /*bOutRebuild*/)
+		TMap<FString, FString>& OutBefore, bool& bOutRebuild)
 	{
 		int32 Changed = 0;
 		if (const FString* V = Rec.Find(TEXT("two_sided")))
@@ -277,6 +301,40 @@ namespace
 				++Changed;
 			}
 		}
+
+		// ── usage flags (LM012) ──────────────────────────────────────────────
+		// The Core sends the concrete bUsedWith* flags to CLEAR (clear_usage_flags)
+		// — false = the material no longer compiles that permutation. Each flag is
+		// a UPROPERTY bool on UMaterial, cleared by name via reflection so we need
+		// no per-flag enum table. Revert is symmetric: clearing N flags records
+		// "set_usage_flags: [N]" into Before, and the same applier turns that back
+		// on when RevertFix replays it.
+		auto ApplyUsageFlags = [&](const TCHAR* Key, bool bTarget, const TCHAR* InverseKey)
+		{
+			const FString* V = Rec.Find(Key);
+			if (!V) return;
+			TArray<FString> Touched;
+			for (const FString& FlagName : ParseStringArray(*V))
+			{
+				FBoolProperty* Prop =
+					FindFProperty<FBoolProperty>(UMaterial::StaticClass(), FName(*FlagName));
+				if (!Prop) continue;
+				void* Addr = Prop->ContainerPtrToValuePtr<void>(Mat);
+				if (Prop->GetPropertyValue(Addr) != bTarget)
+				{
+					Prop->SetPropertyValue(Addr, bTarget);
+					Touched.Add(FlagName);
+					++Changed;
+				}
+			}
+			if (Touched.Num() > 0)
+			{
+				OutBefore.Add(InverseKey, StringArrayToJson(Touched));  // inverse restores
+				bOutRebuild = true;   // usage flag change alters shader permutations
+			}
+		};
+		ApplyUsageFlags(TEXT("clear_usage_flags"), false, TEXT("set_usage_flags"));
+		ApplyUsageFlags(TEXT("set_usage_flags"),   true,  TEXT("clear_usage_flags"));
 		return Changed;
 	}
 
@@ -424,6 +482,9 @@ bool FShintLodFixerRegistry::IsAutoApplicable(const TMap<FString, FString>& Rec)
 		// has_simple_collision is only a fix when the recommendation is to ADD one.
 		if (K == TEXT("has_simple_collision") && ParseBool(V)) return true;
 
+		// Material usage flags (LM012): applicable when the list is non-empty.
+		if (K == TEXT("clear_usage_flags") && ParseStringArray(V).Num() > 0) return true;
+
 		// Enum keys: applicable only if the recommended value resolves to a real
 		// enum entry. A prose hint ("ASTC_6x6 (color) or ETC2_RGBA") does not.
 		if (K == TEXT("compression") && EnumFromName<TextureCompressionSettings>(V) != INDEX_NONE) return true;
@@ -473,7 +534,8 @@ bool FShintLodFixerRegistry::CanApply(
 		TEXT("lod_count"), TEXT("lods"), TEXT("triangle_ratio_band"),
 		TEXT("screen_sizes"), TEXT("has_simple_collision") };
 	static const TSet<FString> MaterialKeys = {
-		TEXT("two_sided"), TEXT("blend_mode") };
+		TEXT("two_sided"), TEXT("blend_mode"),
+		TEXT("clear_usage_flags"), TEXT("set_usage_flags") };
 
 	const TSet<FString>* Keys = nullptr;
 	if (Asset->IsA<UTexture2D>())        Keys = &TextureKeys;

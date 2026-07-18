@@ -2,6 +2,35 @@
 
 ---
 
+## [1.3.6] — 2026-07-18 — LOD Auditor: Material usage-flag auto-fix + Send-to-Dashboard
+
+### Added
+- **Material auto-fix (LM012) — clear unused usage flags.** Requires Core
+  ≥ v2.3.0. The client now performs a **conservative** referencer analysis of
+  each material and sends `usage_flags_unused`; the Core (LM012) returns the
+  concrete `bUsedWith*` flags to clear in `recommended.clear_usage_flags`, and
+  the in-editor fixer clears them via reflection (`SetMaterialUsage`-style
+  property write), wrapped in the undoable transaction + Journal (Revert
+  restores them). Safety first: clearing a *needed* usage flag would make the
+  material render as default at runtime, so the client **abstains entirely**
+  whenever a Blueprint or Level references the material (they can spawn
+  components whose usage isn't visible here), and only reasons about flags
+  determinable from asset references (skeletal mesh, geometry collection, hair).
+  This is the only Material rule that is safely auto-applicable; the rest
+  (sampler/instruction/node reduction) remain advisory.
+- **Send LOD audit to Dashboard.** New "Send to Dashboard" button on the LOD
+  Auditor toolbar posts the audit **results (metrics only)** to the external
+  dashboard — per-finding metadata + aggregate KPIs, never asset bytes. Mirrors
+  the Code Validator / Asset Naming dashboard sync (Bearer per-project key).
+  Endpoint: `POST {DashboardUrl}/api/public/lod-auditor/analyze`.
+
+### Notes
+- Verified with UAT BuildPlugin (UE_5.7, BUILD SUCCESSFUL); Core LOD suite
+  347 tests green. The dashboard endpoint (`/api/public/lod-auditor/analyze`)
+  must be implemented on the shint.tools web side to accept the payload.
+
+---
+
 ## [1.3.5] — 2026-07-18 — LOD Auditor: real in-editor auto-fixes for Mesh findings
 
 ### Added

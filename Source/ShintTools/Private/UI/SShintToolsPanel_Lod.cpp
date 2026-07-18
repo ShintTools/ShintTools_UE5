@@ -532,6 +532,18 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodToolbar()
 					.ColorAndOpacity(FSlateColor(C_Gray()))
 				]
 			]
+			// Send to Dashboard (metrics only)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
+			[
+				SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
+				.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+				.OnClicked(this, &SShintToolsPanel::OnSendLodToDashboardClicked)
+				[
+					SAssignNew(SendLodBtnLabel, STextBlock)
+					.Text(LOCTEXT("AODash", "Send to Dashboard")).Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_Gray()))
+				]
+			]
 			// Bulk Fix (N) — applies the *checked* rows.
 			+ SHorizontalBox::Slot().AutoWidth()
 			[
@@ -1188,6 +1200,48 @@ FReply SShintToolsPanel::OnLodFixSelected()
 			FString::Printf(TEXT("Fixed %d, %d failed"), Ok, Failed), LastErr);
 	RefreshLodFixesList();
 	return FReply::Handled();
+}
+
+FReply SShintToolsPanel::OnSendLodToDashboardClicked()
+{
+	if (LastLodResult.Findings.Num() == 0)
+	{
+		ShintShowErrorToast(TEXT("Nothing to send"),
+			TEXT("Run a LOD audit first, then Send to Dashboard."));
+		return FReply::Handled();
+	}
+	if (SendLodBtnLabel.IsValid())
+	{
+		SendLodBtnLabel->SetText(LOCTEXT("AODashSending", "Sending…"));
+		SendLodBtnLabel->SetColorAndOpacity(FSlateColor(C_Gray()));
+	}
+	DashboardSync->SendLodAudit(LastLodResult,
+		FOnShintWebDashboardComplete::CreateSP(this, &SShintToolsPanel::OnLodDashboardComplete));
+	return FReply::Handled();
+}
+
+void SShintToolsPanel::OnLodDashboardComplete(const FShintWebDashboardResult& Result)
+{
+	if (!SendLodBtnLabel.IsValid()) return;
+	if (Result.bSuccess)
+	{
+		SendLodBtnLabel->SetText(LOCTEXT("AODashOk", "Sent!"));
+		SendLodBtnLabel->SetColorAndOpacity(FSlateColor(FShintStyle::Colors::SevLow()));
+		LodShowSuccessToast(TEXT("Sent to Dashboard"),
+			FString::Printf(TEXT("%d finding(s) pushed."), LastLodResult.Findings.Num()));
+	}
+	else
+	{
+		FString Short = Result.ErrorMessage.IsEmpty()
+			? FString(TEXT("Network or auth error")) : Result.ErrorMessage;
+		if (Short.Len() > 60) Short = Short.Left(57) + TEXT("…");
+		SendLodBtnLabel->SetText(LOCTEXT("AODash", "Send to Dashboard"));
+		SendLodBtnLabel->SetColorAndOpacity(FSlateColor(C_Gray()));
+		ShintShowErrorToast(TEXT("Dashboard send failed"), Short);
+		UE_LOG(LogShintTools, Error,
+			TEXT("LOD dashboard send failed: %s | response: %s"),
+			*Result.ErrorMessage, *Result.ResponseBody);
+	}
 }
 
 FReply SShintToolsPanel::OnLodExport()
