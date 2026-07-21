@@ -2,6 +2,15 @@
 
 ---
 
+## [1.3.7] — 2026-07-21 — AI Assistant window title
+
+### Changed
+- The explanation window is now titled **"ShintTools AI Assistant"** (was
+  "Issue Explanation — ShintTools"). The panel answers questions well beyond
+  explaining a single issue, so the old title undersold it.
+
+---
+
 ## [1.3.6] — 2026-07-18 — LOD Auditor: Material usage-flag auto-fix + Send-to-Dashboard
 
 ### Added

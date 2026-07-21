@@ -93,7 +93,7 @@ FReply SShintToolsPanel::OnExplainIssueClicked(FShintIssueItemPtr Item)
 	const uint64 ThisRequestId = ++ExplainRequestId;
 
 	SAssignNew(ExplainWindow, SWindow)
-		.Title(LOCTEXT("ExplainTitle", "Issue Explanation — ShintTools"))
+		.Title(LOCTEXT("ExplainTitle", "ShintTools AI Assistant"))
 		.ClientSize(FVector2D(680.f, 460.f))
 		.SizingRule(ESizingRule::UserSized)
 		.SupportsMaximize(false)
