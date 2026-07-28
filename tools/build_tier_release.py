@@ -75,6 +75,15 @@ MODULES = {
             # §21 Summary treemap widget — Studio-only, whole-file paid.
             "Source/ShintTools/Public/UI/SShintTreemap.h",
             "Source/ShintTools/Private/UI/SShintTreemap.cpp",
+            # Predictive Profiler — Studio-only, whole-file paid. Client +
+            # independent dashboard window + custom-painted gauge/budget widgets.
+            "Source/ShintTools/Private/Core/ShintCoreClient_Predictive.cpp",
+            "Source/ShintTools/Public/UI/Predictive/SShintScoreGauge.h",
+            "Source/ShintTools/Private/UI/Predictive/SShintScoreGauge.cpp",
+            "Source/ShintTools/Public/UI/Predictive/SShintFrameBudgetBar.h",
+            "Source/ShintTools/Private/UI/Predictive/SShintFrameBudgetBar.cpp",
+            "Source/ShintTools/Public/UI/Predictive/SShintPredictiveDashboard.h",
+            "Source/ShintTools/Private/UI/Predictive/SShintPredictiveDashboard.cpp",
         ],
         "symbols": [
             "ShintCoreClient_Lod", "SShintToolsPanel_Lod", "FShintLodFinding",
@@ -109,8 +118,20 @@ MODULES = {
             "LodIssues_Label", "LodIssuesSub_Label", "LodFixSelected_Label",
             "LodAudited_Label", "LodVramSaved_Label", "AuditLodBtn",
             "AuditLodBtnLabel", "LodEmptyState",
+            # Predictive Profiler — client + dashboard window + paint widgets.
+            "ShintCoreClient_Predictive", "SShintScoreGauge",
+            "SShintFrameBudgetBar", "SShintPredictiveDashboard",
+            "FShintPrediction", "FShintPredictScore", "FShintPredictIssue",
+            "FShintBudgetSegment", "FShintBudgetLine", "FShintPredictReport",
+            "FShintSimScores", "FShintPredictRecommendation",
+            "FShintSimulateResult", "FShintBudgetBarSegment",
+            "FOnShintPredictComplete", "FOnShintSimulateComplete",
+            "AnalyzePrediction", "SimulatePrediction",
+            "ParsePredictResponse", "ParseSimulateResponse",
+            "ShintPredictiveTabName", "OpenShintPredictiveDashboard",
+            "SpawnShintPredictiveTab", "BuildProfileMenu",
         ],
-        "endpoints": ["assets/lod"],
+        "endpoints": ["assets/lod", "predict"],
     },
     "agent": {
         "sentinel": ("[AGENT-STRIP-BEGIN]", "[AGENT-STRIP-END]"),

@@ -298,6 +298,171 @@ struct FShintLodAuditResult
 DECLARE_DELEGATE_OneParam(FOnShintLodAuditComplete, const FShintLodAuditResult&);
 // [LOD-STRIP-END]
 
+// [LOD-STRIP-BEGIN]
+// ─────────────────────────────────────────────────────────────────────────────
+// Predictive Profiler (Studio tier) — mirrors the core /predict/* contract v1.0
+// (docs/predictive/API.md). The plugin collects the scene digest + render/build
+// config + raw source, POSTs to /predict/analyze, and renders a risk dashboard
+// (score gauges, frame-budget bar, top-issue list) + an Impact Simulator
+// (/predict/simulate). Every number is a band: {Min, Expected, Max} + a
+// confidence tag. Predictive PRICES cost — it does not diagnose; the title is
+// the entity name/location, never a rule sentence.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// One banded figure. Mirrors the core's Prediction type. Zeroed band == "no
+// value" (Expected 0 with empty Unit).
+struct FShintPrediction
+{
+	double  Expected  = 0.0;
+	double  Min       = 0.0;
+	double  Max       = 0.0;
+	FString Unit;              // "ms_frame" | "mb" | "mb_min" | "s" | "min"
+	FString Confidence;        // "high" | "medium" | "low"
+	FString Basis;             // one human sentence explaining the figure
+
+	bool IsSet() const { return !Unit.IsEmpty(); }
+
+	// "+0.9–1.8 ms · est. +1.4 ms" style, sign-aware (deltas are negative).
+	FString ToDisplay() const;
+	// "est. +1.4 ms" — just the headline value + unit.
+	FString ToHeadline() const;
+};
+
+// One 0-100 risk score plus the item ids that drive it (top-5).
+struct FShintPredictScore
+{
+	int32           Value = 0;
+	TArray<FString> Drivers;
+};
+
+// One priced item — a row of the report and the simulator's selection unit.
+// impact/recovery are keyed by dimension ("cpu_ms_frame"|"gpu_ms_frame"|
+// "vram_mb"|"ram_mb"|"gc_mb_min"|"build_mb"). Remediation present only when
+// there IS a known optimization (bHasRemediation); otherwise it's just
+// name + cost.
+struct FShintPredictIssue
+{
+	FString ItemId;            // "ci-0042" — stable within a report
+	int32   Layer     = 0;     // 1 assets | 2 scene | 3 code
+	int32   Rank      = 0;
+	FString Severity;          // "critical" | "warning" | "info"
+	FString Title;             // entity name/location — NOT a description
+	FString RuleId;            // source rule (metadata, not shown as title)
+	FString SourceKind;        // "texture" | "code" | "scene" | ...
+	FString SourcePath;
+	int32   SourceLine = 0;
+
+	// The item's TOTAL cost, keyed by dimension. The primary "cost" chip.
+	TMap<FString, FShintPrediction> Impact;
+
+	// Remediation — present only when there is something to recover.
+	bool                            bHasRemediation = false;
+	FString                         RemediationAction;
+	TMap<FString, FShintPrediction> Recovery;   // what a fix buys back
+	bool                            bAutoFixable = false;
+
+	// Runtime UI state — not sent over wire.
+	bool    bChecked = false;
+
+	// The dominant impact dimension + its headline value, for the table's
+	// right-aligned cost chip (e.g. "MEM  +18–26 MB  est. +23 MB").
+	FString DominantDimension() const;
+};
+
+// One stacked segment of the frame-budget bar (a layer/module contribution).
+struct FShintBudgetSegment
+{
+	FString Label;             // "Code patterns" | "Scene dispatch" | ...
+	double  ExpectedMs = 0.0;
+};
+
+// One CPU/GPU budget line: predicted spend vs budget, with a stack breakdown.
+struct FShintBudgetLine
+{
+	double                       BudgetMs = 0.0;
+	FShintPrediction             Predicted;   // .IsSet() false == no data
+	TArray<FShintBudgetSegment>  Breakdown;
+};
+
+// The full analyze report.
+struct FShintPredictReport
+{
+	bool    bSuccess    = false;
+	int32   StatusCode  = 0;
+	FString ErrorMessage;
+
+	FString ReportId;
+	FString Engine;
+	FString ProjectName;
+
+	// Platform profile (denominators the dashboard renders raw).
+	FString ProfileName;         // "desktop_60"
+	FString ProfileDisplayName;
+	double  FrameBudgetMs = 0.0;
+	FString ReferenceHw;
+
+	// Scores.
+	FShintPredictScore CpuRisk;
+	FShintPredictScore GpuRisk;
+	FShintPredictScore MemoryRisk;
+	FShintPredictScore BuildHealth;
+	int32              OverallHealth = 0;
+
+	// Frame budget.
+	FShintBudgetLine Cpu;
+	FShintBudgetLine Gpu;
+
+	// Memory / build headline predictions (may be unset).
+	FShintPrediction Vram;
+	int32            VramBudgetMb = 0;
+	FShintPrediction Ram;
+	int32            RamBudgetMb  = 0;
+	FShintPrediction BuildSizeMb;
+
+	// Items — top_issues is the ranked head; we keep the full cost_items so the
+	// simulator can run stateless if the cached report expires.
+	TArray<FShintPredictIssue> TopIssues;
+	TArray<FShintPredictIssue> CostItems;
+
+	// Transparency footer.
+	FString CalibrationVersion;
+	int32   CodeIssuesUncosted = 0;
+	FString Disclaimer;
+};
+DECLARE_DELEGATE_OneParam(FOnShintPredictComplete, const FShintPredictReport&);
+
+// Impact Simulator result — deltas per dimension + before/after scores.
+struct FShintSimScores
+{
+	FShintPredictScore CpuRisk;
+	FShintPredictScore GpuRisk;
+	FShintPredictScore MemoryRisk;
+	FShintPredictScore BuildHealth;
+	int32              OverallHealth = 0;
+};
+
+struct FShintPredictRecommendation
+{
+	FString ItemId;
+	FString Reason;            // "Largest remaining recovery: +0.29 ms (cpu…)"
+	bool    bAutoFixable = false;
+};
+
+struct FShintSimulateResult
+{
+	bool    bSuccess    = false;
+	int32   StatusCode  = 0;
+	FString ErrorMessage;
+
+	int32                            SelectedCount = 0;
+	TMap<FString, FShintPrediction>  Deltas;        // negative = recovered
+	FShintSimScores                  Before;
+	FShintSimScores                  After;
+	TArray<FShintPredictRecommendation> Recommendations;
+};
+DECLARE_DELEGATE_OneParam(FOnShintSimulateComplete, const FShintSimulateResult&);
+// [LOD-STRIP-END]
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Quality Score (Slice B) — full breakdown fetched via /metrics/score/latest
 // ─────────────────────────────────────────────────────────────────────────────
@@ -588,6 +753,33 @@ public:
 	// ShintCoreClient_Lod.cpp, which chains one request per asset chunk) can
 	// parse each batch response. Pure static JSON->struct helper, no state.
 	static FShintLodAuditResult ParseLodAuditResponse(const FShintRequestResult& Raw);
+
+	// ── Predictive Profiler (Studio tier) — local engine ──────────────────────
+	/**
+	 * Analyze a project's predicted cost. Sends assets + scene digest +
+	 * render/build config + raw source in one /predict/analyze POST (one-shot;
+	 * the collectors already batch assets at 150). The report is the simulator's
+	 * input — keep it (SimulatePrediction can also run stateless from CostItems).
+	 *
+	 * @param Profile  platform profile name ("desktop_60", "mobile_30", …).
+	 */
+	void AnalyzePrediction(const FString& Profile, FOnShintPredictComplete OnComplete);
+
+	/**
+	 * Impact Simulator — POST /predict/simulate against a cached report. Passes
+	 * the selected item ids; the optional NewProfile answers "what if I port
+	 * this?" (both before/after recomputed on that profile). InlineCostItems is
+	 * the stateless fallback when the cached report has expired.
+	 */
+	void SimulatePrediction(const FString& ReportId,
+	                        const TArray<FString>& SelectedItemIds,
+	                        const FString& NewProfile,
+	                        const TArray<FShintPredictIssue>& InlineCostItems,
+	                        FOnShintSimulateComplete OnComplete);
+
+	// Public pure JSON->struct helpers (no state) — mirror ParseLodAuditResponse.
+	static FShintPredictReport   ParsePredictResponse(const FShintRequestResult& Raw);
+	static FShintSimulateResult  ParseSimulateResponse(const FShintRequestResult& Raw);
 	// [LOD-STRIP-END]
 
 	// ── Asset Naming Bot — external web dashboard ────────────────────────────

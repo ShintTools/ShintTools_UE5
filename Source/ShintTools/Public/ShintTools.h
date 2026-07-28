@@ -51,6 +51,11 @@ public:
 	/** Name of the ShintTools dockable tab */
 	static const FName ShintToolsTabName;
 
+	// [LOD-STRIP-BEGIN]
+	/** Name of the Predictive Profiler dockable tab (Studio-only, independent). */
+	static const FName ShintPredictiveTabName;
+	// [LOD-STRIP-END]
+
 	// Cached license status — populated at module startup by an async
 	static FString GetCachedTier();
 
@@ -84,6 +89,14 @@ private:
 
 	/** Spawns the ShintTools dockable tab widget */
 	TSharedRef<SDockTab> SpawnShintToolsTab(const FSpawnTabArgs& SpawnTabArgs);
+
+	// [LOD-STRIP-BEGIN]
+	/** Opens / brings-to-front the Predictive Profiler window. */
+	void OpenShintPredictiveDashboard();
+
+	/** Spawns the Predictive Profiler dockable tab widget. */
+	TSharedRef<SDockTab> SpawnShintPredictiveTab(const FSpawnTabArgs& SpawnTabArgs);
+	// [LOD-STRIP-END]
 
 	/** Creates the menu entry under Window > Developer Tools */
 	void BuildShintToolsMenu(FMenuBuilder& MenuBuilder);
