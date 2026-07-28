@@ -2,6 +2,33 @@
 
 ---
 
+## [1.4.0] — 2026-07-28 — Predictive Profiler (Studio)
+
+### Added
+- **Predictive Profiler — new Studio-only module.** An independent dockable
+  window (its own nomad tab, opened from *Window ▸ Predictive Profiler*) that
+  predicts CPU / GPU / memory / build cost **before** you play or cook, by
+  static analysis against the local Core. Three zones over the ShintTools dark
+  shell:
+  - **Scores** — radial risk gauges (CPU / GPU / Memory / Build + Overall) and
+    a stacked frame-budget bar with an uncertainty tail. Requires Core ≥ v2.10.0.
+  - **Top Issues** — every priced asset/pattern as a *name + cost* row (cost is
+    a band with a confidence pill), filterable by severity and dimension. It
+    prices, it does not diagnose — remediation/severity show only when there's
+    a known fix.
+  - **Impact Simulator** — check recoverable issues to see live per-dimension
+    deltas, before→after score animation, and a one-click *add to selection*
+    for the next-best fix. Supports "what if I port to another platform?".
+- The client scans the project itself (assets + scene digest + raw source),
+  batched through the Core's session API (**150 assets per ingest**, source
+  deferred per chunk) so large projects don't stall the editor.
+
+### Notes
+- Numbers carry an **uncalibrated** `calibration_version` for now (the honesty
+  footer states it); calibration against reference hardware lands next.
+
+---
+
 ## [1.3.7] — 2026-07-21 — AI Assistant window title
 
 ### Changed

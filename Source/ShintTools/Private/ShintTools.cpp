@@ -4,6 +4,9 @@
 #include "SShintToolsPanel.h"
 #include "SShintWelcomeDialog.h"
 #include "ShintIconStyle.h"
+// [LOD-STRIP-BEGIN]
+#include "Predictive/SShintPredictiveDashboard.h"
+// [LOD-STRIP-END]
 
 #include "Framework/Docking/TabManager.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
@@ -33,6 +36,9 @@ DEFINE_LOG_CATEGORY(LogShintTools);
 
 // Static tab name identifier
 const FName FShintToolsModule::ShintToolsTabName = FName("ShintTools");
+// [LOD-STRIP-BEGIN]
+const FName FShintToolsModule::ShintPredictiveTabName = FName("ShintPredictive");
+// [LOD-STRIP-END]
 
 static FString GCachedTier = TEXT("free");
 FShintToolsModule::FOnShintLicenseResolved
@@ -141,11 +147,27 @@ void FShintToolsModule::RegisterTabSpawner()
 		.SetTooltipText(LOCTEXT("ShintToolsTabTooltip", "Open the ShintTools Control Panel"))
 		.SetGroup(WorkspaceMenu::GetMenuStructure().GetDeveloperToolsMiscCategory())
 		.SetIcon(FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"));
+
+	// [LOD-STRIP-BEGIN]
+	// Predictive Profiler — a second, independent nomad tab (its own window,
+	// not a section of the main panel). Registered unconditionally like the
+	// main tab; the dashboard re-checks the Studio tier before scanning.
+	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
+		ShintPredictiveTabName,
+		FOnSpawnTab::CreateRaw(this, &FShintToolsModule::SpawnShintPredictiveTab))
+		.SetDisplayName(LOCTEXT("ShintPredictiveTabTitle", "Predictive Profiler"))
+		.SetTooltipText(LOCTEXT("ShintPredictiveTabTooltip", "Predict CPU/GPU/memory/build cost before you play"))
+		.SetGroup(WorkspaceMenu::GetMenuStructure().GetDeveloperToolsMiscCategory())
+		.SetIcon(FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.Profiler"));
+	// [LOD-STRIP-END]
 }
 
 void FShintToolsModule::UnregisterTabSpawner()
 {
 	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(ShintToolsTabName);
+	// [LOD-STRIP-BEGIN]
+	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(ShintPredictiveTabName);
+	// [LOD-STRIP-END]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -176,6 +198,16 @@ void FShintToolsModule::ExtendLevelEditorMenu()
 			FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"),
 			FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintToolsPanel))
 		);
+
+		// [LOD-STRIP-BEGIN]
+		Section.AddMenuEntry(
+			"OpenShintPredictiveDashboard",
+			LOCTEXT("OpenShintPredictiveLabel", "Predictive Profiler"),
+			LOCTEXT("OpenShintPredictiveTooltip", "Predict CPU/GPU/memory/build cost before you play"),
+			FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.Profiler"),
+			FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintPredictiveDashboard))
+		);
+		// [LOD-STRIP-END]
 	}));
 }
 
@@ -209,6 +241,22 @@ TSharedRef<SDockTab> FShintToolsModule::SpawnShintToolsTab(const FSpawnTabArgs& 
 			SNew(SShintToolsPanel)
 		];
 }
+
+// [LOD-STRIP-BEGIN]
+void FShintToolsModule::OpenShintPredictiveDashboard()
+{
+	FGlobalTabmanager::Get()->TryInvokeTab(ShintPredictiveTabName);
+}
+
+TSharedRef<SDockTab> FShintToolsModule::SpawnShintPredictiveTab(const FSpawnTabArgs& SpawnTabArgs)
+{
+	return SNew(SDockTab)
+		.TabRole(ETabRole::NomadTab)
+		[
+			SNew(SShintPredictiveDashboard)
+		];
+}
+// [LOD-STRIP-END]
 
 #undef LOCTEXT_NAMESPACE
 
