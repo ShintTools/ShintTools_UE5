@@ -174,10 +174,11 @@ namespace
 		return Scene;
 	}
 
-	// Lean asset list — textures (width/height/compression) and static meshes
-	// (vertex/triangle counts). Enough for the core's high-confidence VRAM/build
-	// pricing; the LOD Auditor's full extractor is reused there for findings.
-	void CollectAssets(TArray<TSharedPtr<FJsonValue>>& Out)
+	// Cheap: the texture/mesh handles under /Game, WITHOUT loading them.
+	// GetAsset() is deferred to BuildPredictAssetJson so the session chain only
+	// ever force-loads one 150-batch at a time (the LOD-audit OOM lesson —
+	// loading every asset up front OOMs/times out on AAA projects).
+	void GatherAssetData(TArray<FAssetData>& Out)
 	{
 		IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
 			TEXT("AssetRegistry")).Get();
@@ -188,50 +189,52 @@ namespace
 		Filter.ClassPaths.Add(UTexture2D::StaticClass()->GetClassPathName());
 		Filter.ClassPaths.Add(UStaticMesh::StaticClass()->GetClassPathName());
 		Filter.bRecursiveClasses = true;
+		AR.GetAssets(Filter, Out);
+	}
 
-		TArray<FAssetData> Assets;
-		AR.GetAssets(Filter, Assets);
+	// Load ONE asset and append its lean JSON — textures (width/height/
+	// compression) and static meshes (vertex/triangle counts). Enough for the
+	// core's high-confidence VRAM/build pricing; the LOD Auditor's full
+	// extractor is reused core-side for findings. Called per-batch.
+	void BuildPredictAssetJson(const FAssetData& Data,
+	                           TArray<TSharedPtr<FJsonValue>>& Out)
+	{
+		UObject* Obj = Data.GetAsset();
+		if (!Obj) return;
 
-		for (const FAssetData& Data : Assets)
+		if (UTexture2D* Tex = Cast<UTexture2D>(Obj))
 		{
-			UObject* Obj = Data.GetAsset();
-			if (!Obj) continue;
-
-			if (UTexture2D* Tex = Cast<UTexture2D>(Obj))
+			TSharedRef<FJsonObject> J = MakeShared<FJsonObject>();
+			J->SetStringField(TEXT("asset_path"), Data.PackageName.ToString());
+			J->SetStringField(TEXT("asset_type"), TEXT("Texture2D"));
+			J->SetNumberField(TEXT("width"),  Tex->GetSizeX());
+			J->SetNumberField(TEXT("height"), Tex->GetSizeY());
+			J->SetBoolField(TEXT("mips_enabled"), Tex->GetNumMips() > 1);
+			// Compression enum name — the core normalizes it; unmapped formats
+			// fall back to a measured size or RGBA8.
+			const UEnum* Enum = StaticEnum<TextureCompressionSettings>();
+			J->SetStringField(TEXT("compression"),
+				Enum ? Enum->GetNameStringByValue(Tex->CompressionSettings)
+				     : TEXT(""));
+			Out.Add(MakeShared<FJsonValueObject>(J));
+		}
+		else if (UStaticMesh* Mesh = Cast<UStaticMesh>(Obj))
+		{
+			TSharedRef<FJsonObject> J = MakeShared<FJsonObject>();
+			J->SetStringField(TEXT("asset_path"), Data.PackageName.ToString());
+			J->SetStringField(TEXT("asset_type"), TEXT("StaticMesh"));
+			if (Mesh->GetNumSourceModels() > 0)
 			{
-				TSharedRef<FJsonObject> J = MakeShared<FJsonObject>();
-				J->SetStringField(TEXT("asset_path"), Data.PackageName.ToString());
-				J->SetStringField(TEXT("asset_type"), TEXT("Texture2D"));
-				J->SetNumberField(TEXT("width"),  Tex->GetSizeX());
-				J->SetNumberField(TEXT("height"), Tex->GetSizeY());
-				J->SetBoolField(TEXT("mips_enabled"),
-					Tex->GetNumMips() > 1);
-				// Compression enum name — the core normalizes it; unmapped
-				// formats fall back to a measured size or RGBA8.
-				const UEnum* Enum = StaticEnum<TextureCompressionSettings>();
-				J->SetStringField(TEXT("compression"),
-					Enum ? Enum->GetNameStringByValue(Tex->CompressionSettings)
-					     : TEXT(""));
-				Out.Add(MakeShared<FJsonValueObject>(J));
+				J->SetNumberField(TEXT("lod_count"), Mesh->GetNumSourceModels());
 			}
-			else if (UStaticMesh* Mesh = Cast<UStaticMesh>(Obj))
+			// GetNumTriangles/Vertices(0) are the public UStaticMesh APIs the
+			// LOD extractor uses — valid once render data is built.
+			if (Mesh->GetRenderData())
 			{
-				TSharedRef<FJsonObject> J = MakeShared<FJsonObject>();
-				J->SetStringField(TEXT("asset_path"), Data.PackageName.ToString());
-				J->SetStringField(TEXT("asset_type"), TEXT("StaticMesh"));
-				if (Mesh->GetNumSourceModels() > 0)
-				{
-					J->SetNumberField(TEXT("lod_count"), Mesh->GetNumSourceModels());
-				}
-				// GetNumTriangles/Vertices(0) are the public UStaticMesh APIs
-				// the LOD extractor uses — valid once render data is built.
-				if (Mesh->GetRenderData())
-				{
-					J->SetNumberField(TEXT("vertex_count"),   Mesh->GetNumVertices(0));
-					J->SetNumberField(TEXT("triangle_count"), Mesh->GetNumTriangles(0));
-				}
-				Out.Add(MakeShared<FJsonValueObject>(J));
+				J->SetNumberField(TEXT("vertex_count"),   Mesh->GetNumVertices(0));
+				J->SetNumberField(TEXT("triangle_count"), Mesh->GetNumTriangles(0));
 			}
+			Out.Add(MakeShared<FJsonValueObject>(J));
 		}
 	}
 
@@ -272,47 +275,197 @@ namespace
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AnalyzePrediction — collect payload, POST /predict/analyze
+// AnalyzePrediction — batched session flow (start → ingest → analyze)
+//
+// The report needs the whole project (assets + scene + code) scored together,
+// so it can't be a stateless per-chunk aggregate like the LOD audit. Instead
+// it uses the core's session API: open a session, ingest assets 150 at a time
+// (GetAsset() deferred per chunk so only one batch is ever resident — the LOD
+// OOM lesson), then scene, then code, then analyze(session_id). The async gap
+// between batches lets GC keep the working set flat.
 // ─────────────────────────────────────────────────────────────────────────────
+
+namespace
+{
+	constexpr int32 kPredictAssetBatch = 150;   // mirrors LOD kLodAuditBatchSize
+	constexpr int32 kPredictCodeBatch  = 40;    // code carries file content — smaller
+
+	// Kept alive across the async chain by a TSharedRef captured in each
+	// completion lambda — the same idiom as FLodAuditBatch.
+	struct FPredictSession
+	{
+		TSharedRef<FShintCoreClient>   Client;
+		FString                        BaseUrl, ApiKey, ProjectName, Profile;
+		FString                        SessionId;
+
+		TArray<FAssetData>             Assets;     // cheap handles; GetAsset per chunk
+		int32                          AssetCursor = 0;
+		TArray<TSharedPtr<FJsonValue>> CodeFiles;  // collected once (already capped)
+		int32                          CodeCursor  = 0;
+		TSharedPtr<FJsonObject>        Scene;       // collected once (cheap)
+
+		FOnShintPredictComplete        OnComplete;
+
+		explicit FPredictSession(TSharedRef<FShintCoreClient> C) : Client(MoveTemp(C)) {}
+	};
+
+	void FailPredict(TSharedRef<FPredictSession> S, int32 Status, const FString& Msg)
+	{
+		FShintPredictReport R;
+		R.bSuccess     = false;
+		R.StatusCode   = Status;
+		R.ErrorMessage = Msg.IsEmpty() ? TEXT("Predictive analyze failed.") : Msg;
+		S->OnComplete.ExecuteIfBound(R);
+	}
+
+	// Forward declares — the chain recurses/jumps between these.
+	void IngestAssetBatch(TSharedRef<FPredictSession> S);
+	void IngestScene(TSharedRef<FPredictSession> S);
+	void IngestCodeBatch(TSharedRef<FPredictSession> S);
+	void RunAnalyze(TSharedRef<FPredictSession> S);
+
+	// POST one ingest batch of a given kind; on 200 run Next, else fail the chain.
+	void PostIngest(TSharedRef<FPredictSession> S, const FString& Kind,
+	                TSharedRef<FJsonObject> Payload,
+	                TFunction<void(TSharedRef<FPredictSession>)> Next)
+	{
+		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+		Body->SetStringField(TEXT("api_key"),        S->ApiKey);
+		Body->SetStringField(TEXT("session_id"),     S->SessionId);
+		Body->SetStringField(TEXT("kind"),           Kind);
+		Body->SetObjectField(TEXT("payload"),        Payload);
+		Body->SetStringField(TEXT("schema_version"), TEXT("1.0"));
+
+		S->Client->SendRequest(S->BaseUrl + TEXT("/predict/session/ingest"),
+			EShintHttpMethod::POST, FShintCoreClient::SerializeJson(Body),
+			FOnShintRequestComplete::CreateLambda(
+				[S, Next](const FShintRequestResult& Raw)
+		{
+			if (!Raw.bSuccess || Raw.StatusCode != 200)
+			{
+				FailPredict(S, Raw.StatusCode,
+					Raw.ErrorMessage.IsEmpty()
+						? FString::Printf(TEXT("Ingest failed (HTTP %d)."), Raw.StatusCode)
+						: Raw.ErrorMessage);
+				return;
+			}
+			Next(S);
+		}));
+	}
+
+	// 1) assets — 150 at a time; GetAsset() deferred per chunk.
+	void IngestAssetBatch(TSharedRef<FPredictSession> S)
+	{
+		if (S->AssetCursor >= S->Assets.Num()) { IngestScene(S); return; }
+
+		const int32 End = FMath::Min(S->AssetCursor + kPredictAssetBatch, S->Assets.Num());
+		TArray<TSharedPtr<FJsonValue>> Arr;
+		for (int32 i = S->AssetCursor; i < End; ++i)
+			BuildPredictAssetJson(S->Assets[i], Arr);
+		S->AssetCursor = End;
+
+		// An all-skipped batch still advances the chain, no request.
+		if (Arr.Num() == 0) { IngestAssetBatch(S); return; }
+
+		TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+		Payload->SetArrayField(TEXT("assets"), Arr);
+		PostIngest(S, TEXT("assets"), Payload, &IngestAssetBatch);
+	}
+
+	// 2) scene — one cheap digest of the editor world.
+	void IngestScene(TSharedRef<FPredictSession> S)
+	{
+		if (!S->Scene.IsValid()) { IngestCodeBatch(S); return; }
+		TArray<TSharedPtr<FJsonValue>> Scenes;
+		Scenes.Add(MakeShared<FJsonValueObject>(S->Scene.ToSharedRef()));
+		TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+		Payload->SetArrayField(TEXT("scenes"), Scenes);
+		PostIngest(S, TEXT("scene"), Payload, &IngestCodeBatch);
+	}
+
+	// 3) code_files — chained smaller (each carries file content).
+	void IngestCodeBatch(TSharedRef<FPredictSession> S)
+	{
+		if (S->CodeCursor >= S->CodeFiles.Num()) { RunAnalyze(S); return; }
+
+		const int32 End = FMath::Min(S->CodeCursor + kPredictCodeBatch, S->CodeFiles.Num());
+		TArray<TSharedPtr<FJsonValue>> Files;
+		for (int32 i = S->CodeCursor; i < End; ++i) Files.Add(S->CodeFiles[i]);
+		S->CodeCursor = End;
+
+		TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+		Payload->SetArrayField(TEXT("files"), Files);
+		PostIngest(S, TEXT("code_files"), Payload, &IngestCodeBatch);
+	}
+
+	// 4) analyze the assembled session → the report.
+	void RunAnalyze(TSharedRef<FPredictSession> S)
+	{
+		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+		Body->SetStringField(TEXT("api_key"),        S->ApiKey);
+		Body->SetStringField(TEXT("session_id"),     S->SessionId);
+		Body->SetStringField(TEXT("schema_version"), TEXT("1.0"));
+
+		S->Client->SendRequest(S->BaseUrl + TEXT("/predict/analyze"),
+			EShintHttpMethod::POST, FShintCoreClient::SerializeJson(Body),
+			FOnShintRequestComplete::CreateLambda(
+				[S](const FShintRequestResult& Raw)
+		{
+			S->OnComplete.ExecuteIfBound(FShintCoreClient::ParsePredictResponse(Raw));
+		}));
+	}
+}
 
 void FShintCoreClient::AnalyzePrediction(
 	const FString& Profile, FOnShintPredictComplete OnComplete)
 {
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("api_key"),          Config.ApiKeyMongo);
-	Body->SetStringField(TEXT("engine"),           TEXT("UE5"));
-	Body->SetStringField(TEXT("project_name"),     Config.ProjectName);
-	Body->SetStringField(TEXT("platform_profile"),
-		Profile.IsEmpty() ? TEXT("desktop_60") : Profile);
-	Body->SetStringField(TEXT("schema_version"),   TEXT("1.0"));
+	TSharedRef<FPredictSession> S = MakeShared<FPredictSession>(AsShared());
+	S->BaseUrl     = Config.GetBaseUrl();
+	S->ApiKey      = Config.ApiKeyMongo;
+	S->ProjectName = Config.ProjectName;
+	S->Profile     = Profile.IsEmpty() ? TEXT("desktop_60") : Profile;
+	S->OnComplete  = OnComplete;
 
-	TArray<TSharedPtr<FJsonValue>> Assets;
-	CollectAssets(Assets);
-	Body->SetArrayField(TEXT("assets"), Assets);
-
-	TArray<TSharedPtr<FJsonValue>> Scenes;
-	if (TSharedPtr<FJsonObject> Scene = CollectSceneDigest())
-	{
-		Scenes.Add(MakeShared<FJsonValueObject>(Scene.ToSharedRef()));
-	}
-	Body->SetArrayField(TEXT("scenes"), Scenes);
-
-	TArray<TSharedPtr<FJsonValue>> CodeFiles;
-	CollectCodeFiles(CodeFiles);
-	Body->SetArrayField(TEXT("code_files"), CodeFiles);
+	// Cheap up front: asset handles (no load), scene digest, capped source.
+	GatherAssetData(S->Assets);
+	S->Scene = CollectSceneDigest();
+	CollectCodeFiles(S->CodeFiles);
 
 	UE_LOG(LogShintTools, Verbose,
-		TEXT("ShintCoreClient: /predict/analyze — %d assets, %d scenes, %d code files (profile=%s)"),
-		Assets.Num(), Scenes.Num(), CodeFiles.Num(), *Profile);
+		TEXT("ShintCoreClient: /predict session — %d assets (×%d), scene=%d, %d code files (profile=%s)"),
+		S->Assets.Num(), kPredictAssetBatch, S->Scene.IsValid() ? 1 : 0,
+		S->CodeFiles.Num(), *S->Profile);
 
-	SendRequest(Config.GetBaseUrl() + TEXT("/predict/analyze"),
+	// Open the session, then chain: assets → scene → code → analyze.
+	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("api_key"),          S->ApiKey);
+	Body->SetStringField(TEXT("engine"),           TEXT("UE5"));
+	Body->SetStringField(TEXT("project_name"),     S->ProjectName);
+	Body->SetStringField(TEXT("platform_profile"), S->Profile);
+	Body->SetStringField(TEXT("schema_version"),   TEXT("1.0"));
+
+	S->Client->SendRequest(S->BaseUrl + TEXT("/predict/session/start"),
 		EShintHttpMethod::POST, FShintCoreClient::SerializeJson(Body),
 		FOnShintRequestComplete::CreateLambda(
-			[OnComplete](const FShintRequestResult& Raw)
+			[S](const FShintRequestResult& Raw)
+	{
+		// Non-200 (403 non-Studio, transport error) → surface the detail report.
+		if (!Raw.bSuccess || Raw.StatusCode != 200)
 		{
-			OnComplete.ExecuteIfBound(
-				FShintCoreClient::ParsePredictResponse(Raw));
-		}));
+			S->OnComplete.ExecuteIfBound(FShintCoreClient::ParsePredictResponse(Raw));
+			return;
+		}
+		TSharedPtr<FJsonObject> Root;
+		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Raw.ResponseBody);
+		if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid()
+			|| !Root->TryGetStringField(TEXT("session_id"), S->SessionId)
+			|| S->SessionId.IsEmpty())
+		{
+			FailPredict(S, Raw.StatusCode, TEXT("Session start returned no session_id."));
+			return;
+		}
+		IngestAssetBatch(S);
+	}));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
