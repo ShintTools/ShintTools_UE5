@@ -58,15 +58,15 @@ namespace
 		return Ramp[Index % 6];
 	}
 
-	// The core emits severity as critical|warning|info; the dashboard's chips
-	// and badges speak critical/high/medium/low. Map once, here, so the badge
-	// (FromSeverity keys off the same strings for colour) and the filter agree.
+	// The core emits severity as critical|warning|info — never "medium" — so
+	// the dashboard's chips/badges only offer critical/high/low. Map once,
+	// here, so the badge (FromSeverity keys off the same strings for colour)
+	// and the filter agree.
 	FString NormalizeSeverity(const FString& Raw)
 	{
 		const FString S = Raw.ToLower();
 		if (S == TEXT("critical") || S == TEXT("error")) return TEXT("critical");
 		if (S == TEXT("warning"))                        return TEXT("high");
-		if (S == TEXT("medium"))                         return TEXT("medium");
 		return TEXT("low");   // info / anything else
 	}
 }
@@ -250,8 +250,6 @@ TSharedRef<SWidget> SShintPredictiveDashboard::BuildIssuesZone()
 				[ BuildFilterChip(LOCTEXT("SevCrit", "critical"), TEXT("critical"), false) ]
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 				[ BuildFilterChip(LOCTEXT("SevHigh", "high"),   TEXT("high"),     false) ]
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-				[ BuildFilterChip(LOCTEXT("SevMed", "medium"),  TEXT("medium"),   false) ]
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 				[ BuildFilterChip(LOCTEXT("SevLow", "low"),     TEXT("low"),      false) ]
 				// Divider gap, then dimension chips.
@@ -547,10 +545,23 @@ void SShintPredictiveDashboard::OnAnalyzeComplete(const FShintPredictReport& InR
 
 void SShintPredictiveDashboard::RefreshGauges()
 {
-	if (CpuGauge.IsValid())    CpuGauge->SetScore(Report.CpuRisk.Value);
-	if (GpuGauge.IsValid())    GpuGauge->SetScore(Report.GpuRisk.Value);
-	if (MemGauge.IsValid())    MemGauge->SetScore(Report.MemoryRisk.Value);
-	if (BuildGauge.IsValid())  BuildGauge->SetScore(Report.BuildHealth.Value);
+	// CPU/GPU risk can legitimately abstain (the Core scores an axis only
+	// when it has data for it — "no data" is not "risk 0"); memory/build
+	// are always scored. A no-data axis must read as "—", not a green 0.
+	auto ApplyRisk = [](TSharedPtr<SShintScoreGauge>& Gauge, const FShintPredictScore& Score)
+	{
+		if (!Gauge.IsValid()) return;
+		const bool bNoData = Score.Value == 0 && Score.Drivers.Num() == 0;
+		Gauge->SetNoData(bNoData);
+		if (!bNoData) Gauge->SetScore(Score.Value);
+	};
+	ApplyRisk(CpuGauge, Report.CpuRisk);
+	ApplyRisk(GpuGauge, Report.GpuRisk);
+	if (MemGauge.IsValid()) MemGauge->SetScore(Report.MemoryRisk.Value);
+	// build_health is 100 = healthy; this gauge is captioned "BUILD RISK" and
+	// sits alongside the other RISK gauges (higher = worse), so invert it —
+	// otherwise a perfectly healthy build (100) paints as maximum risk.
+	if (BuildGauge.IsValid())  BuildGauge->SetScore(100 - Report.BuildHealth.Value);
 	if (OverallGauge.IsValid()) OverallGauge->SetScore(Report.OverallHealth);
 
 	// Budget bar — stack CPU then GPU breakdown segments.
@@ -558,30 +569,49 @@ void SShintPredictiveDashboard::RefreshGauges()
 	{
 		TArray<FShintBudgetBarSegment> Segs;
 		int32 Idx = 0;
-		auto AddLine = [&](const FShintBudgetLine& Line)
+		auto AddLine = [&](const FShintBudgetLine& Line) -> int32
 		{
+			const int32 FirstIdx = Segs.Num();
 			for (const FShintBudgetSegment& B : Line.Breakdown)
 			{
 				FShintBudgetBarSegment S;
 				S.Label      = B.Label;
 				S.ExpectedMs = B.ExpectedMs;
-				S.MaxMs      = B.ExpectedMs;   // per-segment max unknown; tail on total below
+				S.MaxMs      = B.ExpectedMs;   // per-segment max unknown; tail on own line's below
 				S.Color      = SegmentColor(Idx++);
 				Segs.Add(S);
 			}
+			return Segs.Num() - FirstIdx;
 		};
-		AddLine(Report.Cpu);
-		AddLine(Report.Gpu);
-		// Widen the last segment's tail to the predicted CPU max for the
-		// uncertainty signature (approximation — the total band's headroom).
-		if (Segs.Num() > 0 && Report.Cpu.Predicted.IsSet())
+		const int32 CpuCount = AddLine(Report.Cpu);
+		const int32 GpuCount = AddLine(Report.Gpu);
+		// Widen each line's OWN last segment to its own predicted max for the
+		// uncertainty signature — CPU's headroom belongs on a CPU segment,
+		// GPU's on a GPU segment, never on whichever line was appended last.
+		if (CpuCount > 0 && Report.Cpu.Predicted.IsSet())
 		{
 			const double Headroom = Report.Cpu.Predicted.Max - Report.Cpu.Predicted.Expected;
-			Segs.Last().MaxMs = Segs.Last().ExpectedMs + FMath::Max(0.0, Headroom);
+			FShintBudgetBarSegment& Last = Segs[CpuCount - 1];
+			Last.MaxMs = Last.ExpectedMs + FMath::Max(0.0, Headroom);
 		}
+		if (GpuCount > 0 && Report.Gpu.Predicted.IsSet())
+		{
+			const double Headroom = Report.Gpu.Predicted.Max - Report.Gpu.Predicted.Expected;
+			FShintBudgetBarSegment& Last = Segs[CpuCount + GpuCount - 1];
+			Last.MaxMs = Last.ExpectedMs + FMath::Max(0.0, Headroom);
+		}
+		// The stacked bar sums CPU + GPU segments for a visual breakdown, but
+		// CPU/GPU work is pipelined — actual frame time is the bottleneck of
+		// the two, not their sum. Surface the Core's authoritative figure in
+		// the caption so the headline number is never overstated.
+		const FString FrameNote = Report.Frame.bIsSet
+			? FString::Printf(TEXT(" · predicted %s ms (%s-bound)"),
+				*FString::SanitizeFloat(Report.Frame.PredictedMs, 2),
+				Report.Frame.Bottleneck.IsEmpty() ? TEXT("un") : *Report.Frame.Bottleneck.ToUpper())
+			: FString();
 		BudgetBar->SetData(Segs, Report.FrameBudgetMs,
-			FString::Printf(TEXT("Frame budget · %s ms · %s"),
-				*FString::SanitizeFloat(Report.FrameBudgetMs, 2), *Report.ProfileName));
+			FString::Printf(TEXT("Frame budget · %s ms · %s%s"),
+				*FString::SanitizeFloat(Report.FrameBudgetMs, 2), *Report.ProfileName, *FrameNote));
 	}
 }
 
@@ -615,11 +645,26 @@ void SShintPredictiveDashboard::RefreshIssueList()
 
 TArray<FString> SShintPredictiveDashboard::SelectedItemIds() const
 {
+	// TopIssues and CostItems are separately-parsed arrays that can share an
+	// ItemId — checking a row in one doesn't check its counterpart in the
+	// other, so both must be scanned (deduplicated) or a selection made via
+	// "+ add to selection" (which can target an item outside the top 10,
+	// see FindIssue) would silently drop out of the simulated set.
+	TSet<FString>  Seen;
 	TArray<FString> Ids;
-	for (const FShintPredictIssue& Issue : Report.TopIssues)
+	auto Collect = [&](const TArray<FShintPredictIssue>& Arr)
 	{
-		if (Issue.bChecked) Ids.Add(Issue.ItemId);
-	}
+		for (const FShintPredictIssue& Issue : Arr)
+		{
+			if (Issue.bChecked && !Seen.Contains(Issue.ItemId))
+			{
+				Seen.Add(Issue.ItemId);
+				Ids.Add(Issue.ItemId);
+			}
+		}
+	};
+	Collect(Report.TopIssues);
+	Collect(Report.CostItems);
 	return Ids;
 }
 
@@ -700,7 +745,7 @@ void SShintPredictiveDashboard::RefreshSimulator(const FShintSimulateResult& Res
 	if (CpuGauge.IsValid())     CpuGauge->AnimateScore(Result.Before.CpuRisk.Value, Result.After.CpuRisk.Value);
 	if (GpuGauge.IsValid())     GpuGauge->AnimateScore(Result.Before.GpuRisk.Value, Result.After.GpuRisk.Value);
 	if (MemGauge.IsValid())     MemGauge->AnimateScore(Result.Before.MemoryRisk.Value, Result.After.MemoryRisk.Value);
-	if (BuildGauge.IsValid())   BuildGauge->AnimateScore(Result.Before.BuildHealth.Value, Result.After.BuildHealth.Value);
+	if (BuildGauge.IsValid())   BuildGauge->AnimateScore(100 - Result.Before.BuildHealth.Value, 100 - Result.After.BuildHealth.Value);
 	if (OverallGauge.IsValid()) OverallGauge->AnimateScore(Result.Before.OverallHealth, Result.After.OverallHealth);
 
 	// Next-fix recommendation + one-click "add to selection".
@@ -747,6 +792,14 @@ void SShintPredictiveDashboard::RefreshSimulator(const FShintSimulateResult& Res
 FShintPredictIssue* SShintPredictiveDashboard::FindIssue(const FString& ItemId)
 {
 	for (FShintPredictIssue& Issue : Report.TopIssues)
+	{
+		if (Issue.ItemId == ItemId) return &Issue;
+	}
+	// The simulator's recommendations are computed over the full cost_items
+	// set, not just the top-10 — a recommended id routinely falls outside
+	// TopIssues, in which case this used to return null and "+ add to
+	// selection" was a silent no-op.
+	for (FShintPredictIssue& Issue : Report.CostItems)
 	{
 		if (Issue.ItemId == ItemId) return &Issue;
 	}

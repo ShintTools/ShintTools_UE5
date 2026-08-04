@@ -124,12 +124,15 @@ struct FShintLodFindingItem
 };
 using FShintLodFindingPtr = TSharedPtr<FShintLodFindingItem>;
 
-// Asset Optimizer result tab — findings are grouped by asset family.
-enum class ELodTab : uint8 { Textures, Meshes, Materials };
+// Asset Optimizer result tab — findings are grouped by asset family. Other
+// catches every finding whose category isn't Texture/Mesh/Material (e.g.
+// Mobile-profile findings) — without it those findings counted toward the
+// ISSUES KPI but had no tab that would ever show them.
+enum class ELodTab : uint8 { Textures, Meshes, Materials, Other };
 
 // Top-level LOD Auditor destinations (§21). The Assets view hosts the
 // Textures/Meshes/Materials sub-tabs; the rest are new views.
-enum class ELodView : uint8 { Summary, Assets, Rules, Fixes, Budgets };
+enum class ELodView : uint8 { Summary, Assets, Fixes, Budgets };
 // [LOD-STRIP-END]
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -200,14 +203,11 @@ private:
 	TSharedRef<SWidget> BuildLodTableHeader();
 	TSharedRef<ITableRow> GenerateLodFindingRow(
 		FShintLodFindingPtr Item, const TSharedRef<STableViewBase>& Owner);
-	// §21 — the five top-level LOD views + their nav.
-	TSharedRef<SWidget> BuildLodViewNav();       // Summary/Assets/Rules/Fixes/Budgets
+	// §21 — the top-level LOD views + their nav.
+	TSharedRef<SWidget> BuildLodViewNav();       // Summary/Assets/Fixes/Budgets
 	TSharedRef<SWidget> BuildLodSummaryView();   // KPIs + VRAM treemap
-	TSharedRef<SWidget> BuildLodRulesView();     // findings grouped by rule
 	TSharedRef<SWidget> BuildLodFixesView();     // in-place fix journal + Revert
 	TSharedRef<SWidget> BuildLodBudgetsView();   // per-platform memory budgets
-	TSharedRef<ITableRow> GenerateLodRuleRow(
-		TSharedPtr<struct FShintLodRuleGroup> Item, const TSharedRef<STableViewBase>& Owner);
 	TSharedRef<ITableRow> GenerateLodJournalRow(
 		TSharedPtr<struct FShintLodJournalRow> Item, const TSharedRef<STableViewBase>& Owner);
 	// [LOD-STRIP-END]
@@ -296,8 +296,18 @@ private:
 	// §21 view switching + new-view refresh + in-place (registry) fix handlers.
 	void   SetLodView(ELodView View);
 	void   RefreshLodTreemap();       // rebuild the Summary treemap from findings
-	void   RefreshLodRulesList();     // regroup findings by rule id
 	void   RefreshLodFixesList();     // reload the in-place fix journal
+	// Drops finding(s) from LastLodResult (the single source every KPI/
+	// treemap/row reads from) and rebuilds the derived views once — the row,
+	// its contribution to ISSUES/EST. SAVING, and its treemap cell all
+	// disappear together the instant a fix actually applies, instead of
+	// waiting for the next full scan. Batch callers (Fix Selected/Fix All)
+	// must collect keys during their loop and call the plural once
+	// afterward — RemoveFixedLodFinding rebuilds LodFilteredItems in place,
+	// so calling it mid-iteration over that same array would invalidate the
+	// loop.
+	void   RemoveFixedLodFinding(const FString& AssetPath, const FString& RuleId);
+	void   RemoveFixedLodFindings(const TArray<TPair<FString, FString>>& Keys);
 	FReply OnLodFixInPlace(FShintLodFindingPtr Item);   // registry apply (one row)
 	FReply OnLodFixAllInPlace();                        // registry apply (batch)
 	FReply OnLodRevertFix(TSharedPtr<struct FShintLodJournalRow> Row);
@@ -390,6 +400,13 @@ private:
 	// [LOD-STRIP-BEGIN]
 	TArray<FShintLodFindingPtr> LodFindingItems;    // all findings from last audit
 	TArray<FShintLodFindingPtr> LodFilteredItems;   // visible rows (tab + filters)
+	// "AssetPath|RuleId" of every finding successfully fixed this editor
+	// session. A fresh scan re-reads the same (possibly still-dirty,
+	// unsaved) in-memory asset and would normally not re-flag it — this set
+	// is the fast path that also hides the row the INSTANT a fix applies,
+	// without waiting for the next scan. Cleared on every new scan (a fresh
+	// server-side result is itself authoritative once it arrives).
+	TSet<FString> AppliedLodFixKeys;
 	// Shared thumbnail renderer pool for the Asset Optimizer table (Stage 2b).
 	// Lazily created on first row generation; one pool backs every row's 34px
 	// thumbnail so the editor renders real asset previews instead of a swatch.
@@ -466,8 +483,6 @@ private:
 	ELodView LodActiveView = ELodView::Summary;
 	TSharedPtr<class SWidgetSwitcher>  LodViewSwitcher;
 	TSharedPtr<class SShintTreemap>    LodTreemap;
-	TArray<TSharedPtr<struct FShintLodRuleGroup>>  LodRuleGroups;
-	TSharedPtr<SListView<TSharedPtr<struct FShintLodRuleGroup>>>  LodRulesListView;
 	TArray<TSharedPtr<struct FShintLodJournalRow>> LodJournalRows;
 	TSharedPtr<SListView<TSharedPtr<struct FShintLodJournalRow>>> LodFixesListView;
 	FString LodFixConfidence = TEXT("high");   // Fix-All confidence floor

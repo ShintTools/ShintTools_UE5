@@ -2,6 +2,78 @@
 
 ---
 
+## [1.4.1] — 2026-08-04 — Predictive Profiler + LOD Auditor client audit
+
+### Fixed
+- **Predictive Profiler — BUILD RISK always read 100.** The gauge painted the
+  Core's `build_health` score (100 = healthy) directly under a RISK label
+  without inverting it, so a perfectly healthy build showed as maximum risk
+  (and painted red). Also fixed in the Impact Simulator's before→after
+  animation for the same gauge.
+- **Predictive Profiler — Top Issues' BUILD filter (and dimension tags)
+  almost never matched anything.** The client picked a finding's "dominant"
+  impact dimension by comparing raw magnitudes across different units (MB vs
+  ms) — `build_mb` is by construction 85% of `vram_mb`, so it could
+  structurally never win. Now parses and prefers the Core's own
+  budget-normalized `primary_cost.dimension`.
+- **Predictive Profiler — "+ add to selection" was a silent no-op** for any
+  recommendation outside the top 10 issues (the simulator's recommendations
+  are computed over the full cost_items set). `FindIssue`/`SelectedItemIds`
+  now also search `CostItems`.
+- **Predictive Profiler — CPU/GPU risk showed 0 (green) instead of "no
+  data"** when the Core genuinely had nothing to score (no code/scene data
+  collected) — the gauges now call `SetNoData()` for that case instead of
+  painting a false "no risk".
+- **Predictive Profiler — frame-budget bar's uncertainty tail was applied to
+  the wrong segment** (CPU's headroom landed on a GPU segment) and the bar's
+  stacked CPU+GPU total silently overstated true frame time (CPU/GPU work is
+  pipelined, not additive). The caption now also surfaces the Core's own
+  bottleneck-based frame prediction.
+- **Predictive Profiler — dead "medium" severity filter** removed; the Core
+  only ever emits critical/warning/info.
+- **LOD Auditor — a fixed finding could survive Auto-Fix and keep showing up
+  as unresolved.** Root cause: the in-place fixer mapped the Core's
+  recommended `compression`/`lod_group` values (`"BC7"`, `"NormalMap"`, …)
+  through UE's raw enum-reflection names, which never match (`"BC7"` ≠
+  `"TC_BC7"`) — every such fix silently changed nothing while still being
+  counted as a success, and `IsAutoApplicable` hid the Fix button for the
+  same reason on rows it could have handled. Added a proper Core-vocabulary
+  → UE-enum mapping (also fixing two wrong targets in the older duplicate-
+  path helper: BC4 is `TC_Alpha` not `TC_Grayscale`, BC6H is
+  `TC_HDR_Compressed` not `TC_HDR`, which is uncompressed RGBA16F).
+- **LOD Auditor — a genuinely successful fix still left the finding in the
+  list, KPI counts, and treemap** until the next full scan. Fixed findings
+  now drop out of the table, the ISSUES/EST. SAVING KPIs, and the VRAM
+  treemap the instant the fix applies (`RemoveFixedLodFinding`), and a
+  session-scoped key set (`asset_path|rule_id`) prevents a stray re-flag if
+  a re-scan races ahead of the in-memory asset change.
+- **LOD Auditor — "Fix Selected" silently miscounted no-op fixes as
+  successes** (an unmapped/already-matching value and a real property change
+  were both reported as "fixed"); now separately reports "already matched".
+- **LOD Auditor — "Fix (N)" and Fix Selected only saw the current tab.**
+  Checking rows on one tab, then switching tabs, silently dropped them from
+  both the counter and from what Fix Selected would act on. Both are now
+  scoped to all findings, not just the visible tab.
+- **LOD Auditor — findings outside Texture/Mesh/Material (e.g. Mobile-
+  profile findings) counted toward the ISSUES KPI but had no tab that could
+  ever show them.** Added an **Other** tab as a catch-all so no category is
+  silently invisible; the ISSUES subtitle now reconciles with the header
+  total.
+- **LOD Auditor — Budgets view showed the wrong VRAM pool budget** (hardcoded
+  4096/1024 MB) versus what LT015 actually audited against
+  (`LT015_POOL_BUDGET_MB`: 2000 default / 500 mobile in the Core's
+  thresholds) — a studio could see "plenty of headroom" in Budgets while the
+  findings above already flagged the pool as over budget.
+
+### Removed
+- **LOD Auditor — the Rules view** (findings grouped by rule id). The Unity
+  client has no equivalent, and the plugin ships to both engines from one
+  contract now. `ELodView::Rules`, its widgets, and its stale symbol entries
+  in `build_tier_release.py`'s leak-detection list are gone; no other code
+  referenced this view by name or index.
+
+---
+
 ## [1.4.0] — 2026-07-28 — Predictive Profiler (Studio)
 
 ### Added

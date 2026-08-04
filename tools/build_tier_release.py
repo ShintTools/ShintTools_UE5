@@ -98,11 +98,11 @@ MODULES = {
             "ApplyFromFinding", "CanApply",
             # §21 views + Summary treemap widget.
             "SShintTreemap", "FShintTreemapItem", "ELodView",
-            "FShintLodRuleGroup", "FShintLodJournalRow",
-            "BuildLodViewNav", "BuildLodSummaryView", "BuildLodRulesView",
+            "FShintLodJournalRow",
+            "BuildLodViewNav", "BuildLodSummaryView",
             "BuildLodFixesView", "BuildLodBudgetsView", "RefreshLodTreemap",
             "OnLodFixInPlace", "OnLodFixAllInPlace", "OnLodRevertFix",
-            "LodViewSwitcher", "LodTreemap", "LodActiveView", "LodRulesListView",
+            "LodViewSwitcher", "LodTreemap", "LodActiveView",
             "LodFixesListView", "LodFixConfidence",
             # Types / delegates / client API stripped from the headers.
             "FShintLodFindingItem", "FShintLodFindingPtr", "FShintLodAuditResult",

@@ -2,16 +2,21 @@
 //
 // Asset Optimizer destination (Studio tier) — the LOD Auditor's client UI.
 // Replicates the Asset Optimizer mockup: a 5-tile KPI row, a Scan bar with a
-// target-platform selector, Textures/Meshes/Materials tabs, a filter row
+// target-platform selector, Textures/Meshes/Materials/Other tabs, a filter row
 // (search + group/format/severity + Export + bulk Fix), and a per-finding data
 // table (thumbnail · group · resolution · format · current/potential size ·
 // savings · severity · recommendation · per-row Fix).
 //
 // Data: findings come from /assets/lod/audit; resolution/group/format and
 // current/potential size are joined onto each finding client-side (see
-// ShintCoreClient_Lod.cpp). Per-row + bulk Fix write an optimised *duplicate*
-// (<Name>_Optimized) with the server's recommended max-size/compression applied,
-// leaving the original untouched; Export writes a CSV of all findings.
+// ShintCoreClient_Lod.cpp). The default, primary fix path is IN-PLACE (§20.5,
+// ShintLodFixerRegistry) — it writes the server's recommendation directly onto
+// the original asset, journaled and revertible. ApplyLodFixDuplicate (writes a
+// non-destructive <Name>_Optimized copy, original untouched) is the fallback
+// for texture size/compression findings the registry can't dispatch to (see
+// OnLodFixRow). A fix that actually applies removes its finding from the list
+// immediately (RemoveFixedLodFinding) — it does not wait for the next scan.
+// Export writes a CSV of all findings.
 
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
@@ -149,16 +154,29 @@ namespace
 
 	// Map the server's recommended compression string to a UE setting.
 	// Returns TC_MAX for unknown values (caller then skips the compression change).
+	// Kept in sync with ShintLodFixerRegistry.cpp's MapCoreCompression — same
+	// Core vocabulary, same target enum values (BC4 is TC_Alpha not
+	// TC_Grayscale; BC6H is TC_HDR_Compressed not TC_HDR, which is
+	// uncompressed RGBA16F).
 	TextureCompressionSettings LodMapRecCompression(const FString& In)
 	{
 		const FString S = In.TrimStartAndEnd().ToUpper();
 		if (S == TEXT("BC7"))                                   return TC_BC7;
 		if (S == TEXT("BC5")  || S == TEXT("NORMALMAP"))        return TC_Normalmap;
-		if (S == TEXT("BC4")  || S == TEXT("GRAYSCALE"))        return TC_Grayscale;
-		if (S == TEXT("BC6H") || S == TEXT("BC6") || S == TEXT("HDR")) return TC_HDR;
+		if (S == TEXT("BC4")  || S == TEXT("ALPHA"))            return TC_Alpha;
+		if (S == TEXT("BC6H") || S == TEXT("BC6"))              return TC_HDR_Compressed;
+		if (S == TEXT("RGBA8"))                                 return TC_EditorIcon;
 		if (S == TEXT("BC1")  || S == TEXT("BC3") || S == TEXT("DXT1") ||
 		    S == TEXT("DXT5") || S == TEXT("DEFAULT"))          return TC_Default;
 		return TC_MAX;
+	}
+
+	// Identity key for a finding, used to hide a row the instant its fix
+	// applies (see AppliedLodFixKeys) — findings have no server-issued id,
+	// and asset_path + rule_id is the natural, stable substitute.
+	FString LodFixKey(const FString& AssetPath, const FString& RuleId)
+	{
+		return AssetPath + TEXT("|") + RuleId;
 	}
 
 	void LodShowSuccessToast(const FString& Title, const FString& Detail)
@@ -281,11 +299,13 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodAuditSection()
 				]
 			]
 
-			// Top-level view nav — Summary / Assets / Rules / Fixes / Budgets (§21)
+			// Top-level view nav — Summary / Assets / Fixes / Budgets (§21).
+			// Rules was removed: the Unity client has no equivalent view, and
+			// the plugin now ships to both engines from one contract.
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 10.f)
 			[ BuildLodViewNav() ]
 
-			// Active view (all five built once; the switcher keeps them alive so
+			// Active view (all four built once; the switcher keeps them alive so
 			// KPI/treemap/list handles stay valid regardless of which is showing).
 			+ SVerticalBox::Slot().AutoHeight()
 			[
@@ -304,8 +324,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodAuditSection()
 					[ BuildLodResultsPanel() ]
 				]
 
-				// 2 — Rules   3 — Fixes   4 — Budgets
-				+ SWidgetSwitcher::Slot()[ BuildLodRulesView() ]
+				// 2 — Fixes   3 — Budgets
 				+ SWidgetSwitcher::Slot()[ BuildLodFixesView() ]
 				+ SWidgetSwitcher::Slot()[ BuildLodBudgetsView() ]
 			]
@@ -454,8 +473,10 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodToolbar()
 			[ TabBtn(LOCTEXT("AOTabTex", "Textures"),   ELodTab::Textures) ]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 4.f, 0.f)
 			[ TabBtn(LOCTEXT("AOTabMesh", "Meshes"),    ELodTab::Meshes) ]
-			+ SHorizontalBox::Slot().AutoWidth()
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 4.f, 0.f)
 			[ TabBtn(LOCTEXT("AOTabMat", "Materials"),  ELodTab::Materials) ]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[ TabBtn(LOCTEXT("AOTabOther", "Other"),    ELodTab::Other) ]
 		]
 		// Filter row
 		+ SVerticalBox::Slot().AutoHeight()
@@ -600,6 +621,18 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodTableHeader()
 		HdrCell(LOCTEXT("AOColSev",   "SEVERITY"),       LodColMat::Sev);
 		HdrCell(LOCTEXT("AOColRec",   "RECOMMENDATION"), LodColMat::Rec);
 		break;
+	case ELodTab::Other:
+		// No family-specific numeric columns exist for this bucket (VFX/
+		// Mobile/Animation/Lighting/Audio findings have heterogeneous
+		// shapes) — CATEGORY replaces the family-specific cells so the row
+		// still says what kind of finding it is.
+		HdrCell(LOCTEXT("AOColAsset", "ASSET"),          LodCol::Asset);
+		HdrCell(LOCTEXT("AOColOCat",  "CATEGORY"),       LodCol::Group + LodCol::Res + LodCol::Fmt);
+		HdrCell(LOCTEXT("AOColOSav",  "EST. SAVINGS"),   LodCol::Cur + LodCol::Pot);
+		HdrCell(LOCTEXT("AOColSav",   "SAVINGS"),        LodCol::Sav);
+		HdrCell(LOCTEXT("AOColSev",   "SEVERITY"),       LodCol::Sev);
+		HdrCell(LOCTEXT("AOColRec",   "RECOMMENDATION"), LodCol::Rec);
+		break;
 	default: // Textures
 		HdrCell(LOCTEXT("AOColAsset", "ASSET"),          LodCol::Asset);
 		HdrCell(LOCTEXT("AOColGroup", "GROUP"),          LodCol::Group);
@@ -637,6 +670,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodResultsPanel()
 			{
 			case ELodTab::Meshes:    return LOCTEXT("AOEmptyMesh", "No mesh findings — meshes look clean.");
 			case ELodTab::Materials: return LOCTEXT("AOEmptyMat",  "No material findings — materials look clean.");
+			case ELodTab::Other:     return LOCTEXT("AOEmptyOther","No other findings.");
 			default:                 return LOCTEXT("AOEmptyTex",  "No texture findings — textures look clean.");
 			}
 		})
@@ -784,6 +818,14 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateLodFindingRow(
 				? FString::Printf(TEXT("%.1f MB"), F.VramMb) : FString()),
 			LodColMat::Sav, false, FShintStyle::Colors::SevLow());
 		break;
+	case ELodTab::Other:
+		// CATEGORY (as reported by the server) · EST. SAVINGS, no per-family
+		// numeric fields apply here.
+		TextCell(F.Category, LodCol::Group + LodCol::Res + LodCol::Fmt, false, C_Gray());
+		TextCell(F.VramMb > 0.0 ? FString::Printf(TEXT("%.1f MB"), F.VramMb) : FString(),
+			LodCol::Cur + LodCol::Pot, false, FShintStyle::Colors::SevLow());
+		TextCell(FString(), LodCol::Sav, false, C_Gray());   // no per-item % — no baseline to compare against
+		break;
 	default: // Textures — GROUP · RESOLUTION · FORMAT · CURRENT · POTENTIAL · SAVINGS
 		TextCell(F.Group,     LodCol::Group, false, C_Gray());
 		TextCell(Resolution,  LodCol::Res,   true,  C_Gray());
@@ -880,6 +922,10 @@ FReply SShintToolsPanel::OnAuditLodsClicked()
 
 	LodFindingItems.Empty();
 	LodFilteredItems.Empty();
+	// A fresh scan's result is authoritative the moment it lands — the
+	// session-scoped "hide this immediately" set from the previous scan no
+	// longer needs to override it.
+	AppliedLodFixKeys.Empty();
 	if (LodFindingListView.IsValid()) LodFindingListView->RebuildList();
 	if (LodEmptyState.IsValid()) LodEmptyState->SetVisibility(EVisibility::Visible);
 
@@ -909,20 +955,24 @@ void SShintToolsPanel::OnLodAuditComplete(const FShintLodAuditResult& Result)
 	PopulateLodFindingList(Result);
 	RefreshLodStats();
 	RefreshLodTreemap();     // Summary view — VRAM-by-asset picture
-	RefreshLodRulesList();   // Rules view — findings grouped by rule
 
 	// Per-family completion summary, mirroring the KPI subtitle breakdown.
-	int32 TexIssues = 0, MeshIssues = 0, MatIssues = 0;
+	int32 TexIssues = 0, MeshIssues = 0, MatIssues = 0, OtherIssues = 0;
 	for (const FShintLodFinding& F : Result.Findings)
 	{
 		if (F.Category.Contains(TEXT("Texture")))        ++TexIssues;
 		else if (F.Category.Contains(TEXT("Mesh")))      ++MeshIssues;
 		else if (F.Category.Contains(TEXT("Material")))  ++MatIssues;
+		else                                              ++OtherIssues;
 	}
 	LodShowSuccessToast(TEXT("Scan complete"),
-		FString::Printf(TEXT("%d assets audited — %d issues (Tex %d · Mesh %d · Mat %d)."),
-			Result.AssetsAudited, Result.IssuesFound,
-			TexIssues, MeshIssues, MatIssues));
+		OtherIssues > 0
+			? FString::Printf(TEXT("%d assets audited — %d issues (Tex %d · Mesh %d · Mat %d · Other %d)."),
+				Result.AssetsAudited, Result.IssuesFound,
+				TexIssues, MeshIssues, MatIssues, OtherIssues)
+			: FString::Printf(TEXT("%d assets audited — %d issues (Tex %d · Mesh %d · Mat %d)."),
+				Result.AssetsAudited, Result.IssuesFound,
+				TexIssues, MeshIssues, MatIssues));
 }
 
 void SShintToolsPanel::PopulateLodFindingList(const FShintLodAuditResult& Result)
@@ -930,11 +980,50 @@ void SShintToolsPanel::PopulateLodFindingList(const FShintLodAuditResult& Result
 	LodFindingItems.Empty(Result.Findings.Num());
 	for (const FShintLodFinding& F : Result.Findings)
 	{
+		// Belt-and-suspenders against a finding the user already fixed this
+		// session reappearing — normally a re-scan simply won't re-flag it
+		// (the in-memory asset already carries the fixed value), but this
+		// covers the case where the fix hasn't propagated to whatever the
+		// scan actually reads from yet.
+		if (AppliedLodFixKeys.Contains(LodFixKey(F.AssetPath, F.RuleId)))
+			continue;
 		TSharedPtr<FShintLodFindingItem> Item = MakeShared<FShintLodFindingItem>();
 		Item->Finding = F;
 		LodFindingItems.Add(Item);
 	}
 	RefreshLodFilteredList();
+}
+
+void SShintToolsPanel::RemoveFixedLodFinding(const FString& AssetPath, const FString& RuleId)
+{
+	RemoveFixedLodFindings({ TPair<FString, FString>(AssetPath, RuleId) });
+}
+
+void SShintToolsPanel::RemoveFixedLodFindings(const TArray<TPair<FString, FString>>& Keys)
+{
+	if (Keys.Num() == 0) return;
+	for (const TPair<FString, FString>& K : Keys)
+		AppliedLodFixKeys.Add(LodFixKey(K.Key, K.Value));
+
+	for (int32 i = LastLodResult.Findings.Num() - 1; i >= 0; --i)
+	{
+		const FShintLodFinding& F = LastLodResult.Findings[i];
+		const bool bFixed = Keys.ContainsByPredicate([&](const TPair<FString, FString>& K)
+		{
+			return K.Key == F.AssetPath && K.Value == F.RuleId;
+		});
+		if (!bFixed) continue;
+		LastLodResult.IssuesFound = FMath::Max(0, LastLodResult.IssuesFound - 1);
+		LastLodResult.EstimatedVramSavedMb =
+			FMath::Max(0.0, LastLodResult.EstimatedVramSavedMb - F.VramMb);
+		LastLodResult.Findings.RemoveAt(i);
+	}
+
+	// Single rebuild path — the same one OnLodAuditComplete uses — so the
+	// table, KPIs and treemap can never disagree about which findings exist.
+	PopulateLodFindingList(LastLodResult);
+	RefreshLodStats();
+	RefreshLodTreemap();
 }
 
 void SShintToolsPanel::SetLodTab(ELodTab Tab)
@@ -947,8 +1036,13 @@ void SShintToolsPanel::SetLodTab(ELodTab Tab)
 
 int32 SShintToolsPanel::LodCheckedCount() const
 {
+	// Global, not scoped to the current tab: OnLodFixSelected applies every
+	// checked row regardless of which tab is active when Fix is pressed, so
+	// the label must count the same set it will actually act on — otherwise
+	// switching tabs after checking rows silently drops the "N" from "Fix
+	// (N)" while those rows are still queued.
 	int32 N = 0;
-	for (const FShintLodFindingPtr& It : LodFilteredItems)
+	for (const FShintLodFindingPtr& It : LodFindingItems)
 		if (It.IsValid() && It->bChecked) ++N;
 	return N;
 }
@@ -964,11 +1058,28 @@ void SShintToolsPanel::SetLodAllChecked(bool bChecked)
 			FString::Printf(TEXT("Fix (%d)"), LodCheckedCount())));
 }
 
+namespace
+{
+	// True when `Category` belongs on the given tab. Other is a negative
+	// match (anything not Texture/Mesh/Material) so a finding always has a
+	// tab it can show up on — no category is silently uncovered.
+	bool LodCategoryMatchesTab(const FString& Category, ELodTab Tab)
+	{
+		const bool bTex = Category.Contains(TEXT("Texture"));
+		const bool bMesh = Category.Contains(TEXT("Mesh"));
+		const bool bMat = Category.Contains(TEXT("Material"));
+		switch (Tab)
+		{
+		case ELodTab::Textures:  return bTex;
+		case ELodTab::Meshes:    return bMesh;
+		case ELodTab::Materials: return bMat;
+		default:                 return !bTex && !bMesh && !bMat;   // Other
+		}
+	}
+}
+
 void SShintToolsPanel::RefreshLodFilteredList()
 {
-	const FString TabCat =
-		LodActiveTab == ELodTab::Textures  ? TEXT("Texture")  :
-		LodActiveTab == ELodTab::Meshes    ? TEXT("Mesh")     : TEXT("Material");
 	const FString Search = LodSearchText.TrimStartAndEnd();
 
 	LodFilteredItems.Empty(LodFindingItems.Num());
@@ -976,7 +1087,7 @@ void SShintToolsPanel::RefreshLodFilteredList()
 	{
 		const FShintLodFinding& F = It->Finding;
 
-		if (!F.Category.Contains(TabCat)) continue;
+		if (!LodCategoryMatchesTab(F.Category, LodActiveTab)) continue;
 		if (!Search.IsEmpty() &&
 			!F.AssetPath.Contains(Search, ESearchCase::IgnoreCase)) continue;
 		if (LodGroupFilter != TEXT("All Groups") && F.Group != LodGroupFilter) continue;
@@ -991,8 +1102,15 @@ void SShintToolsPanel::RefreshLodFilteredList()
 	if (LodEmptyState.IsValid())
 		LodEmptyState->SetVisibility(
 			LodFilteredItems.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed);
+	// Reflect rows checked in OTHER tabs too — Fix Selected acts on all of
+	// them, not just what's currently visible (see LodCheckedCount).
 	if (LodFixSelected_Label.IsValid())
-		LodFixSelected_Label->SetText(LOCTEXT("AOFixN", "Fix"));
+	{
+		const int32 N = LodCheckedCount();
+		LodFixSelected_Label->SetText(N > 0
+			? FText::FromString(FString::Printf(TEXT("Fix (%d)"), N))
+			: LOCTEXT("AOFixN", "Fix"));
+	}
 }
 
 void SShintToolsPanel::RefreshLodStats()
@@ -1000,12 +1118,18 @@ void SShintToolsPanel::RefreshLodStats()
 	const FShintLodAuditResult& R = LastLodResult;
 
 	// Per-category issue counts (from findings) for the breakdown subtitles.
-	int32 TexIssues = 0, MeshIssues = 0, MatIssues = 0;
+	// Every finding lands in exactly one bucket (Other is the catch-all) so
+	// Tex+Mesh+Mat+Other always reconciles with IssuesFound — previously
+	// anything outside the three named families (e.g. Mobile-profile
+	// findings) counted toward IssuesFound but into none of these buckets,
+	// so the subtitle's own numbers never summed to the header above it.
+	int32 TexIssues = 0, MeshIssues = 0, MatIssues = 0, OtherIssues = 0;
 	for (const FShintLodFinding& F : R.Findings)
 	{
 		if (F.Category.Contains(TEXT("Texture")))        ++TexIssues;
 		else if (F.Category.Contains(TEXT("Mesh")))      ++MeshIssues;
 		else if (F.Category.Contains(TEXT("Material")))  ++MatIssues;
+		else                                              ++OtherIssues;
 	}
 
 	if (LodFiles_Label.IsValid())
@@ -1049,8 +1173,11 @@ void SShintToolsPanel::RefreshLodStats()
 	if (LodIssues_Label.IsValid())
 		LodIssues_Label->SetText(FText::FromString(FmtN(R.IssuesFound)));
 	if (LodIssuesSub_Label.IsValid())
-		LodIssuesSub_Label->SetText(FText::FromString(FString::Printf(
-			TEXT("Tex: %d   Mesh: %d   Mat: %d"), TexIssues, MeshIssues, MatIssues)));
+		LodIssuesSub_Label->SetText(FText::FromString(OtherIssues > 0
+			? FString::Printf(TEXT("Tex: %d   Mesh: %d   Mat: %d   Other: %d"),
+				TexIssues, MeshIssues, MatIssues, OtherIssues)
+			: FString::Printf(TEXT("Tex: %d   Mesh: %d   Mat: %d"),
+				TexIssues, MeshIssues, MatIssues)));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1155,9 +1282,16 @@ FReply SShintToolsPanel::OnLodFixRow(FShintLodFindingPtr Item)
 
 FReply SShintToolsPanel::OnLodFixSelected()
 {
-	int32 Ok = 0, Failed = 0, Skipped = 0;
+	int32 Ok = 0, Failed = 0, Skipped = 0, AlreadyOk = 0;
 	FString LastErr;
-	for (const FShintLodFindingPtr& It : LodFilteredItems)
+	// Collected, not applied in-place: RemoveFixedLodFindings rebuilds
+	// LodFindingItems, and this loop is iterating that same array.
+	TArray<TPair<FString, FString>> FixedKeys;
+	// ALL findings, not just the current tab's visible rows — a row checked
+	// on Meshes and left checked while the user switched to Textures must
+	// still be included, matching what the "Fix (N)" label (LodCheckedCount)
+	// now promises.
+	for (const FShintLodFindingPtr& It : LodFindingItems)
 	{
 		if (!It.IsValid() || !It->bChecked) continue;
 		const FShintLodFinding& F = It->Finding;
@@ -1177,21 +1311,30 @@ FReply SShintToolsPanel::OnLodFixSelected()
 		if (FShintLodFixerRegistry::CanApply(F.AssetPath, F.Recommended))
 		{
 			const FShintLodFixResult R = FShintLodFixerRegistry::ApplyFromFinding(F);
-			if (!R.Error.IsEmpty()) { ++Failed; LastErr = R.Error; }
-			else                    ++Ok;   // applied or idempotent no-op — not a failure
+			if (!R.Error.IsEmpty())  { ++Failed; LastErr = R.Error; }
+			else if (R.bApplied)     { ++Ok; FixedKeys.Emplace(F.AssetPath, F.RuleId); }
+			else                     ++AlreadyOk;   // idempotent no-op — already matched, not a fix
 			continue;
 		}
 
+		// The duplicate path never touches the original asset — its finding
+		// stays valid and stays in the list, so it's NOT added to FixedKeys.
 		FString NewPath, Err;
 		if (ApplyLodFixDuplicate(F, NewPath, Err)) ++Ok;
 		else { ++Failed; LastErr = Err; }
 	}
-	if (Ok == 0 && Failed == 0 && Skipped == 0)
+
+	RemoveFixedLodFindings(FixedKeys);   // one rebuild, after the loop is done reading LodFindingItems
+
+	if (Ok == 0 && Failed == 0 && Skipped == 0 && AlreadyOk == 0)
 		ShintShowErrorToast(TEXT("Nothing selected"),
 			TEXT("Tick one or more rows, then press Fix."));
 	else if (Failed == 0)
 		LodShowSuccessToast(TEXT("Fix Selected complete"),
-			FString::Printf(TEXT("%d finding(s) fixed%s."), Ok,
+			FString::Printf(TEXT("%d finding(s) fixed%s%s."), Ok,
+				AlreadyOk > 0
+					? *FString::Printf(TEXT(", %d already matched"), AlreadyOk)
+					: TEXT(""),
 				Skipped > 0
 					? *FString::Printf(TEXT(", %d skipped (manual)"), Skipped)
 					: TEXT("")));
@@ -1285,20 +1428,11 @@ FReply SShintToolsPanel::OnLodExport()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §21 — top-level views (Summary / Assets / Rules / Fixes / Budgets)
+// §21 — top-level views (Summary / Assets / Fixes / Budgets)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Row models for the Rules + Fixes list views (defined here; the header only
-// forward-declares them).
-struct FShintLodRuleGroup
-{
-	FString RuleId;
-	FString RuleName;
-	FString Severity;      // worst severity seen across the group
-	int32   Count   = 0;
-	double  VramMb  = 0.0; // summed estimated saving
-};
-
+// Row model for the Fixes list view (defined here; the header only
+// forward-declares it).
 struct FShintLodJournalRow
 {
 	FString Id;
@@ -1330,14 +1464,6 @@ namespace
 		return Name;
 	}
 
-	// Severity ordering for "worst wins" grouping (higher = more severe).
-	int32 LodSevRank(const FString& S)
-	{
-		const FString L = S.ToLower();
-		if (L == TEXT("error"))   return 3;
-		if (L == TEXT("warning")) return 2;
-		return 1;
-	}
 }
 
 // ── View nav ─────────────────────────────────────────────────────────────────
@@ -1364,8 +1490,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildLodViewNav()
 		[ NavBtn(LOCTEXT("LodNavSummary", "Summary"), ELodView::Summary) ]
 		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
 		[ NavBtn(LOCTEXT("LodNavAssets",  "Assets"),  ELodView::Assets) ]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
-		[ NavBtn(LOCTEXT("LodNavRules",   "Rules"),   ELodView::Rules) ]
 		+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
 		[ NavBtn(LOCTEXT("LodNavFixes",   "Fixes"),   ELodView::Fixes) ]
 		+ SHorizontalBox::Slot().AutoWidth()
@@ -1434,112 +1558,6 @@ void SShintToolsPanel::RefreshLodTreemap()
 	TArray<FShintTreemapItem> Items;
 	ByAsset.GenerateValueArray(Items);
 	LodTreemap->SetItems(Items);
-}
-
-// ── Rules view — findings grouped by rule id ────────────────────────────────
-TSharedRef<SWidget> SShintToolsPanel::BuildLodRulesView()
-{
-	return SNew(SVerticalBox)
-		// Column header
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)
-		[
-			SNew(SBorder).BorderImage(ST4::Solid(C_BG())).Padding(FMargin(10.f, 6.f))
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().FillWidth(1.0f)
-				[ SNew(STextBlock).Text(LOCTEXT("LodRuleHdrId", "RULE")).Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())) ]
-				+ SHorizontalBox::Slot().FillWidth(3.0f)
-				[ SNew(STextBlock).Text(LOCTEXT("LodRuleHdrName", "DESCRIPTION")).Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())) ]
-				+ SHorizontalBox::Slot().FillWidth(0.9f).HAlign(HAlign_Right)
-				[ SNew(STextBlock).Text(LOCTEXT("LodRuleHdrCount", "COUNT")).Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())) ]
-				+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right)
-				[ SNew(STextBlock).Text(LOCTEXT("LodRuleHdrSev", "SEVERITY")).Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())) ]
-				+ SHorizontalBox::Slot().FillWidth(1.1f).HAlign(HAlign_Right)
-				[ SNew(STextBlock).Text(LOCTEXT("LodRuleHdrVram", "EST. SAVING")).Font(F_Label()).ColorAndOpacity(FSlateColor(C_Gray())) ]
-			]
-		]
-		// Empty hint
-		+ SVerticalBox::Slot().AutoHeight()
-		[
-			SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Center).MinDesiredHeight(48.f)
-			.Visibility_Lambda([this]() {
-				return LodRuleGroups.Num() == 0 ? EVisibility::Visible : EVisibility::Collapsed;
-			})
-			[
-				SNew(STextBlock)
-				.Text(LOCTEXT("LodRulesEmpty", "Run a scan to see findings grouped by rule."))
-				.Font(F_Small()).ColorAndOpacity(FSlateColor(C_DimGray()))
-			]
-		]
-		// List
-		+ SVerticalBox::Slot().AutoHeight().MaxHeight(560.f)
-		[
-			SAssignNew(LodRulesListView, SListView<TSharedPtr<FShintLodRuleGroup>>)
-			.ListItemsSource(&LodRuleGroups)
-			.SelectionMode(ESelectionMode::None)
-			.OnGenerateRow(this, &SShintToolsPanel::GenerateLodRuleRow)
-		];
-}
-
-TSharedRef<ITableRow> SShintToolsPanel::GenerateLodRuleRow(
-	TSharedPtr<FShintLodRuleGroup> Item, const TSharedRef<STableViewBase>& Owner)
-{
-	const FLinearColor SevCol = SeverityColor(Item->Severity);
-	return SNew(STableRow<TSharedPtr<FShintLodRuleGroup>>, Owner)
-		.Padding(FMargin(0.f, 2.f))
-		[
-			SNew(SBorder).BorderImage(ST4::Solid(C_Surface())).Padding(FMargin(10.f, 8.f))
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-				[ SNew(STextBlock).Text(FText::FromString(Item->RuleId))
-					.Font(FShintStyle::Fonts::Caption()).ColorAndOpacity(FSlateColor(SevCol)) ]
-				+ SHorizontalBox::Slot().FillWidth(3.0f).VAlign(VAlign_Center)
-				[ SNew(STextBlock).Text(FText::FromString(Item->RuleName))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White()))
-					.OverflowPolicy(ETextOverflowPolicy::Ellipsis) ]
-				+ SHorizontalBox::Slot().FillWidth(0.9f).HAlign(HAlign_Right).VAlign(VAlign_Center)
-				[ SNew(STextBlock).Text(FText::AsNumber(Item->Count))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White())) ]
-				+ SHorizontalBox::Slot().FillWidth(1.0f).HAlign(HAlign_Right).VAlign(VAlign_Center)
-				[ SNew(STextBlock).Text(FText::FromString(SeverityLabel(Item->Severity)))
-					.Font(F_Label()).ColorAndOpacity(FSlateColor(SevCol)) ]
-				+ SHorizontalBox::Slot().FillWidth(1.1f).HAlign(HAlign_Right).VAlign(VAlign_Center)
-				[ SNew(STextBlock).Text(FText::FromString(FmtSizeMb(Item->VramMb)))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(FShintStyle::Colors::SevLow())) ]
-			]
-		];
-}
-
-void SShintToolsPanel::RefreshLodRulesList()
-{
-	TMap<FString, TSharedPtr<FShintLodRuleGroup>> Groups;
-	for (const FShintLodFinding& F : LastLodResult.Findings)
-	{
-		TSharedPtr<FShintLodRuleGroup>& G = Groups.FindOrAdd(F.RuleId);
-		if (!G.IsValid())
-		{
-			G = MakeShared<FShintLodRuleGroup>();
-			G->RuleId   = F.RuleId;
-			G->RuleName = F.RuleName.IsEmpty() ? F.Message : F.RuleName;
-			G->Severity = F.Severity;
-		}
-		++G->Count;
-		G->VramMb += F.VramMb;
-		if (LodSevRank(F.Severity) > LodSevRank(G->Severity))
-			G->Severity = F.Severity;
-	}
-
-	LodRuleGroups.Reset();
-	Groups.GenerateValueArray(LodRuleGroups);
-	LodRuleGroups.Sort([](const TSharedPtr<FShintLodRuleGroup>& A,
-		const TSharedPtr<FShintLodRuleGroup>& B)
-	{
-		const int32 SA = LodSevRank(A->Severity), SB = LodSevRank(B->Severity);
-		if (SA != SB) return SA > SB;
-		return A->Count > B->Count;
-	});
-	if (LodRulesListView.IsValid()) LodRulesListView->RequestListRefresh();
 }
 
 // ── Fixes view — in-place auto-fix engine (§20.5): batch apply + journal + revert
@@ -1709,10 +1727,13 @@ FReply SShintToolsPanel::OnLodFixInPlace(FShintLodFindingPtr Item)
 	if (!R.Error.IsEmpty())
 		ShintShowErrorToast(TEXT("Fix failed"), R.Error);
 	else if (R.bApplied)
+	{
 		LodShowSuccessToast(TEXT("Fix applied"),
 			FString::Printf(TEXT("%s — %d property(ies) changed%s."),
 				*LodAssetName(Item->Finding.AssetPath), R.PropertiesChanged,
 				R.bRebuilt ? TEXT(", rebuilt") : TEXT("")));
+		RemoveFixedLodFinding(Item->Finding.AssetPath, Item->Finding.RuleId);
+	}
 	else
 		// Applicable key, but the asset already matches the recommended value
 		// (stale finding) — give feedback instead of a silent click.
@@ -1733,6 +1754,9 @@ FReply SShintToolsPanel::OnLodFixAllInPlace()
 	const int32 FloorRank = ConfRank(LodFixConfidence);
 
 	int32 Applied = 0, Skipped = 0, Failed = 0, Props = 0;
+	// Collected, not applied in-place: RemoveFixedLodFindings rebuilds
+	// LodFindingItems, and this loop is iterating that same array.
+	TArray<TPair<FString, FString>> FixedKeys;
 	for (const FShintLodFindingPtr& Item : LodFindingItems)
 	{
 		if (!Item.IsValid()) continue;
@@ -1746,10 +1770,11 @@ FReply SShintToolsPanel::OnLodFixAllInPlace()
 
 		const FShintLodFixResult R = FShintLodFixerRegistry::ApplyFromFinding(F);
 		if (!R.Error.IsEmpty())      ++Failed;
-		else if (R.bApplied)         { ++Applied; Props += R.PropertiesChanged; }
+		else if (R.bApplied)         { ++Applied; Props += R.PropertiesChanged; FixedKeys.Emplace(F.AssetPath, F.RuleId); }
 		else                         ++Skipped;
 	}
 
+	RemoveFixedLodFindings(FixedKeys);   // one rebuild, after the loop is done reading LodFindingItems
 	RefreshLodFixesList();
 	if (Failed > 0)
 		ShintShowErrorToast(TEXT("Fix All finished with errors"),
@@ -1779,10 +1804,15 @@ FReply SShintToolsPanel::OnLodRevertFix(TSharedPtr<FShintLodJournalRow> Row)
 // ── Budgets view — per-platform memory budget vs current usage ───────────────
 TSharedRef<SWidget> SShintToolsPanel::BuildLodBudgetsView()
 {
-	// Profile-based texture-VRAM budget (MB). Deliberately conservative defaults;
-	// the bar reads live from LastLodResult so it updates without a rebuild.
+	// Profile-based texture-VRAM budget (MB) — must track the Core's own
+	// LT015_POOL_BUDGET_MB (modules/lod_auditor/config/thresholds_*.yaml:
+	// 2000 default, 500 mobile). This bar used to show 4096/1024, a
+	// different number from what LT015 actually audited against — a studio
+	// could see "plenty of headroom" here while the findings above already
+	// flagged the pool as over budget. The bar reads live from LastLodResult
+	// so it updates without a rebuild.
 	auto BudgetMb = [this]() -> double {
-		return LodProfile == TEXT("mobile") ? 1024.0 : 4096.0;
+		return LodProfile == TEXT("mobile") ? 500.0 : 2000.0;
 	};
 
 	auto UsageBar = [this, BudgetMb](const FText& Label,

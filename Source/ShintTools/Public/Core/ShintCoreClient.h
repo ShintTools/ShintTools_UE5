@@ -364,6 +364,13 @@ struct FShintPredictIssue
 	// Runtime UI state — not sent over wire.
 	bool    bChecked = false;
 
+	// Budget-normalized dominant dimension, as picked by the Core (which knows
+	// the platform budgets — 40 MB of VRAM and 0.4 ms of CPU aren't comparable
+	// as raw magnitudes, only as shares of their own budget). Empty on older
+	// Core payloads that predate this field; DominantDimension() falls back to
+	// a magnitude comparison only in that case.
+	FString PrimaryDimension;
+
 	// The dominant impact dimension + its headline value, for the table's
 	// right-aligned cost chip (e.g. "MEM  +18–26 MB  est. +23 MB").
 	FString DominantDimension() const;
@@ -382,6 +389,17 @@ struct FShintBudgetLine
 	double                       BudgetMs = 0.0;
 	FShintPrediction             Predicted;   // .IsSet() false == no data
 	TArray<FShintBudgetSegment>  Breakdown;
+};
+
+// The Core's authoritative frame-time figure — NOT cpu + gpu. CPU/GPU work
+// on a frame is pipelined, so frame time is governed by the slower of the
+// two (the bottleneck); summing both axes overstates the frame.
+struct FShintFrameLine
+{
+	double  BudgetMs    = 0.0;
+	double  PredictedMs = 0.0;
+	FString Bottleneck;   // "cpu" | "gpu" | "" when unscored
+	bool    bIsSet      = false;
 };
 
 // The full analyze report.
@@ -411,6 +429,7 @@ struct FShintPredictReport
 	// Frame budget.
 	FShintBudgetLine Cpu;
 	FShintBudgetLine Gpu;
+	FShintFrameLine  Frame;   // authoritative frame prediction (bottleneck-based)
 
 	// Memory / build headline predictions (may be unset).
 	FShintPrediction Vram;

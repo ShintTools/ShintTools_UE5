@@ -88,6 +88,16 @@ FString FShintPrediction::ToDisplay() const
 
 FString FShintPredictIssue::DominantDimension() const
 {
+	// Prefer the Core's budget-normalized pick (primary_cost.dimension): a
+	// raw-magnitude comparison mixes units (MB vs ms) and is structurally
+	// biased toward whichever dimension happens to have the bigger number
+	// (e.g. build_mb is always 0.85x vram_mb, so it could never "win" here).
+	if (!PrimaryDimension.IsEmpty() && Impact.Contains(PrimaryDimension))
+	{
+		return PrimaryDimension;
+	}
+
+	// Fallback for older Core payloads that predate primary_cost.
 	FString Best;
 	double  BestAbs = -1.0;
 	for (const TPair<FString, FShintPrediction>& P : Impact)
@@ -648,6 +658,12 @@ namespace
 				ParsePredictionMap(*Rec, Issue.Recovery);
 			}
 		}
+
+		const TSharedPtr<FJsonObject>* PrimaryCost;
+		if (Obj->TryGetObjectField(TEXT("primary_cost"), PrimaryCost) && PrimaryCost->IsValid())
+		{
+			(*PrimaryCost)->TryGetStringField(TEXT("dimension"), Issue.PrimaryDimension);
+		}
 		return Issue;
 	}
 
@@ -759,6 +775,15 @@ FShintPredictReport FShintCoreClient::ParsePredictResponse(
 		if ((*FrameBudget)->TryGetObjectField(TEXT("cpu"), Cpu)) Out.Cpu = ParseBudgetLine(*Cpu);
 		const TSharedPtr<FJsonObject>* Gpu;
 		if ((*FrameBudget)->TryGetObjectField(TEXT("gpu"), Gpu)) Out.Gpu = ParseBudgetLine(*Gpu);
+
+		const TSharedPtr<FJsonObject>* Frame;
+		if ((*FrameBudget)->TryGetObjectField(TEXT("frame"), Frame) && Frame->IsValid())
+		{
+			(*Frame)->TryGetNumberField(TEXT("budget_ms"), Out.Frame.BudgetMs);
+			(*Frame)->TryGetNumberField(TEXT("predicted_ms"), Out.Frame.PredictedMs);
+			(*Frame)->TryGetStringField(TEXT("bottleneck"), Out.Frame.Bottleneck);
+			Out.Frame.bIsSet = Out.Frame.PredictedMs > 0.0 || !Out.Frame.Bottleneck.IsEmpty();
+		}
 	}
 
 	const TSharedPtr<FJsonObject>* Memory;
