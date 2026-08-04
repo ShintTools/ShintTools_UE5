@@ -14,8 +14,8 @@ struct FShintValidateResult;
 struct FShintAssetScanResult;
 // [LOD-STRIP-BEGIN]
 struct FShintLodAuditResult;
-// [LOD-STRIP-END]
 struct FShintPredictReport;
+// [LOD-STRIP-END]
 
 /**
  * Result of a POST to the external shint.tools dashboard.
@@ -96,7 +96,6 @@ public:
 	 */
 	void SendLodAudit(const FShintLodAuditResult& LastResult,
 		FOnShintWebDashboardComplete OnComplete);
-	// [LOD-STRIP-END]
 
 	/**
 	 * Sends the Predictive Profiler RESULTS (scores + top issues) to the
@@ -114,6 +113,7 @@ public:
 	 */
 	void SendPredictive(const FShintPredictReport& LastReport,
 		FOnShintWebDashboardComplete OnComplete);
+	// [LOD-STRIP-END]
 
 private:
 	FShintCoreClient& Client;

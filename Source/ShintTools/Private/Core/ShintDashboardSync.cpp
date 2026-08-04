@@ -407,7 +407,6 @@ void FShintDashboardSync::SendLodAudit(
 			}),
 		BuildAuthHeaders(Cfg));
 }
-// [LOD-STRIP-END]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Predictive Profiler — scores + top issues
@@ -484,3 +483,4 @@ void FShintDashboardSync::SendPredictive(
 			}),
 		BuildAuthHeaders(Cfg));
 }
+// [LOD-STRIP-END]
