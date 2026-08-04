@@ -75,6 +75,7 @@ void SShintPredictiveDashboard::Construct(const FArguments& InArgs)
 {
 	CoreClient = MakeShared<FShintCoreClient>();
 	CoreClient->LoadConfig();
+	DashboardSync = MakeShared<FShintDashboardSync>(*CoreClient);
 
 	StatusText = LOCTEXT("Idle", "Run a scan to predict cost before you play.").ToString();
 
@@ -160,6 +161,28 @@ TSharedRef<SWidget> SShintPredictiveDashboard::BuildTopBar()
 					.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
 				]
 			]
+			// Send to Dashboard — same toolbar position as the Code Validator /
+			// Asset Naming Bot / LOD Auditor's (right before the primary
+			// action). Predictive Profiler is Studio-only end to end, so this
+			// uses the same IsStudioTier() gate as the rest of the window
+			// rather than the "not free" gate the other three modules use.
+			// [DASH-STRIP-BEGIN]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, FShintStyle::Space::S2, 0.f)
+			[
+				SAssignNew(SendDashBtn, SButton)
+				.Visibility_Lambda([this]() {
+					return IsStudioTier() ? EVisibility::Visible : EVisibility::Collapsed;
+				})
+				.IsEnabled_Lambda([this]{ return bHasReport; })
+				.OnClicked(this, &SShintPredictiveDashboard::OnSendToDashboardClicked)
+				[
+					SAssignNew(SendDashBtnLabel, STextBlock)
+					.Text(LOCTEXT("SendDash", "Send to Dashboard"))
+					.Font(FShintStyle::Fonts::Small())
+					.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
+				]
+			]
+			// [DASH-STRIP-END]
 			// Scan button.
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 			[
@@ -541,6 +564,46 @@ void SShintPredictiveDashboard::OnAnalyzeComplete(const FShintPredictReport& InR
 	RefreshGauges();
 	RefreshIssueList();
 	ClearSimulator();
+}
+
+FReply SShintPredictiveDashboard::OnSendToDashboardClicked()
+{
+	if (!bHasReport)
+	{
+		ShintShowErrorToast(TEXT("Nothing to send"),
+			TEXT("Run a Predictive scan first, then Send to Dashboard."));
+		return FReply::Handled();
+	}
+	if (SendDashBtnLabel.IsValid())
+	{
+		SendDashBtnLabel->SetText(LOCTEXT("DashSending", "Sending…"));
+		SendDashBtnLabel->SetColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()));
+	}
+	DashboardSync->SendPredictive(Report,
+		FOnShintWebDashboardComplete::CreateSP(this, &SShintPredictiveDashboard::OnDashboardComplete));
+	return FReply::Handled();
+}
+
+void SShintPredictiveDashboard::OnDashboardComplete(const FShintWebDashboardResult& Result)
+{
+	if (!SendDashBtnLabel.IsValid()) return;
+	if (Result.bSuccess)
+	{
+		SendDashBtnLabel->SetText(LOCTEXT("DashOk", "Sent!"));
+		SendDashBtnLabel->SetColorAndOpacity(FSlateColor(FShintStyle::Colors::SevLow()));
+	}
+	else
+	{
+		FString Short = Result.ErrorMessage.IsEmpty()
+			? FString(TEXT("Network or auth error")) : Result.ErrorMessage;
+		if (Short.Len() > 60) Short = Short.Left(57) + TEXT("…");
+		SendDashBtnLabel->SetText(LOCTEXT("SendDash", "Send to Dashboard"));
+		SendDashBtnLabel->SetColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()));
+		ShintShowErrorToast(TEXT("Dashboard send failed"), Short);
+		UE_LOG(LogShintTools, Error,
+			TEXT("Predictive dashboard send failed: %s | response: %s"),
+			*Result.ErrorMessage, *Result.ResponseBody);
+	}
 }
 
 void SShintPredictiveDashboard::RefreshGauges()

@@ -4,6 +4,27 @@
 
 ## [1.4.1] — 2026-08-04 — Predictive Profiler + LOD Auditor client audit
 
+### Added
+- **Send to Dashboard on the Predictive Profiler** — previously the only
+  module without one. Same toolbar position as the other three (right
+  before the primary action), Studio-tier gated.
+
+### Changed
+- **Send to Dashboard's toolbar position on Code Validator and Asset
+  Naming Bot** now matches the LOD Auditor's — inline with Select All /
+  Deselect All / Fix all, instead of a standalone row below the results
+  list.
+- **Declared engine compatibility widened to 5.2-5.8** (was pinned to
+  5.7.0). Static audit of the plugin's UE5 API surface found nothing
+  version-gated that needed guarding (GetNumTriangles/GetNumVertices,
+  Nanite settings fields, StaticMeshEditorSubsystem::AddSimpleCollisions,
+  FSavePackageArgs, UMaterialEditingLibrary::GetStatistics all confirmed
+  stable across the range) — removed the one real risk found, an unused
+  dependency on the soft-deprecated `EditorStyle` module (the UI already
+  uses `FAppStyle` throughout). Real per-version compilation is still only
+  verified at 5.7 locally; 5.2-5.6/5.8 need either those engines installed
+  or Fab's own build farm to confirm.
+
 ### Fixed
 - **Predictive Profiler — BUILD RISK always read 100.** The gauge painted the
   Core's `build_health` score (100 = healthy) directly under a RISK label
@@ -71,6 +92,13 @@
   contract now. `ELodView::Rules`, its widgets, and its stale symbol entries
   in `build_tier_release.py`'s leak-detection list are gone; no other code
   referenced this view by name or index.
+
+### Known issues
+- **LOD Auditor's Send to Dashboard returns HTTP 500.** Confirmed server-side
+  (shint.tools, the external dashboard — not this repo, no route for it
+  exists in the Core either): the client's request body is well-formed and
+  the same pattern as the working Code Validator/Asset Naming endpoints.
+  Needs dashboard-side access to actually fix.
 
 ---
 

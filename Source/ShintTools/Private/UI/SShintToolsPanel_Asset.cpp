@@ -328,6 +328,31 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 					.ColorAndOpacity(FSlateColor(C_Gray()))
 				]
 			]
+			// Send to Dashboard — same toolbar position as the Asset Optimizer's
+			// (Select All / Deselect All / Export / Send / Fix). Paid-tier only:
+			// POSTs the scan to shint.tools, part of the paid SaaS offering.
+			// Hidden completely on free so the user never sees an affordance
+			// that always 403s.
+			// [DASH-STRIP-BEGIN]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f)
+			[
+				SAssignNew(SendAssetBtn, SButton)
+				.Visibility_Lambda([]() -> EVisibility {
+					return FShintToolsModule::GetCachedTier()
+							.Equals(TEXT("free"), ESearchCase::IgnoreCase)
+						? EVisibility::Collapsed
+						: EVisibility::Visible;
+				})
+				.IsEnabled(false).ContentPadding(FMargin(12.f, 6.f))
+				.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+				.OnClicked(this, &SShintToolsPanel::OnSendAssetToDashboardClicked)
+				[
+					SAssignNew(SendAssetBtnLabel, STextBlock)
+					.Text(LOCTEXT("SendAsset", "Send to Dashboard")).Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_Gray()))
+				]
+			]
+			// [DASH-STRIP-END]
 			// Primary action — default button + white label, matching the
 			// Asset Optimizer's bulk Fix.
 			+ SHorizontalBox::Slot().AutoWidth()
@@ -352,34 +377,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 				.OnGenerateRow(this, &SShintToolsPanel::GenerateAssetIssueRow)
 				.SelectionMode(ESelectionMode::None)
 			]
-		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 8.f, 0.f, 0.f) [ Divider() ]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 8.f, 0.f, 0.f)
-		[
-			SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f, 6.f))
-			// "Fix all" moved onto the filter toolbar; only paid Send lives here.
-			// [DASH-STRIP-BEGIN]
-			+ SWrapBox::Slot()
-			[
-				// Same tier gate as SendCodeBtn — shint.tools dashboard ingest
-				// is paid-only.
-				SAssignNew(SendAssetBtn, SButton)
-				.Visibility_Lambda([]() -> EVisibility {
-					return FShintToolsModule::GetCachedTier()
-							.Equals(TEXT("free"), ESearchCase::IgnoreCase)
-						? EVisibility::Collapsed
-						: EVisibility::Visible;
-				})
-				.IsEnabled(false).ContentPadding(FMargin(12.f, 6.f))
-				.OnClicked(this, &SShintToolsPanel::OnSendAssetToDashboardClicked)
-				[
-					// LOD Auditor button language: plain white label, no icon.
-					SAssignNew(SendAssetBtnLabel, STextBlock)
-					.Text(LOCTEXT("SendAsset", "Send to Dashboard"))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White()))
-				]
-			]
-			// [DASH-STRIP-END]
 		];
 
 	return SNew(SVerticalBox)

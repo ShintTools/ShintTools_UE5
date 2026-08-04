@@ -2,7 +2,7 @@
 	"FileVersion": 3,
 	"Version": 5,
 	"VersionName": "1.4.1",
-	"EngineVersion": "5.7.0",
+	"EngineVersion": "5.2.0",
 	"FriendlyName": "ShintTools",
 	"Description": "ShintTools - Applied AI tools infrastructure for Unreal Engine & Unity. Thin client plugin for the ShintTools Core Engine REST API.",
 	"Category": "Developer Tools",

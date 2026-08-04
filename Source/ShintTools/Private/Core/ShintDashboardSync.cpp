@@ -407,4 +407,80 @@ void FShintDashboardSync::SendLodAudit(
 			}),
 		BuildAuthHeaders(Cfg));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Predictive Profiler — scores + top issues
+// ─────────────────────────────────────────────────────────────────────────────
+
+void FShintDashboardSync::SendPredictive(
+	const FShintPredictReport& LastReport,
+	FOnShintWebDashboardComplete OnComplete)
+{
+	const FShintCoreConfig& Cfg = Client.GetConfig();
+	if (ShortCircuitOnMissingConfig(Cfg, OnComplete))
+	{
+		return;
+	}
+
+	// Metrics-only, same posture as SendLodAudit: priced-item metadata + the
+	// aggregate scores the window shows. No asset bytes, no remediation/
+	// recovery bands (those are pricing detail, not what a studio-wide
+	// dashboard needs to track trend over time).
+	auto ScoreObj = [](const FShintPredictScore& S) -> TSharedRef<FJsonObject>
+	{
+		TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
+		O->SetNumberField(TEXT("value"), S.Value);
+		O->SetNumberField(TEXT("driver_count"), S.Drivers.Num());
+		return O;
+	};
+
+	TSharedRef<FJsonObject> Scores = MakeShared<FJsonObject>();
+	Scores->SetObjectField(TEXT("cpu_risk"),    ScoreObj(LastReport.CpuRisk));
+	Scores->SetObjectField(TEXT("gpu_risk"),    ScoreObj(LastReport.GpuRisk));
+	Scores->SetObjectField(TEXT("memory_risk"), ScoreObj(LastReport.MemoryRisk));
+	Scores->SetObjectField(TEXT("build_health"), ScoreObj(LastReport.BuildHealth));
+	Scores->SetNumberField(TEXT("overall_project_health"), LastReport.OverallHealth);
+
+	TArray<TSharedPtr<FJsonValue>> IssuesArr;
+	IssuesArr.Reserve(LastReport.TopIssues.Num());
+	for (const FShintPredictIssue& Issue : LastReport.TopIssues)
+	{
+		TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
+		O->SetStringField(TEXT("item_id"),      Issue.ItemId);
+		O->SetNumberField(TEXT("layer"),        Issue.Layer);
+		O->SetStringField(TEXT("severity"),     Issue.Severity);
+		O->SetStringField(TEXT("title"),        Issue.Title);
+		O->SetStringField(TEXT("rule_id"),      Issue.RuleId);
+		O->SetBoolField  (TEXT("auto_fixable"), Issue.bHasRemediation);
+		IssuesArr.Add(MakeShared<FJsonValueObject>(O));
+	}
+
+	TSharedRef<FJsonObject> Stats = MakeShared<FJsonObject>();
+	Stats->SetNumberField(TEXT("top_issues_count"),       LastReport.TopIssues.Num());
+	Stats->SetNumberField(TEXT("cost_items_count"),       LastReport.CostItems.Num());
+	Stats->SetNumberField(TEXT("code_issues_uncosted"),   LastReport.CodeIssuesUncosted);
+	Stats->SetStringField(TEXT("calibration_version"),    LastReport.CalibrationVersion);
+
+	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("project_name"), Cfg.ProjectName);
+	Body->SetStringField(TEXT("engine"),       LastReport.Engine.IsEmpty() ? TEXT("unreal") : LastReport.Engine);
+	Body->SetStringField(TEXT("profile"),      LastReport.ProfileName);
+	Body->SetObjectField(TEXT("scores"),       Scores);
+	Body->SetArrayField (TEXT("top_issues"),   IssuesArr);
+	Body->SetObjectField(TEXT("stats"),        Stats);
+
+	const FString Url = Cfg.DashboardUrl
+		/ TEXT("api/public/predictive-profiler/analyze");
+	UE_LOG(LogShintTools, Verbose,
+		TEXT("Dashboard: sending %d predictive top issues to %s"),
+		IssuesArr.Num(), *Url);
+
+	Client.SendRequest(Url, EShintHttpMethod::POST,
+		FShintCoreClient::SerializeJson(Body),
+		FOnShintRequestComplete::CreateLambda(
+			[OnComplete](const FShintRequestResult& Raw) mutable {
+				OnComplete.ExecuteIfBound(MakeResultFromRaw(Raw));
+			}),
+		BuildAuthHeaders(Cfg));
+}
 // [LOD-STRIP-END]

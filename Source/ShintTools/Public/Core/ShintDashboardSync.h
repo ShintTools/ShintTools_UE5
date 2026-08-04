@@ -14,6 +14,7 @@ struct FShintValidateResult;
 struct FShintAssetScanResult;
 // [LOD-STRIP-BEGIN]
 struct FShintLodAuditResult;
+struct FShintPredictReport;
 // [LOD-STRIP-END]
 
 /**
@@ -36,13 +37,14 @@ DECLARE_DELEGATE_OneParam(FOnShintWebDashboardComplete,
  *
  * Encapsulates POSTs from the editor plugin to the external web
  * dashboard (shint.tools) — i.e. the "Send to Dashboard" buttons on
- * the Code Validator and Asset Naming tabs. Lives outside
- * FShintCoreClient because:
+ * the Code Validator, Asset Naming, LOD Auditor and Predictive Profiler
+ * tabs. Lives outside FShintCoreClient because:
  *   - it talks to a different host (DashboardUrl vs the local core)
  *   - it uses a different auth scheme (Bearer ApiKeyDashboard)
  *   - it's a paid-tier-only feature; the wizard panel gates the
- *     buttons behind Tier != "free", so isolating the code here lets
- *     the free build skip a chunk of dead code.
+ *     buttons behind Tier != "free" (Predictive Profiler is Studio-only
+ *     end to end, so it gates on IsStudioTier() instead), so isolating
+ *     the code here lets the free build skip a chunk of dead code.
  *
  * Thin wrapper: borrows the underlying transport (SendRequest, the
  * config holder) from the FShintCoreClient passed at construction.
@@ -93,6 +95,23 @@ public:
 	 * Auth:  Authorization: Bearer <per-project key>
 	 */
 	void SendLodAudit(const FShintLodAuditResult& LastResult,
+		FOnShintWebDashboardComplete OnComplete);
+
+	/**
+	 * Sends the Predictive Profiler RESULTS (scores + top issues) to the
+	 * dashboard. Privacy: same posture as SendLodAudit — priced-item
+	 * metadata + aggregate scores, no asset bytes.
+	 * Endpoint: POST {DashboardUrl}/api/public/predictive-profiler/analyze
+	 * Body: { project_name, engine, profile,
+	 *         scores: {cpu_risk, gpu_risk, memory_risk, build_health,
+	 *                  overall_project_health},
+	 *         top_issues: [{item_id, layer, severity, title, rule_id,
+	 *                       auto_fixable}],
+	 *         stats: {top_issues_count, cost_items_count,
+	 *                 code_issues_uncosted, calibration_version} }
+	 * Auth:  Authorization: Bearer <per-project key>
+	 */
+	void SendPredictive(const FShintPredictReport& LastReport,
 		FOnShintWebDashboardComplete OnComplete);
 	// [LOD-STRIP-END]
 
