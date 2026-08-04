@@ -379,6 +379,34 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 					.ColorAndOpacity(FSlateColor(C_Gray()))
 				]
 			]
+			// Send to Dashboard — same toolbar position as the Asset Optimizer's
+			// (Select All / Deselect All / Export / Send / Fix). Paid-tier only:
+			// POSTs the scan to shint.tools, part of the paid SaaS offering.
+			// Hidden completely on free so the user never sees an affordance that
+			// always 403s. The cached tier comes from the launcher's startup
+			// /license/status probe; it defaults to "free" until that resolves,
+			// which is intentional — a paid user simply sees the button appear
+			// after the probe lands.
+			// [DASH-STRIP-BEGIN]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f)
+			[
+				SAssignNew(SendCodeBtn, SButton)
+				.Visibility_Lambda([]() -> EVisibility {
+					return FShintToolsModule::GetCachedTier()
+							.Equals(TEXT("free"), ESearchCase::IgnoreCase)
+						? EVisibility::Collapsed
+						: EVisibility::Visible;
+				})
+				.IsEnabled(false).ContentPadding(FMargin(12.f, 6.f))
+				.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+				.OnClicked(this, &SShintToolsPanel::OnSendCodeToDashboardClicked)
+				[
+					SAssignNew(SendCodeBtnLabel, STextBlock)
+					.Text(LOCTEXT("SendCode", "Send to Dashboard")).Font(F_Small())
+					.ColorAndOpacity(FSlateColor(C_Gray()))
+				]
+			]
+			// [DASH-STRIP-END]
 			// Primary action — default button + white label, matching the
 			// Asset Optimizer's bulk Fix.
 			+ SHorizontalBox::Slot().AutoWidth()
@@ -481,42 +509,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 				.SelectionMode(ESelectionMode::None)
 				.AllowOverscroll(EAllowOverscroll::Yes)
 			]
-		]
-
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 8.f, 0.f, 0.f) [ Divider() ]
-
-		// Action row — the primary "Fix all" action moved onto the filter
-		// toolbar; only the paid Send-to-Dashboard button lives here now.
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 8.f, 0.f, 0.f)
-		[
-			SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f, 6.f))
-			// [DASH-STRIP-BEGIN]
-			+ SWrapBox::Slot()
-			[
-				// "Send to Dashboard" is a paid-tier feature: it POSTs the entire
-				// scan to shint.tools, which is part of the paid SaaS offering.
-				// Hide the button completely on free so the user does not see an
-				// affordance that always 403s. The cached tier comes from the
-				// launcher's startup /license/status probe; it defaults to "free"
-				// until that resolves, which is intentional — a paid user simply
-				// sees the button appear after the probe lands.
-				SAssignNew(SendCodeBtn, SButton)
-				.Visibility_Lambda([]() -> EVisibility {
-					return FShintToolsModule::GetCachedTier()
-							.Equals(TEXT("free"), ESearchCase::IgnoreCase)
-						? EVisibility::Collapsed
-						: EVisibility::Visible;
-				})
-				.IsEnabled(false).ContentPadding(FMargin(12.f, 6.f))
-				.OnClicked(this, &SShintToolsPanel::OnSendCodeToDashboardClicked)
-				[
-					// LOD Auditor button language: plain white label, no icon.
-					SAssignNew(SendCodeBtnLabel, STextBlock)
-					.Text(LOCTEXT("SendCode", "Send to Dashboard"))
-					.Font(F_Small()).ColorAndOpacity(FSlateColor(C_White()))
-				]
-			]
-			// [DASH-STRIP-END]
 		];
 
 	return SNew(SVerticalBox)

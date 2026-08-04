@@ -18,11 +18,14 @@
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Core/ShintCoreClient.h"
+#include "Core/ShintDashboardSync.h"
 
 class SShintScoreGauge;
 class SShintFrameBudgetBar;
 class SVerticalBox;
 class SComboButton;
+class STextBlock;
+class SButton;
 
 class SShintPredictiveDashboard : public SCompoundWidget
 {
@@ -45,6 +48,10 @@ private:
 	void   OnAnalyzeComplete(const FShintPredictReport& Report);
 	void   RunSimulation();
 	void   OnSimulateComplete(const FShintSimulateResult& Result);
+	// Send to Dashboard — same toolbar position as the other modules' (right
+	// before the primary action; here that's Scan). Paid-tier only.
+	FReply OnSendToDashboardClicked();
+	void   OnDashboardComplete(const FShintWebDashboardResult& Result);
 
 	// ── Rebuild helpers ───────────────────────────────────────────────────────
 	void RefreshGauges();
@@ -65,7 +72,8 @@ private:
 	bool IsStudioTier() const;
 
 	// ── State ─────────────────────────────────────────────────────────────────
-	TSharedPtr<FShintCoreClient> CoreClient;
+	TSharedPtr<FShintCoreClient>     CoreClient;
+	TSharedPtr<FShintDashboardSync>  DashboardSync;
 
 	FString              Profile = TEXT("desktop_60");
 	FShintPredictReport  Report;
@@ -86,5 +94,9 @@ private:
 	// Profile dropdown.
 	TSharedPtr<SComboButton>         ProfileCombo;
 	TSharedRef<SWidget>              BuildProfileMenu();
+
+	// Send to Dashboard button label (swaps text/color while sending).
+	TSharedPtr<SButton>              SendDashBtn;
+	TSharedPtr<STextBlock>           SendDashBtnLabel;
 };
 // [LOD-STRIP-END]
