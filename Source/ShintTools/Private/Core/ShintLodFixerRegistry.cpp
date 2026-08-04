@@ -102,6 +102,38 @@ namespace
 		return FString();
 	}
 
+	// The Core recommends compression/lod_group using its own canonical
+	// vocabulary (modules/lod_auditor/config/thresholds_*.yaml), which is NOT
+	// UE's enum name syntax ("BC7", not "TC_BC7") — EnumFromName<> alone can
+	// never resolve it, so every recommended compression/group used to miss
+	// and the fixer applied nothing while still reporting success. Mobile's
+	// ASTC_* block-size values are intentionally left unmapped: UE's
+	// TextureCompressionSettings has no ASTC-block-size axis (block size is a
+	// platform-format concern, not a CompressionSettings one), so those stay
+	// advisory-only rather than being mapped to something wrong.
+	int64 MapCoreCompression(const FString& Core)
+	{
+		const FString S = Core.TrimStartAndEnd().ToUpper();
+		if (S == TEXT("BC7"))                 return TC_BC7;
+		if (S == TEXT("BC5"))                 return TC_Normalmap;
+		if (S == TEXT("BC4"))                 return TC_Alpha;              // "Alpha (no sRGB, BC4)"
+		if (S == TEXT("BC6H") || S == TEXT("BC6")) return TC_HDR_Compressed; // BC6H — NOT TC_HDR (that's uncompressed RGBA16F)
+		if (S == TEXT("RGBA8"))               return TC_EditorIcon;         // "Uncompressed (RGBA8)"
+		if (S == TEXT("BC1") || S == TEXT("BC3") ||
+		    S == TEXT("DXT1") || S == TEXT("DXT5") || S == TEXT("DEFAULT"))
+			return TC_Default;
+		return EnumFromName<TextureCompressionSettings>(Core);   // forward-compat fallback
+	}
+
+	int64 MapCoreLodGroup(const FString& Core)
+	{
+		const FString S = Core.TrimStartAndEnd();
+		if (S == TEXT("NormalMap")) return TEXTUREGROUP_WorldNormalMap;
+		if (S == TEXT("UI"))        return TEXTUREGROUP_UI;
+		if (S == TEXT("Skybox"))    return TEXTUREGROUP_Skybox;
+		return EnumFromName<TextureGroup>(Core);   // forward-compat fallback
+	}
+
 	// ── per-asset appliers ───────────────────────────────────────────────────
 	// Each returns the number of properties it changed and records the prior
 	// value into OutBefore (keyed identically to the recommended key) so Revert
@@ -113,7 +145,7 @@ namespace
 		int32 Changed = 0;
 		if (const FString* V = Rec.Find(TEXT("compression")))
 		{
-			const int64 New = EnumFromName<TextureCompressionSettings>(*V);
+			const int64 New = MapCoreCompression(*V);
 			if (New != INDEX_NONE && Tex->CompressionSettings != New)
 			{
 				OutBefore.Add(TEXT("compression"),
@@ -125,7 +157,7 @@ namespace
 		}
 		if (const FString* V = Rec.Find(TEXT("lod_group")))
 		{
-			const int64 New = EnumFromName<TextureGroup>(*V);
+			const int64 New = MapCoreLodGroup(*V);
 			if (New != INDEX_NONE && Tex->LODGroup != New)
 			{
 				OutBefore.Add(TEXT("lod_group"), EnumToName(Tex->LODGroup.GetValue()));
@@ -486,9 +518,12 @@ bool FShintLodFixerRegistry::IsAutoApplicable(const TMap<FString, FString>& Rec)
 		if (K == TEXT("clear_usage_flags") && ParseStringArray(V).Num() > 0) return true;
 
 		// Enum keys: applicable only if the recommended value resolves to a real
-		// enum entry. A prose hint ("ASTC_6x6 (color) or ETC2_RGBA") does not.
-		if (K == TEXT("compression") && EnumFromName<TextureCompressionSettings>(V) != INDEX_NONE) return true;
-		if (K == TEXT("lod_group")   && EnumFromName<TextureGroup>(V) != INDEX_NONE) return true;
+		// enum entry. A prose hint ("ASTC_6x6 (color) or ETC2_RGBA") does not,
+		// and neither does a genuinely unmappable one (mobile's ASTC block-size
+		// values — see MapCoreCompression). Must agree with ApplyToTexture's
+		// mapping or this gate hides the Fix button for a row it could apply.
+		if (K == TEXT("compression") && MapCoreCompression(V) != INDEX_NONE) return true;
+		if (K == TEXT("lod_group")   && MapCoreLodGroup(V) != INDEX_NONE) return true;
 		if (K == TEXT("mip_gen")     && EnumFromName<TextureMipGenSettings>(V) != INDEX_NONE) return true;
 		if (K == TEXT("blend_mode")  && EnumFromName<EBlendMode>(V) != INDEX_NONE) return true;
 
