@@ -72,8 +72,11 @@ public class ShintTools : ModuleRules
 			// (generate/reduce LOD chain, screen sizes, simple collision).
 			"StaticMeshEditor",
 
-			// Editor modules
-			"EditorStyle",
+			// Editor modules. NOT "EditorStyle" — the whole UI already uses
+			// FAppStyle (its replacement); EditorStyle is soft-deprecated
+			// upstream (FEditorStyle::* calls warn) and an unused dependency
+			// on it is pure risk for the 5.2-5.8 compatibility range this
+			// plugin targets, with zero benefit since nothing here calls it.
 			"EditorWidgets",
 			"UnrealEd",
 			"LevelEditor",
