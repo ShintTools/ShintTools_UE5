@@ -21,11 +21,20 @@ zip root, e.g.::
         Source/ShintTools/Public/ShintTools.h
         Source/ShintTools/Private/...
 
+Fab requires a SEPARATE upload per supported engine version slot (5.2-5.8),
+each with its own .uplugin EngineVersion matching that slot — uploading the
+same file to every slot gets the submission rejected ("all download links
+contain the files for version 5.2 instead of their corresponding engine
+versions"). The source is verified compatible across the whole range (see
+CHANGELOG "Known issues" / the 5.2-5.8 compat audit), so each zip below is
+identical content with only EngineVersion rewritten per slot.
+
 Usage (from the plugin repo root)::
 
     python tools/build_fab_source_pack.py
 
-Output: dist_fab/ShintTools-UE5-Fab-Source-UE_<X.Y>.zip
+Output: dist_fab/ShintTools-UE5-Fab-Source-UE_<X.Y>.zip, one per supported
+engine version (5.2 through 5.8).
 """
 
 from __future__ import annotations
@@ -62,8 +71,13 @@ _STRIP_DIRS = {
     ".git", ".github", ".vs", ".vscode", ".codegraph", "__pycache__",
 }
 
+# Every engine version Fab has a separate upload slot for. Keep in sync with
+# the .uplugin's minimum EngineVersion (currently 5.2.0) and the audited
+# compatibility range documented in the UE5 CHANGELOG.
+ENGINE_VERSIONS = ["5.2", "5.3", "5.4", "5.5", "5.6", "5.7", "5.8"]
 
-def build() -> Path:
+
+def build() -> list[Path]:
     if not (SOURCE / "ShintTools.uplugin").is_file():
         raise SystemExit(
             "release-marketplace tree not found at "
@@ -129,26 +143,32 @@ def build() -> Path:
         uplugin = plugin / "ShintTools.uplugin"
         data = json.loads(uplugin.read_text(encoding="utf-8"))
         data["Installed"] = False
-        uplugin.write_text(json.dumps(data, indent=4), encoding="utf-8")
-
-        engine = str(data.get("EngineVersion", "5.7.0"))
-        short = ".".join(engine.split(".")[:2]) or "5.7"
 
         out_dir = REPO / "dist_fab"
         out_dir.mkdir(exist_ok=True)
-        out = out_dir / f"ShintTools-UE5-Fab-Source-UE_{short}.zip"
-        if out.exists():
-            out.unlink()
+        outputs: list[Path] = []
 
-        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-            for path in sorted(plugin.rglob("*")):
-                if not path.is_file():
-                    continue
-                arc = Path(PLUGIN_NAME) / path.relative_to(plugin)
-                zf.write(path, arcname=arc.as_posix())
+        # One zip per Fab engine-version slot: identical staged source, only
+        # the .uplugin EngineVersion field differs per zip.
+        for short in ENGINE_VERSIONS:
+            data["EngineVersion"] = f"{short}.0"
+            uplugin.write_text(json.dumps(data, indent=4), encoding="utf-8")
 
-        print(f"OK: {out}  ({out.stat().st_size // 1024} KB)")
-        return out
+            out = out_dir / f"ShintTools-UE5-Fab-Source-UE_{short}.zip"
+            if out.exists():
+                out.unlink()
+
+            with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+                for path in sorted(plugin.rglob("*")):
+                    if not path.is_file():
+                        continue
+                    arc = Path(PLUGIN_NAME) / path.relative_to(plugin)
+                    zf.write(path, arcname=arc.as_posix())
+
+            print(f"OK: {out}  ({out.stat().st_size // 1024} KB)")
+            outputs.append(out)
+
+        return outputs
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 
