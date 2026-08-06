@@ -17,7 +17,10 @@
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Views/SListView.h"
 #include "Widgets/Views/STableRow.h"
-#include "Containers/Ticker.h"          // FTSTicker — drives Explain modal status rotation
+// NOTE: Containers/Ticker.h used to be pulled in here for the Explain modal's
+// status rotation. The modal is gone (the assistant dock replaced it) and this
+// header declares no ticker of its own; the one remaining user,
+// SShintToolsPanel_Http.cpp, includes it directly.
 
 class FCoreProcessManager;
 
@@ -233,11 +236,11 @@ private:
 	// per-row Explain entry point covers the same UX with focused
 	// /agent/explain context.
 
-	// Per-row "Explain" — opens the AI Assistant tab and asks about this
-	// finding there. It used to open a single-shot modal that answered once
-	// and was destroyed on the next click, so "and why does that matter?"
-	// had nowhere to go; the answer now lands in a thread the user can keep
-	// asking into.
+	// Per-row "Explain" — opens the AI Assistant dock (bottom-right launcher)
+	// and asks about this finding there. It used to open a single-shot modal
+	// that answered once and was destroyed on the next click, so "and why does
+	// that matter?" had nowhere to go; the answer now lands in a thread the
+	// user can keep asking into.
 	//
 	// No longer agent-gated. The old modal drove /agent/explain, which is
 	// Indie-and-up, so the button was hidden on Free and stripped from the

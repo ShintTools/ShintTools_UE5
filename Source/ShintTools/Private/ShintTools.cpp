@@ -4,8 +4,8 @@
 #include "SShintToolsPanel.h"
 #include "SShintWelcomeDialog.h"
 #include "ShintIconStyle.h"
-#include "Assistant/SShintAssistantPanel.h"
 #include "Assistant/SShintAssistantDock.h"
+#include "Containers/Ticker.h"   // one-shot deferral in the assistant tab shim
 // [LOD-STRIP-BEGIN]
 #include "Predictive/SShintPredictiveDashboard.h"
 // [LOD-STRIP-END]
@@ -168,13 +168,14 @@ void FShintToolsModule::RegisterTabSpawner()
 		.SetIcon(FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.Profiler"));
 	// [LOD-STRIP-END]
 
-	// AI Assistant — the assistant's own surface is now SShintAssistantDock,
-	// anchored to the editor's bottom-right corner instead of taking a slice
-	// of the layout (see that header for why). The spawner stays registered
-	// and HIDDEN: an editor layout saved while the old tab was docked still
-	// names this tab on restore, and an unregistered spawner turns that into a
-	// missing-tab warning on every startup. Hidden keeps the restore path
-	// working without offering a second, competing way in.
+	// AI Assistant — the assistant's own surface is now SShintAssistantDock.
+	// What stays registered here is a MIGRATION SHIM, not the panel: an editor
+	// layout saved while the old tab was docked still names this tab, and
+	// Unreal restores it on every startup, which is why the retired tab kept
+	// reappearing. The shim's tab closes itself and opens the dock instead, so
+	// the stale layout entry is consumed once and the reference is gone from
+	// the next layout save. Simply unregistering the spawner would have left
+	// that entry in the layout indefinitely.
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
 		ShintAssistantTabName,
 		FOnSpawnTab::CreateRaw(this, &FShintToolsModule::SpawnShintAssistantTab))
@@ -203,38 +204,49 @@ void FShintToolsModule::ExtendLevelEditorMenu()
 	// Use ToolMenus API (UE5 preferred way)
 	UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateLambda([this]()
 	{
-		// Extend the "Window" top-level menu
-		UToolMenu* WindowMenu = UToolMenus::Get()->ExtendMenu("LevelEditor.MainMenu.Window");
-		if (!WindowMenu)
+		// Tools, not Window. Window is where Unreal keeps its own panels, and a
+		// plugin's entry point sitting among them reads as part of the editor
+		// rather than as something the team installed. Tools is where the
+		// editor already groups everything that ACTS on the project, which is
+		// what every ShintTools surface does.
+		UToolMenu* ToolsMenu = UToolMenus::Get()->ExtendMenu("LevelEditor.MainMenu.Tools");
+		if (!ToolsMenu)
 		{
-			UE_LOG(LogShintTools, Warning, TEXT("Could not find LevelEditor.MainMenu.Window to extend."));
+			UE_LOG(LogShintTools, Warning, TEXT("Could not find LevelEditor.MainMenu.Tools to extend."));
 			return;
 		}
 
-		// One "ShintTools" flyout in the Window menu, with every window the
-		// plugin owns inside it. Previously these were flat entries under a
-		// section header, which spread three unrelated-looking items across
-		// the Window menu as the plugin grew — a submenu keeps the plugin's
-		// footprint to a single row no matter how many windows it adds.
-		FToolMenuSection& Section = WindowMenu->FindOrAddSection("ShintToolsSection");
+		// A LABELLED section. The previous one had no label, so it rendered as
+		// a bare separator and the plugin's name never appeared in the menu at
+		// all — the same reason Unreal's own "GET CONTENT" and "LAYOUT" headers
+		// exist. The label is the second argument; omitting it is what made the
+		// section invisible.
+		FToolMenuSection& Section = ToolsMenu->FindOrAddSection(
+			"ShintToolsSection", LOCTEXT("ShintToolsSectionLabel", "ShintTools"));
 
+		// Two levels, not three: the control panel is the entry point and sits
+		// directly under the header, while the standalone surfaces go in one
+		// flyout. Nesting the panel too would put the thing people open most
+		// behind an extra hop.
+		Section.AddMenuEntry(
+			"OpenShintToolsPanel",
+			LOCTEXT("OpenShintToolsPanelLabel", "ShintTools"),
+			LOCTEXT("OpenShintToolsPanelTooltip", "Open the ShintTools automation control panel"),
+			FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"),
+			FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintToolsPanel))
+		);
+
+		// "Modules" and not "Tools" — a submenu named after the menu that
+		// contains it reads as a mistake.
 		Section.AddSubMenu(
-			"ShintToolsSubMenu",
-			LOCTEXT("ShintToolsSubMenuLabel", "ShintTools"),
-			LOCTEXT("ShintToolsSubMenuTooltip", "ShintTools windows"),
+			"ShintToolsModulesSubMenu",
+			LOCTEXT("ShintToolsModulesLabel", "Modules"),
+			LOCTEXT("ShintToolsModulesTooltip", "Predictive Profiler and the AI Assistant"),
 			FNewToolMenuChoice(FNewToolMenuDelegate::CreateLambda(
 				[this](UToolMenu* SubMenu)
 			{
 				FToolMenuSection& Windows =
-					SubMenu->FindOrAddSection("ShintToolsWindows");
-
-				Windows.AddMenuEntry(
-					"OpenShintToolsPanel",
-					LOCTEXT("OpenShintToolsPanelLabel", "ShintTools"),
-					LOCTEXT("OpenShintToolsPanelTooltip", "Open the ShintTools automation control panel"),
-					FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"),
-					FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintToolsPanel))
-				);
+					SubMenu->FindOrAddSection("ShintToolsModules");
 
 				// [LOD-STRIP-BEGIN]
 				Windows.AddMenuEntry(
@@ -251,12 +263,12 @@ void FShintToolsModule::ExtendLevelEditorMenu()
 					LOCTEXT("OpenShintAssistantLabel", "AI Assistant"),
 					LOCTEXT("OpenShintAssistantTooltip",
 						"Ask about your scans — runs entirely on this machine"),
-					FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"),
+					FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.Bot"),
 					FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintAssistantPanel))
 				);
 			})),
 			/*bInOpenSubMenuOnClick=*/false,
-			FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI")
+			FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.Grid")
 		);
 	}));
 }
@@ -317,11 +329,25 @@ void FShintToolsModule::OpenShintAssistantPanel()
 
 TSharedRef<SDockTab> FShintToolsModule::SpawnShintAssistantTab(const FSpawnTabArgs& SpawnTabArgs)
 {
-	return SNew(SDockTab)
-		.TabRole(ETabRole::NomadTab)
-		[
-			SNew(SShintAssistantPanel)
-		];
+	// Migration shim (see RegisterTabSpawner). This tab exists only to absorb a
+	// restore from a layout saved before the dock, and it must not build the
+	// panel: two live assistant panels would each hold their own conversation.
+	TSharedRef<SDockTab> Tab = SNew(SDockTab).TabRole(ETabRole::NomadTab);
+
+	// Deferred by one tick on purpose. Closing a tab from inside its own spawn
+	// callback tears it down while the tab manager is still wiring it into the
+	// layout it was restored from.
+	TWeakPtr<SDockTab> WeakTab = Tab;
+	FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateLambda([WeakTab](float) -> bool
+		{
+			if (const TSharedPtr<SDockTab> Pinned = WeakTab.Pin())
+				Pinned->RequestCloseTab();
+			SShintAssistantDock::Open();
+			return false;
+		}), 0.f);
+
+	return Tab;
 }
 
 #undef LOCTEXT_NAMESPACE

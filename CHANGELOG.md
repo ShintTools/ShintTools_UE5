@@ -4,6 +4,32 @@
 
 ## [Unreleased] — AI Assistant panel (M5)
 
+### Changed
+- **The plugin now lives under Tools, not Window, in a section that says
+  ShintTools.** Window is where Unreal keeps its own panels, and a plugin's
+  entry point among them reads as part of the editor rather than as
+  something the team installed; Tools is where the editor already groups
+  what acts on the project, which is what every ShintTools surface does.
+  The section header was also missing entirely — it was created without a
+  label, so it rendered as a bare separator and the plugin's name never
+  appeared in the menu at all. Predictive Profiler and the AI Assistant move
+  into a **Modules** flyout inside it, while the control panel stays one
+  click away directly under the header.
+
+### Fixed
+- **The retired AI Assistant tab kept coming back.** The dock replaced it,
+  but an editor layout saved while the tab was docked still names it, and
+  Unreal restores it on every startup — leaving the spawner registered but
+  hidden was not enough. The spawner is now a migration shim: its tab closes
+  itself and opens the dock instead, so the stale layout entry is consumed
+  once and is gone from the next layout save. Unregistering the spawner
+  outright would have left that entry in the layout indefinitely.
+- **The per-row "Explain" button did nothing when the assistant was
+  closed.** It queued the question and broadcast, which was enough while the
+  assistant was a tab the user had already docked; the dock can be collapsed
+  or never opened, and then the click queued a question nobody would see.
+  It now opens the dock.
+
 ### Added
 - **AI Assistant dock** — a 56px launcher pinned to the bottom-right
   corner of the editor that expands into a 380×500 card in place and

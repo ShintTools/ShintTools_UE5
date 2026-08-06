@@ -2,6 +2,7 @@
 
 #include "Core/ShintAssistantContext.h"
 #include "ShintTools.h"
+#include "Assistant/SShintAssistantDock.h"   // RequestExplain opens the dock
 
 namespace
 {
@@ -59,6 +60,14 @@ void FShintAssistantContext::RequestExplain(
 	UE_LOG(LogShintTools, Verbose,
 		TEXT("AssistantContext: explain queued rule=%s asset=%s"),
 		*RuleId, *AssetPath);
+
+	// Open the assistant BEFORE broadcasting. Queuing alone was enough while
+	// the assistant was a tab the user had already docked; the dock can be
+	// collapsed or never opened, and then clicking "Explain" queued a question
+	// nobody would ever see — the button did nothing at all. Open() is
+	// idempotent and expands an already-created dock, so a second click on a
+	// row while the thread is open just adds a turn.
+	SShintAssistantDock::Open();
 
 	OnChanged.Broadcast();
 }
