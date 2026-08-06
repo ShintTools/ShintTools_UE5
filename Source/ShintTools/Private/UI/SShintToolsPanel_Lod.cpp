@@ -21,6 +21,7 @@
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
 #include "ShintCoreClient.h"
+#include "Core/ShintAssistantContext.h"
 #include "ShintTools.h"      // FShintToolsModule::GetCachedTier (tier guard)
 
 #include "ShintStyle.h"
@@ -955,6 +956,15 @@ void SShintToolsPanel::OnLodAuditComplete(const FShintLodAuditResult& Result)
 	PopulateLodFindingList(Result);
 	RefreshLodStats();
 	RefreshLodTreemap();     // Summary view — VRAM-by-asset picture
+
+	// Ground the assistant in this audit. The id covers every batch (the
+	// chain echoes the first batch's id back on each later request), so a
+	// question about "this scan" resolves to the whole project, not the
+	// last 150 assets.
+	FShintAssistantContext::Publish(
+		Result.AnalysisId, EShintAssistantModule::LodAudit,
+		FString::Printf(TEXT("LOD Audit — %d finding%s"),
+			Result.IssuesFound, Result.IssuesFound == 1 ? TEXT("") : TEXT("s")));
 
 	// Per-family completion summary, mirroring the KPI subtitle breakdown.
 	int32 TexIssues = 0, MeshIssues = 0, MatIssues = 0, OtherIssues = 0;

@@ -233,34 +233,17 @@ private:
 	// per-row Explain entry point covers the same UX with focused
 	// /agent/explain context.
 
-	// [AGENT-STRIP-BEGIN]
-	// LLM pivot — single-shot /agent/explain modal.
-	// One per-issue "Explain" button on each row; click opens the modal,
-	// the request fires, the server takes 30-45s on CPU and the modal shows
-	// a spinner with rotating status text until the response arrives.
+	// Per-row "Explain" — opens the AI Assistant tab and asks about this
+	// finding there. It used to open a single-shot modal that answered once
+	// and was destroyed on the next click, so "and why does that matter?"
+	// had nowhere to go; the answer now lands in a thread the user can keep
+	// asking into.
+	//
+	// No longer agent-gated. The old modal drove /agent/explain, which is
+	// Indie-and-up, so the button was hidden on Free and stripped from the
+	// marketplace build. The assistant serves explain_finding on every tier,
+	// so the button ships everywhere now.
 	FReply OnExplainIssueClicked(FShintIssueItemPtr Item);
-	// Live token from /agent/explain/stream — appended to the modal as it
-	// arrives. RequestId guards against a stale stream writing into a modal that
-	// now shows a different issue.
-	void   OnExplainChunk(const FString& Chunk, uint64 RequestId);
-	// Accumulates streamed tokens for the currently-open modal.
-	FString ExplainStreamBuffer;
-	void   OnExplainComplete(const FShintAgentExplainResponse& Result,
-	                         FShintIssueItemPtr                Item,
-	                         uint64                            RequestId);
-	bool   TickExplainStatus(float DeltaTime); // rotates ExplainStatusIndex
-	TSharedPtr<class SWindow>                         ExplainWindow;
-	TSharedPtr<class SMultiLineEditableTextBox>       ExplainResultBox;
-	TSharedPtr<class SCircularThrobber>               ExplainSpinner;
-	TSharedPtr<class STextBlock>                      ExplainStatusLine;
-	int32                                             ExplainStatusIndex = 0;
-	// Monotonic token for the in-flight explain request. Bumped on every
-	// click; OnExplainComplete ignores any response whose token is stale, so
-	// a slow answer for issue A can't write into the modal now showing issue
-	// B (the per-row "wrong explanation" race).
-	uint64                                            ExplainRequestId = 0;
-	FTSTicker::FDelegateHandle                        ExplainTickerHandle;
-	// [AGENT-STRIP-END]
 	FReply OnScanAssetsClicked();
 	FReply OnApplySingleFix(FShintIssueItemPtr Item);
 	FReply OnIgnoreSingleFix(FShintIssueItemPtr Item);

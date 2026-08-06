@@ -28,6 +28,7 @@
 #include "SShintToolsPanel_Private.h"
 #include "ShintTools.h"
 #include "ShintCoreClient.h"
+#include "Core/ShintAssistantContext.h"
 // [DASH-STRIP-BEGIN]
 #include "ShintDashboardSync.h"
 // [DASH-STRIP-END]
@@ -334,6 +335,11 @@ void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
 	LastAssetResult = Result;
 	PopulateAssetIssueList(Result);
 	RefreshAssetStats();
+
+	FShintAssistantContext::Publish(
+		Result.AnalysisId, EShintAssistantModule::AssetNaming,
+		FString::Printf(TEXT("Asset Naming — %d violation%s"),
+			Result.InvalidAssets, Result.InvalidAssets == 1 ? TEXT("") : TEXT("s")));
 
 	// Chain a BP validation pass to pick up BPB001 (naming violations).
 	// Results go ONLY to the asset naming panel — code validator is not touched.

@@ -4,6 +4,7 @@
 #include "SShintToolsPanel.h"
 #include "SShintWelcomeDialog.h"
 #include "ShintIconStyle.h"
+#include "Assistant/SShintAssistantPanel.h"
 // [LOD-STRIP-BEGIN]
 #include "Predictive/SShintPredictiveDashboard.h"
 // [LOD-STRIP-END]
@@ -39,6 +40,7 @@ const FName FShintToolsModule::ShintToolsTabName = FName("ShintTools");
 // [LOD-STRIP-BEGIN]
 const FName FShintToolsModule::ShintPredictiveTabName = FName("ShintPredictive");
 // [LOD-STRIP-END]
+const FName FShintToolsModule::ShintAssistantTabName = FName("ShintAssistant");
 
 static FString GCachedTier = TEXT("free");
 FShintToolsModule::FOnShintLicenseResolved
@@ -160,6 +162,21 @@ void FShintToolsModule::RegisterTabSpawner()
 		.SetGroup(WorkspaceMenu::GetMenuStructure().GetDeveloperToolsMiscCategory())
 		.SetIcon(FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.Profiler"));
 	// [LOD-STRIP-END]
+
+	// AI Assistant — a nomad tab the user is expected to DOCK beside their
+	// work (Unreal anchors a nomad tab to any side of the layout, which is
+	// what makes the "assistant sidebar" shape work without custom docking).
+	// Registered on every tier: Free reaches the endpoint too, and gating the
+	// tab would contradict the contract's "do not hide the assistant from Free
+	// users" — the individual capabilities gate themselves, server-side.
+	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
+		ShintAssistantTabName,
+		FOnSpawnTab::CreateRaw(this, &FShintToolsModule::SpawnShintAssistantTab))
+		.SetDisplayName(LOCTEXT("ShintAssistantTabTitle", "AI Assistant"))
+		.SetTooltipText(LOCTEXT("ShintAssistantTabTooltip",
+			"Ask about your scans — runs entirely on this machine"))
+		.SetGroup(WorkspaceMenu::GetMenuStructure().GetDeveloperToolsMiscCategory())
+		.SetIcon(FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"));
 }
 
 void FShintToolsModule::UnregisterTabSpawner()
@@ -168,6 +185,7 @@ void FShintToolsModule::UnregisterTabSpawner()
 	// [LOD-STRIP-BEGIN]
 	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(ShintPredictiveTabName);
 	// [LOD-STRIP-END]
+	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(ShintAssistantTabName);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -187,27 +205,53 @@ void FShintToolsModule::ExtendLevelEditorMenu()
 			return;
 		}
 
-		// Add a new section "ShintTools" inside the Window menu
+		// One "ShintTools" flyout in the Window menu, with every window the
+		// plugin owns inside it. Previously these were flat entries under a
+		// section header, which spread three unrelated-looking items across
+		// the Window menu as the plugin grew — a submenu keeps the plugin's
+		// footprint to a single row no matter how many windows it adds.
 		FToolMenuSection& Section = WindowMenu->FindOrAddSection("ShintToolsSection");
-		Section.Label = LOCTEXT("ShintToolsSectionLabel", "ShintTools");
 
-		Section.AddMenuEntry(
-			"OpenShintToolsPanel",
-			LOCTEXT("OpenShintToolsPanelLabel", "ShintTools"),
-			LOCTEXT("OpenShintToolsPanelTooltip", "Open the ShintTools automation control panel"),
-			FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"),
-			FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintToolsPanel))
-		);
+		Section.AddSubMenu(
+			"ShintToolsSubMenu",
+			LOCTEXT("ShintToolsSubMenuLabel", "ShintTools"),
+			LOCTEXT("ShintToolsSubMenuTooltip", "ShintTools windows"),
+			FNewToolMenuChoice(FNewToolMenuDelegate::CreateLambda(
+				[this](UToolMenu* SubMenu)
+			{
+				FToolMenuSection& Windows =
+					SubMenu->FindOrAddSection("ShintToolsWindows");
 
-		// [LOD-STRIP-BEGIN]
-		Section.AddMenuEntry(
-			"OpenShintPredictiveDashboard",
-			LOCTEXT("OpenShintPredictiveLabel", "Predictive Profiler"),
-			LOCTEXT("OpenShintPredictiveTooltip", "Predict CPU/GPU/memory/build cost before you play"),
-			FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.Profiler"),
-			FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintPredictiveDashboard))
+				Windows.AddMenuEntry(
+					"OpenShintToolsPanel",
+					LOCTEXT("OpenShintToolsPanelLabel", "ShintTools"),
+					LOCTEXT("OpenShintToolsPanelTooltip", "Open the ShintTools automation control panel"),
+					FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"),
+					FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintToolsPanel))
+				);
+
+				// [LOD-STRIP-BEGIN]
+				Windows.AddMenuEntry(
+					"OpenShintPredictiveDashboard",
+					LOCTEXT("OpenShintPredictiveLabel", "Predictive Profiler"),
+					LOCTEXT("OpenShintPredictiveTooltip", "Predict CPU/GPU/memory/build cost before you play"),
+					FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.Profiler"),
+					FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintPredictiveDashboard))
+				);
+				// [LOD-STRIP-END]
+
+				Windows.AddMenuEntry(
+					"OpenShintAssistantPanel",
+					LOCTEXT("OpenShintAssistantLabel", "AI Assistant"),
+					LOCTEXT("OpenShintAssistantTooltip",
+						"Ask about your scans — runs entirely on this machine"),
+					FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"),
+					FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintAssistantPanel))
+				);
+			})),
+			/*bInOpenSubMenuOnClick=*/false,
+			FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI")
 		);
-		// [LOD-STRIP-END]
 	}));
 }
 
@@ -257,6 +301,20 @@ TSharedRef<SDockTab> FShintToolsModule::SpawnShintPredictiveTab(const FSpawnTabA
 		];
 }
 // [LOD-STRIP-END]
+
+void FShintToolsModule::OpenShintAssistantPanel()
+{
+	FGlobalTabmanager::Get()->TryInvokeTab(ShintAssistantTabName);
+}
+
+TSharedRef<SDockTab> FShintToolsModule::SpawnShintAssistantTab(const FSpawnTabArgs& SpawnTabArgs)
+{
+	return SNew(SDockTab)
+		.TabRole(ETabRole::NomadTab)
+		[
+			SNew(SShintAssistantPanel)
+		];
+}
 
 #undef LOCTEXT_NAMESPACE
 

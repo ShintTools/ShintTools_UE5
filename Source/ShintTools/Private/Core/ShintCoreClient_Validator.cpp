@@ -1450,6 +1450,11 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 			R.bLimitApplied ? 1 : 0, *R.LimitKind, R.LimitValue, R.TotalAvailable);
 	}
 
+	// Assistant contract §7 — top-level, not inside summary. Absent on an
+	// older Core, which leaves the assistant ungrounded rather than pointed
+	// at a stale analysis.
+	J->TryGetStringField(TEXT("analysis_id"), R.AnalysisId);
+
 	{
 		double Q = -1.0;
 		if (J->TryGetNumberField(TEXT("quality_score"), Q))

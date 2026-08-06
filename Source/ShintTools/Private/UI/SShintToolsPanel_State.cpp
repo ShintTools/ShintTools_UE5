@@ -16,6 +16,7 @@
 #include "SShintToolsPanel_Private.h"
 #include "ShintTools.h"
 #include "ShintCoreClient.h"
+#include "Core/ShintAssistantContext.h"
 #include "SShintTopBar.h"  // EShintConnState — bridged from SetStatus()
 
 #include "Widgets/Layout/SBox.h"
@@ -131,6 +132,16 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 	SetCodeState(EModuleState::Done);
 	PopulateCodeIssueList(LastCodeResult, bIsBPScan);
 	RefreshCodeStats();
+
+	// Hand the assistant something to ground answers in. Publishing here (and
+	// not at request time) means the panel only ever points at an analysis the
+	// server actually produced.
+	FShintAssistantContext::Publish(
+		LastCodeResult.AnalysisId,
+		EShintAssistantModule::CodeValidator,
+		FString::Printf(TEXT("Code Validator — %d issue%s"),
+			LastCodeResult.TotalIssues,
+			LastCodeResult.TotalIssues == 1 ? TEXT("") : TEXT("s")));
 
 	// Surface the overall score the server returned inline. The
 	// /metrics/score/latest round-trip used to fetch the per-category
