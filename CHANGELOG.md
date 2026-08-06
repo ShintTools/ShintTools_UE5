@@ -39,10 +39,23 @@
   every later request and the Core appends to that same analysis.
   (Requires Core 2.16.0.)
 
-### Notes
-- The single-shot Explain dialog is superseded by the panel — it answers
-  one finding, keeps nothing, and is destroyed on every click. It is
-  still present and functional; removal is a separate change.
+### Changed
+- **The plugin's Window-menu entries are now one "ShintTools" submenu**
+  instead of three flat rows under a section header. As the plugin grew
+  it was spreading unrelated-looking items across the Window menu; the
+  footprint is a single row now, whatever windows get added later.
+- **"Explain" on a finding opens the AI Assistant** instead of a modal.
+  It also **works on Free now** — the old dialog drove `/agent/explain`
+  (Indie and up), so it was hidden on Free and absent from the
+  marketplace build entirely; the assistant answers `explain_finding` on
+  every plan.
+
+### Removed
+- **The single-shot Explain dialog.** It opened a throwaway window,
+  answered one finding, and was destroyed on the next click, so a
+  follow-up question had nowhere to go. Superseded by the assistant
+  panel, where the same question lands in a thread that keeps its
+  context.
 
 ---
 
