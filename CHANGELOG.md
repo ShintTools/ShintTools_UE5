@@ -2,6 +2,50 @@
 
 ---
 
+## [Unreleased] — AI Assistant panel (M5)
+
+### Added
+- **AI Assistant panel** — a dockable nomad tab (Window ▸ AI Assistant)
+  the user anchors beside their work, in the style of an assistant
+  sidebar rather than a second window. Three destinations: **Chat**,
+  **Memory** and **Studio Rules**.
+  - **Available on every plan.** Free gets a working two-intent
+    assistant with no memory; the panel is never hidden behind a paid
+    check. Which destinations and quick-prompts appear comes from
+    `GET /assistant/capabilities` — there is no tier table in the client,
+    so the Core can widen a plan without a plugin release.
+  - **Ambient context.** Every module publishes its `analysis_id` when a
+    scan completes, and the panel sends it as `context_ref`, so "why is
+    this flagged?" works with nothing copied into the conversation. The
+    context strip names what the answer will be grounded in.
+  - **Streaming replies**, token-by-token for explanations only —
+    everything else answers from a table instantly and arrives whole.
+  - **Follow-ups are labelled.** A response that inherited its intent and
+    grounding server-side is marked as such, so a two-word question
+    producing a detailed answer does not look like a coincidence.
+  - **Confirmation cards.** A remembered fact or a drafted studio rule
+    does nothing at all until accepted in the panel; a drafted rule shows
+    the compiler's own reading of it, because what is accepted is exactly
+    what will run.
+- **`analysis_id` parsed from every scan response** (assistant contract
+  §7) on the Code Validator, Asset Naming Bot and LOD Auditor.
+
+### Fixed
+- **LOD audits grounded the assistant in only their final batch.** Audits
+  are POSTed in chained batches of 150 assets, and each batch minted its
+  own analysis server-side — so "summarize this scan" would have answered
+  for the last ~150 assets while appearing to speak for the whole
+  project. The chain now echoes the first batch's `analysis_id` back on
+  every later request and the Core appends to that same analysis.
+  (Requires Core 2.16.0.)
+
+### Notes
+- The single-shot Explain dialog is superseded by the panel — it answers
+  one finding, keeps nothing, and is destroyed on every click. It is
+  still present and functional; removal is a separate change.
+
+---
+
 ## [1.4.1] — 2026-08-04 — Predictive Profiler + LOD Auditor client audit
 
 ### Added
