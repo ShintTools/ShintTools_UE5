@@ -205,35 +205,52 @@ void FShintToolsModule::ExtendLevelEditorMenu()
 			return;
 		}
 
-		// Add a new section "ShintTools" inside the Window menu
+		// One "ShintTools" flyout in the Window menu, with every window the
+		// plugin owns inside it. Previously these were flat entries under a
+		// section header, which spread three unrelated-looking items across
+		// the Window menu as the plugin grew — a submenu keeps the plugin's
+		// footprint to a single row no matter how many windows it adds.
 		FToolMenuSection& Section = WindowMenu->FindOrAddSection("ShintToolsSection");
-		Section.Label = LOCTEXT("ShintToolsSectionLabel", "ShintTools");
 
-		Section.AddMenuEntry(
-			"OpenShintToolsPanel",
-			LOCTEXT("OpenShintToolsPanelLabel", "ShintTools"),
-			LOCTEXT("OpenShintToolsPanelTooltip", "Open the ShintTools automation control panel"),
-			FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"),
-			FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintToolsPanel))
-		);
+		Section.AddSubMenu(
+			"ShintToolsSubMenu",
+			LOCTEXT("ShintToolsSubMenuLabel", "ShintTools"),
+			LOCTEXT("ShintToolsSubMenuTooltip", "ShintTools windows"),
+			FNewToolMenuChoice(FNewToolMenuDelegate::CreateLambda(
+				[this](UToolMenu* SubMenu)
+			{
+				FToolMenuSection& Windows =
+					SubMenu->FindOrAddSection("ShintToolsWindows");
 
-		// [LOD-STRIP-BEGIN]
-		Section.AddMenuEntry(
-			"OpenShintPredictiveDashboard",
-			LOCTEXT("OpenShintPredictiveLabel", "Predictive Profiler"),
-			LOCTEXT("OpenShintPredictiveTooltip", "Predict CPU/GPU/memory/build cost before you play"),
-			FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.Profiler"),
-			FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintPredictiveDashboard))
-		);
-		// [LOD-STRIP-END]
+				Windows.AddMenuEntry(
+					"OpenShintToolsPanel",
+					LOCTEXT("OpenShintToolsPanelLabel", "ShintTools"),
+					LOCTEXT("OpenShintToolsPanelTooltip", "Open the ShintTools automation control panel"),
+					FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"),
+					FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintToolsPanel))
+				);
 
-		Section.AddMenuEntry(
-			"OpenShintAssistantPanel",
-			LOCTEXT("OpenShintAssistantLabel", "AI Assistant"),
-			LOCTEXT("OpenShintAssistantTooltip",
-				"Ask about your scans — runs entirely on this machine"),
-			FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"),
-			FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintAssistantPanel))
+				// [LOD-STRIP-BEGIN]
+				Windows.AddMenuEntry(
+					"OpenShintPredictiveDashboard",
+					LOCTEXT("OpenShintPredictiveLabel", "Predictive Profiler"),
+					LOCTEXT("OpenShintPredictiveTooltip", "Predict CPU/GPU/memory/build cost before you play"),
+					FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.Profiler"),
+					FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintPredictiveDashboard))
+				);
+				// [LOD-STRIP-END]
+
+				Windows.AddMenuEntry(
+					"OpenShintAssistantPanel",
+					LOCTEXT("OpenShintAssistantLabel", "AI Assistant"),
+					LOCTEXT("OpenShintAssistantTooltip",
+						"Ask about your scans — runs entirely on this machine"),
+					FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"),
+					FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintAssistantPanel))
+				);
+			})),
+			/*bInOpenSubMenuOnClick=*/false,
+			FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI")
 		);
 	}));
 }

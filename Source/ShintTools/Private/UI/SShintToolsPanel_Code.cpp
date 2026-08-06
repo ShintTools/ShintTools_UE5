@@ -15,6 +15,10 @@
 #include "SShintToolsPanel_Private.h"
 #include "ShintTools.h"
 #include "ShintCoreClient.h"
+#include "Core/ShintAssistantContext.h"
+
+#include "Framework/Docking/TabManager.h"   // TryInvokeTab — Explain -> Assistant
+#include "Misc/Paths.h"
 // [DASH-STRIP-BEGIN]
 #include "ShintDashboardSync.h"
 // [DASH-STRIP-END]
@@ -691,34 +695,28 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 								]
 							]
 						]
-						// [AGENT-STRIP-BEGIN]
-						// LLM pivot — per-issue "Explain" button. Hidden on Free
-						// tier so the user never gets a 403 mid-click; Tier comes
-						// from the validate response's top-level summary.tier.
+						// Per-issue "Explain" — hands the question to the AI
+						// Assistant tab. Shown on every tier: the old modal drove
+						// /agent/explain (Indie and up) and so was hidden on Free,
+						// but the assistant answers explain_finding on every plan.
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 6.f, 0.f)
 						[
-							SNew(SBox)
-							.Visibility(LastCodeResult.Tier == TEXT("free")
-								? EVisibility::Collapsed : EVisibility::Visible)
+							SNew(SButton)
+							.ContentPadding(FMargin(6.f, 2.f))
+							.ButtonColorAndOpacity(FSlateColor(C_Surface()))
+							.ToolTipText(LOCTEXT("ExplainTip",
+								"Ask the AI Assistant to explain this issue in plain language."))
+							.OnClicked_Lambda([this, Item]() -> FReply
+							{
+								return OnExplainIssueClicked(Item);
+							})
 							[
-								SNew(SButton)
-								.ContentPadding(FMargin(6.f, 2.f))
-								.ButtonColorAndOpacity(FSlateColor(C_Surface()))
-								.ToolTipText(LOCTEXT("ExplainTip",
-									"Ask the local LLM agent to explain this issue in plain language."))
-								.OnClicked_Lambda([this, Item]() -> FReply
-								{
-									return OnExplainIssueClicked(Item);
-								})
-								[
-									SNew(STextBlock)
-									.Text(LOCTEXT("ExplainBtn", "✎  Explain"))
-									.Font(F_Label())
-									.ColorAndOpacity(FSlateColor(FLinearColor(0.40f, 0.75f, 0.95f)))
-								]
+								SNew(STextBlock)
+								.Text(LOCTEXT("ExplainBtn", "✎  Explain"))
+								.Font(F_Label())
+								.ColorAndOpacity(FSlateColor(FLinearColor(0.40f, 0.75f, 0.95f)))
 							]
 						]
-						// [AGENT-STRIP-END]
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 						[
 							SNew(STextBlock).Text(FText::FromString(AutoBadge)).Font(F_Label())
@@ -893,6 +891,35 @@ FReply SShintToolsPanel::OnIgnoreSingleFix(FShintIssueItemPtr Item)
 	AllCodeItems.RemoveAll([&Item](const FShintIssueItemPtr& P){ return P == Item; });
 	ApplyCodeFilter();
 	RefreshApplyCodeLabel();
+	return FReply::Handled();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Explain — hand the finding to the AI Assistant
+//
+// Replaces the single-shot modal (SShintToolsPanel_Explain.cpp, removed): it
+// opened a throwaway window, answered once, and was destroyed on the next
+// click, so a follow-up had nowhere to go. The question now becomes a turn in
+// a durable thread the user can keep asking into.
+//
+// The finding is identified by rule_id + asset/file path, not re-sent: the
+// assistant resolves it server-side from the analysis the scan published.
+// ─────────────────────────────────────────────────────────────────────────────
+FReply SShintToolsPanel::OnExplainIssueClicked(FShintIssueItemPtr Item)
+{
+	if (!Item.IsValid()) return FReply::Handled();
+
+	const FString Label = Item->RuleName.IsEmpty() ? Item->RuleId : Item->RuleName;
+	const FString Question = FString::Printf(
+		TEXT("Why is \"%s\" flagged in %s?"),
+		*Label, *FPaths::GetCleanFilename(Item->FilePath));
+
+	// Queue first, then invoke: the panel consumes the pending request when it
+	// hears OnChanged, and that fires whether the tab was already open or this
+	// click is what created it.
+	FShintAssistantContext::RequestExplain(Item->RuleId, Item->FilePath, Question);
+	FGlobalTabmanager::Get()->TryInvokeTab(FShintToolsModule::ShintAssistantTabName);
+
 	return FReply::Handled();
 }
 

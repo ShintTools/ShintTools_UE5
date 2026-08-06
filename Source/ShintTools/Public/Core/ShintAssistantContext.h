@@ -63,6 +63,27 @@ struct SHINTTOOLS_API FShintAssistantContext
 	/** True when an analysis is available to ground a question against. */
 	static bool HasContext();
 
+	/**
+	 * Ask the assistant to explain one finding.
+	 *
+	 * This is what the per-row "Explain" button now does: instead of opening
+	 * a throwaway modal that answered once and forgot, it queues the question
+	 * here and invokes the assistant tab, so the answer lands in a thread the
+	 * user can keep asking into ("and why does that matter?").
+	 *
+	 * The panel consumes the request when it next hears OnChanged — including
+	 * the case where the click is what opened the panel in the first place,
+	 * because the pending request survives until something takes it.
+	 */
+	static void RequestExplain(const FString& RuleId, const FString& AssetPath,
+	                           const FString& Question);
+
+	/** Take the queued explain request, if any. Returns false when there is
+	 *  none; the request is cleared on a successful take so a later refresh
+	 *  cannot replay it. */
+	static bool ConsumePendingExplain(FString& OutRuleId, FString& OutAssetPath,
+	                                  FString& OutQuestion);
+
 	// [LOD-STRIP-BEGIN]
 	/**
 	 * The Predictive Profiler's report id, kept separately from AnalysisId

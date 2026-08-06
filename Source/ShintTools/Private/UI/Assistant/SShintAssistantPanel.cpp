@@ -74,8 +74,14 @@ void SShintAssistantPanel::Construct(const FArguments& InArgs)
 	CoreClient->LoadConfig();
 
 	// The context strip reads FShintAssistantContext through a bound attribute,
-	// so a scan finishing while the panel is open relabels it on the next paint
-	// with no subscription to keep alive.
+	// so a scan finishing while the panel is open relabels itself on the next
+	// paint. The subscription is for the other direction: a results row queuing
+	// "Explain this finding", which has to be answered as a real turn rather
+	// than just relabelled. AddSP holds a weak reference, so a closed panel
+	// simply stops receiving — no removal needed.
+	FShintAssistantContext::OnChanged.AddSP(
+		this, &SShintAssistantPanel::ConsumePendingExplain);
+
 	ChildSlot
 	[
 		SNew(SBorder)
@@ -115,6 +121,28 @@ FText SShintAssistantPanel::GetContextLabel() const
 	}
 	return FText::Format(LOCTEXT("ViewingFmt", "Viewing: {0}"),
 		FText::FromString(FShintAssistantContext::GetSummary()));
+}
+
+void SShintAssistantPanel::ConsumePendingExplain()
+{
+	FString RuleId, AssetPath, Question;
+	if (!FShintAssistantContext::ConsumePendingExplain(RuleId, AssetPath, Question))
+		return;
+
+	// Answering while another turn is still generating would drop the request
+	// silently (SendMessage refuses when busy), so put it back and let the
+	// next OnChanged pick it up.
+	if (bAwaitingReply)
+	{
+		FShintAssistantContext::RequestExplain(RuleId, AssetPath, Question);
+		return;
+	}
+
+	PendingExplainRuleId    = RuleId;
+	PendingExplainAssetPath = AssetPath;
+
+	// The button knows its own intent, so this never goes through the router.
+	SendMessage(Question, TEXT("explain_finding"));
 }
 
 TSharedRef<SWidget> SShintAssistantPanel::BuildContextStrip()
@@ -436,6 +464,14 @@ void SShintAssistantPanel::SendMessage(const FString& Text, const FString& Force
 	// server would otherwise apply, and a follow-up still resolves correctly.
 	Req.ContextRef     = FShintAssistantContext::GetAnalysisId();
 	Req.ModuleContext  = FShintAssistantContext::GetModuleContextString();
+
+	// Selector within the analysis, set only when a results row asked. Consumed
+	// here so the next free-text turn resolves through the server's own
+	// inheritance instead of silently reusing this row.
+	Req.RuleId    = MoveTemp(PendingExplainRuleId);
+	Req.AssetPath = MoveTemp(PendingExplainAssetPath);
+	PendingExplainRuleId.Reset();
+	PendingExplainAssetPath.Reset();
 	// [LOD-STRIP-BEGIN]
 	Req.ReportId       = FShintAssistantContext::GetReportId();
 	// [LOD-STRIP-END]

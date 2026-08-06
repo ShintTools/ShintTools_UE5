@@ -11,6 +11,13 @@ namespace
 	// [LOD-STRIP-BEGIN]
 	FString               GReportId;
 	// [LOD-STRIP-END]
+
+	// Queued "Explain this finding" from a results row. Held until the panel
+	// takes it, so a click that also opens the panel still gets answered.
+	bool    GHasPendingExplain = false;
+	FString GPendingRuleId;
+	FString GPendingAssetPath;
+	FString GPendingQuestion;
 }
 
 FShintAssistantContext::FOnShintAssistantContextChanged
@@ -40,6 +47,37 @@ FString               FShintAssistantContext::GetAnalysisId() { return GAnalysis
 EShintAssistantModule FShintAssistantContext::GetModule()     { return GModule; }
 FString               FShintAssistantContext::GetSummary()    { return GSummary; }
 bool                  FShintAssistantContext::HasContext()    { return !GAnalysisId.IsEmpty(); }
+
+void FShintAssistantContext::RequestExplain(
+	const FString& RuleId, const FString& AssetPath, const FString& Question)
+{
+	GHasPendingExplain = true;
+	GPendingRuleId     = RuleId;
+	GPendingAssetPath  = AssetPath;
+	GPendingQuestion   = Question;
+
+	UE_LOG(LogShintTools, Verbose,
+		TEXT("AssistantContext: explain queued rule=%s asset=%s"),
+		*RuleId, *AssetPath);
+
+	OnChanged.Broadcast();
+}
+
+bool FShintAssistantContext::ConsumePendingExplain(
+	FString& OutRuleId, FString& OutAssetPath, FString& OutQuestion)
+{
+	if (!GHasPendingExplain) return false;
+
+	OutRuleId    = GPendingRuleId;
+	OutAssetPath = GPendingAssetPath;
+	OutQuestion  = GPendingQuestion;
+
+	GHasPendingExplain = false;
+	GPendingRuleId.Reset();
+	GPendingAssetPath.Reset();
+	GPendingQuestion.Reset();
+	return true;
+}
 
 FString FShintAssistantContext::GetModuleContextString()
 {

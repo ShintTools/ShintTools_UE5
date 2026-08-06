@@ -100,6 +100,10 @@ private:
 	/** Context strip label, bound so it follows FShintAssistantContext. */
 	FText GetContextLabel() const;
 
+	/** Take a queued "Explain this finding" from a results row and answer it
+	 *  in the thread. Fires on FShintAssistantContext::OnChanged. */
+	void ConsumePendingExplain();
+
 	/** True when the resolved capabilities grant this view. */
 	bool CanUseView(EShintAssistantView View) const;
 
@@ -118,6 +122,13 @@ private:
 	bool   bAwaitingReply = false;
 
 	FString StreamBuffer;
+
+	/** Grounding for the turn being sent right now, when it came from a
+	 *  results row's Explain button rather than free text. Cleared once the
+	 *  request is built — a later free-text question must not inherit it
+	 *  client-side (the server's own inheritance is the correct mechanism). */
+	FString PendingExplainRuleId;
+	FString PendingExplainAssetPath;
 
 	TArray<FShintAssistantFact> Facts;
 	TArray<FShintAssistantRule> Rules;

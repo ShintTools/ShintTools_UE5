@@ -230,23 +230,10 @@ void SShintToolsPanel::SetDestinationIndex(int32 Index)
 
 SShintToolsPanel::~SShintToolsPanel()
 {
-	// [AGENT-STRIP-BEGIN]
-	// Clean up the Explain modal + its rotating-status ticker. Without this,
-	// the SWindow was orphaned in FSlateApplication's window list whenever the
-	// panel was destroyed without the user clicking Close, and the ticker
-	// delegate would keep firing against a dead `this` (the ticker also
-	// previously held the last strong ref — see bug-hunt issue #5).
-	if (ExplainTickerHandle.IsValid())
-	{
-		FTSTicker::GetCoreTicker().RemoveTicker(ExplainTickerHandle);
-		ExplainTickerHandle.Reset();
-	}
-	if (ExplainWindow.IsValid())
-	{
-		ExplainWindow->RequestDestroyWindow();
-		ExplainWindow.Reset();
-	}
-	// [AGENT-STRIP-END]
+	// The Explain modal's SWindow + rotating-status ticker used to be torn
+	// down here (an orphaned window and a ticker firing against a dead `this`
+	// — bug-hunt issue #5). The modal is gone: Explain now hands the question
+	// to the assistant tab, which owns its own lifetime.
 }
 
 #undef LOCTEXT_NAMESPACE
