@@ -135,18 +135,18 @@ MODULES = {
     },
     "agent": {
         "sentinel": ("[AGENT-STRIP-BEGIN]", "[AGENT-STRIP-END]"),
+        # SShintToolsPanel_Explain.cpp (the single-shot modal) was deleted when
+        # the assistant panel took over per-finding explanations — the Explain
+        # button now routes there and ships on every tier, so nothing about it
+        # is agent-gated any more.
         "files": [
             "Source/ShintTools/Private/Core/ShintCoreClient_Agent.cpp",
-            "Source/ShintTools/Private/UI/SShintToolsPanel_Explain.cpp",
         ],
         "symbols": [
-            "ShintCoreClient_Agent", "SShintToolsPanel_Explain",
+            "ShintCoreClient_Agent",
             "FShintAgentPlanStep", "FShintAgentPlanResult",
             "FShintAgentExplainResponse", "FOnShintAgentPlanComplete",
             "FOnShintAgentExplainComplete", "ParseAgentPlanResponse",
-            "ExplainWindow", "ExplainResultBox", "ExplainSpinner",
-            "ExplainStatusLine", "ExplainStatusIndex", "ExplainRequestId",
-            "ExplainTickerHandle",
         ],
         "endpoints": ["agent/explain", "agent/plan"],
     },
