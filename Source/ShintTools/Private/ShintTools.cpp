@@ -4,6 +4,7 @@
 #include "SShintToolsPanel.h"
 #include "SShintWelcomeDialog.h"
 #include "ShintIconStyle.h"
+#include "Assistant/SShintAssistantPanel.h"
 // [LOD-STRIP-BEGIN]
 #include "Predictive/SShintPredictiveDashboard.h"
 // [LOD-STRIP-END]
@@ -39,6 +40,7 @@ const FName FShintToolsModule::ShintToolsTabName = FName("ShintTools");
 // [LOD-STRIP-BEGIN]
 const FName FShintToolsModule::ShintPredictiveTabName = FName("ShintPredictive");
 // [LOD-STRIP-END]
+const FName FShintToolsModule::ShintAssistantTabName = FName("ShintAssistant");
 
 static FString GCachedTier = TEXT("free");
 FShintToolsModule::FOnShintLicenseResolved
@@ -160,6 +162,21 @@ void FShintToolsModule::RegisterTabSpawner()
 		.SetGroup(WorkspaceMenu::GetMenuStructure().GetDeveloperToolsMiscCategory())
 		.SetIcon(FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.Profiler"));
 	// [LOD-STRIP-END]
+
+	// AI Assistant — a nomad tab the user is expected to DOCK beside their
+	// work (Unreal anchors a nomad tab to any side of the layout, which is
+	// what makes the "assistant sidebar" shape work without custom docking).
+	// Registered on every tier: Free reaches the endpoint too, and gating the
+	// tab would contradict the contract's "do not hide the assistant from Free
+	// users" — the individual capabilities gate themselves, server-side.
+	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
+		ShintAssistantTabName,
+		FOnSpawnTab::CreateRaw(this, &FShintToolsModule::SpawnShintAssistantTab))
+		.SetDisplayName(LOCTEXT("ShintAssistantTabTitle", "AI Assistant"))
+		.SetTooltipText(LOCTEXT("ShintAssistantTabTooltip",
+			"Ask about your scans — runs entirely on this machine"))
+		.SetGroup(WorkspaceMenu::GetMenuStructure().GetDeveloperToolsMiscCategory())
+		.SetIcon(FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"));
 }
 
 void FShintToolsModule::UnregisterTabSpawner()
@@ -168,6 +185,7 @@ void FShintToolsModule::UnregisterTabSpawner()
 	// [LOD-STRIP-BEGIN]
 	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(ShintPredictiveTabName);
 	// [LOD-STRIP-END]
+	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(ShintAssistantTabName);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -208,6 +226,15 @@ void FShintToolsModule::ExtendLevelEditorMenu()
 			FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintPredictiveDashboard))
 		);
 		// [LOD-STRIP-END]
+
+		Section.AddMenuEntry(
+			"OpenShintAssistantPanel",
+			LOCTEXT("OpenShintAssistantLabel", "AI Assistant"),
+			LOCTEXT("OpenShintAssistantTooltip",
+				"Ask about your scans — runs entirely on this machine"),
+			FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"),
+			FUIAction(FExecuteAction::CreateRaw(this, &FShintToolsModule::OpenShintAssistantPanel))
+		);
 	}));
 }
 
@@ -257,6 +284,20 @@ TSharedRef<SDockTab> FShintToolsModule::SpawnShintPredictiveTab(const FSpawnTabA
 		];
 }
 // [LOD-STRIP-END]
+
+void FShintToolsModule::OpenShintAssistantPanel()
+{
+	FGlobalTabmanager::Get()->TryInvokeTab(ShintAssistantTabName);
+}
+
+TSharedRef<SDockTab> FShintToolsModule::SpawnShintAssistantTab(const FSpawnTabArgs& SpawnTabArgs)
+{
+	return SNew(SDockTab)
+		.TabRole(ETabRole::NomadTab)
+		[
+			SNew(SShintAssistantPanel)
+		];
+}
 
 #undef LOCTEXT_NAMESPACE
 

@@ -118,6 +118,12 @@ struct FShintValidateResult
 	FString LimitKind;          // "rules" | "assets"
 	int32   LimitValue      = 0; // rules / assets actually applied
 	int32   TotalAvailable  = 0; // full catalog size on the server
+
+	// Assistant contract §7 (additive). The handle the assistant resolves
+	// findings from, so a question needs no project data resent. Empty on an
+	// older Core — the assistant then says it cannot resolve that analysis,
+	// which is the honest outcome rather than a silent wrong answer.
+	FString AnalysisId;
 };
 DECLARE_DELEGATE_OneParam(FOnShintValidateComplete, const FShintValidateResult&);
 
@@ -206,6 +212,9 @@ struct FShintAssetScanResult
 	int32   LimitValue     = 0; // assets actually scanned (post-cap)
 	int32   TotalAvailable = 0; // assets discovered before the cap
 
+	// Assistant contract §7 (additive) — see FShintValidateResult::AnalysisId.
+	FString AnalysisId;
+
 	TArray<FShintAssetIssue> Issues;
 };
 DECLARE_DELEGATE_OneParam(FOnShintAssetScanComplete, const FShintAssetScanResult&);
@@ -292,6 +301,12 @@ struct FShintLodAuditResult
 	int32   MeshesAudited     = 0;
 	int32   MaterialsAudited  = 0;
 	double  TotalVramMb       = 0.0;   // sum of resident texture VRAM
+
+	// Assistant contract §7 — see FShintValidateResult::AnalysisId. The audit
+	// is collected in chained batches, so only the LAST batch's id survives
+	// into the merged result: it is the one whose stored document holds the
+	// findings the user is looking at.
+	FString AnalysisId;
 
 	TArray<FShintLodFinding> Findings;
 };
@@ -585,6 +600,141 @@ DECLARE_DELEGATE_OneParam(FOnShintAgentExplainComplete, const FShintAgentExplain
 
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Assistant (client contract v1.1) — /assistant/*
+//
+// Deliberately NOT behind a strip sentinel. Unlike /agent/* and the LOD
+// Auditor, the assistant ships in EVERY edition including the free
+// marketplace image: Free gets a working assistant with two intents and no
+// memory. The panel must never be hidden behind a paid check — only the
+// individual features are gated, and the gate comes from the server via
+// FShintAssistantCapabilities, never from a hardcoded client-side table.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One turn in a conversation thread (user or assistant). */
+struct FShintAssistantTurn
+{
+	FString TurnId;
+	FString Role;        // "user" | "assistant"
+	FString Intent;
+	FString RawText;
+	FString ContextRef;  // analysis_id this turn resolved against
+	FString RuleId;      // echoed grounding — lets a reopened thread restore
+	FString AssetPath;   // its own context without the client remembering it
+};
+
+/** Result of POST /assistant/message (and the terminal event of the SSE twin). */
+struct FShintAssistantResponse
+{
+	bool    bSuccess = false;
+	FString ConversationId;
+	FString Tier;
+	FString Intent;
+	bool    bContinued = false;  // true -> intent/grounding inherited server-side
+	bool    bDegraded  = false;  // generation died; RawText is the deterministic fallback
+	FShintAssistantTurn Reply;
+
+	// Populated on failure. A 403 is a per-intent gate, never an endpoint gate:
+	// AllowedIntents lists what this tier CAN run so the UI can explain itself.
+	FString         ErrorMessage;
+	int32           StatusCode = 0;
+	FString         CurrentTier;
+	TArray<FString> AllowedIntents;
+};
+
+/** GET /assistant/capabilities — asked once at startup; drives the whole UI. */
+struct FShintAssistantCapabilities
+{
+	bool            bSuccess = false;
+	FString         Tier;
+	TArray<FString> Intents;
+	FString         Memory;       // "none" | "session" | "full"
+	FString         ModelProfile; // "light" | "advanced"
+	FString         StudioRules;  // "" | "llm_evaluated" | "all"
+	FString         ErrorMessage;
+
+	bool CanRun(const FString& Intent) const { return Intents.Contains(Intent); }
+	bool HasPersistentMemory() const { return Memory == TEXT("full"); }
+};
+
+/** A remembered fact. Nothing acts on it until Status == "confirmed". */
+struct FShintAssistantFact
+{
+	FString FactId;
+	FString Type;    // studio_fact | preference | decision
+	FString Value;   // the user's own sentence, never paraphrased
+	FString Status;  // proposed | confirmed | superseded | retracted
+	FString SourceModule;
+	FString SourceConversationId;
+};
+
+struct FShintAssistantMemory
+{
+	bool bSuccess = false;
+	bool bMuted   = false;   // NDA silent mode for this project
+	TArray<FShintAssistantFact> Facts;
+	FString ErrorMessage;
+};
+
+/** A studio rule. A draft until a person activates it. */
+struct FShintAssistantRule
+{
+	FString RuleId;
+	FString Name;
+	FString Tier;        // "template" (A) | "llm_evaluated" (B)
+	FString Status;      // draft | active | deprecated
+	FString Description; // how the compiler understood it — show verbatim
+};
+
+struct FShintAssistantRules
+{
+	bool bSuccess = false;
+	TArray<FShintAssistantRule> Rules;
+	FString ErrorMessage;
+};
+
+/** "You already decided this" — deterministic, errs toward silence. */
+struct FShintAssistantContradiction
+{
+	FString FactId;
+	FString FactValue;
+	FString RuleId;
+	FString AssetPath;
+	FString Nudge;      // render as-is
+};
+
+struct FShintAssistantDecisions
+{
+	bool bSuccess = false;
+	TArray<FShintAssistantContradiction> Contradictions;
+	FString ErrorMessage;
+};
+
+/** Everything a turn may carry. Only Message is always required. */
+struct FShintAssistantRequest
+{
+	FString Message;
+	FString ConversationId;   // omit on the first turn
+	FString Intent;           // omit to let the router classify
+	FString ContextRef;       // analysis_id from a scan
+	FString RuleId;
+	FString AssetPath;
+	FString ReportId;                 // simulate_change
+	TArray<FString> SelectedItemIds;  // simulate_change
+	FString PlatformProfile;
+	FString StudioId;
+	FString ProjectId;
+	FString ModuleContext;    // "lod_audit" | "code_validator" | ...
+};
+
+DECLARE_DELEGATE_OneParam(FOnShintAssistantComplete,     const FShintAssistantResponse&);
+DECLARE_DELEGATE_OneParam(FOnShintAssistantCapabilities, const FShintAssistantCapabilities&);
+DECLARE_DELEGATE_OneParam(FOnShintAssistantMemory,       const FShintAssistantMemory&);
+DECLARE_DELEGATE_OneParam(FOnShintAssistantRules,        const FShintAssistantRules&);
+DECLARE_DELEGATE_OneParam(FOnShintAssistantDecisions,    const FShintAssistantDecisions&);
+DECLARE_DELEGATE_OneParam(FOnShintAssistantThread,       const TArray<FShintAssistantTurn>&);
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Local dashboard report (legacy — keeps a local sync)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -848,6 +998,83 @@ public:
 	                               FOnShintStreamChunk          OnChunk,
 	                               FOnShintAgentExplainComplete OnComplete);
 	// [AGENT-STRIP-END]
+
+	// ── Assistant (all tiers) — /assistant/* ─────────────────────────────────
+	// Implemented in ShintCoreClient_Assistant.cpp. Never strip-gated: the
+	// free image serves this router too, and the panel is expected to be
+	// visible on every tier (features gate per-intent, from the server).
+
+	/**
+	 * One conversation turn — POST /assistant/message.
+	 *
+	 * Omit ConversationId on the first turn; the response carries the id to
+	 * reuse. A short follow-up ("and why?") needs no context at all: the
+	 * server inherits the previous turn's intent and grounding and answers
+	 * with bContinued=true. Sending context anyway is always safe — an
+	 * explicit value overrides what would have been inherited.
+	 *
+	 * Failure paths surface through OnComplete with bSuccess=false:
+	 *   403 → per-intent gate; AllowedIntents lists what this tier can run
+	 *   404 → conversation unknown or idle-expired (12h); start a new one
+	 */
+	void SendAssistantMessage(const FShintAssistantRequest& Request,
+	                          FOnShintAssistantComplete OnComplete);
+
+	/**
+	 * Streaming twin — POST /assistant/message/stream. Same inputs, same
+	 * gating, same persistence; pick per call. Only explain_finding streams
+	 * token-by-token — everything else answers from a table and arrives as a
+	 * single chunk, so do not animate it.
+	 *
+	 * 403/404 are real status codes raised before the stream opens, not
+	 * error events inside a 200, and surface through OnComplete as usual.
+	 */
+	void SendAssistantMessageStream(const FShintAssistantRequest& Request,
+	                                FOnShintStreamChunk       OnChunk,
+	                                FOnShintAssistantComplete OnComplete);
+
+	/** GET /assistant/capabilities — ask once at startup, drive the UI from
+	 *  it. Never hardcode a tier table client-side. */
+	void GetAssistantCapabilities(FOnShintAssistantCapabilities OnComplete);
+
+	/** GET /assistant/conversations/{id} — full thread in order, for
+	 *  restoring the panel after an editor restart. */
+	void GetAssistantConversation(const FString& ConversationId,
+	                              FOnShintAssistantThread OnComplete);
+
+	// ── Memory (capabilities.Memory == "full" only) ──────────────────────────
+	void GetAssistantMemory(const FString& StudioId, const FString& ProjectId,
+	                        FOnShintAssistantMemory OnComplete);
+
+	/** Promote a proposed fact to confirmed (bAccept) or retract it. Until a
+	 *  person accepts, the fact is invisible to every other part of the
+	 *  system — this call is the only gate. */
+	void ConfirmAssistantFact(const FString& FactId, bool bAccept,
+	                          FOnShintAssistantComplete OnComplete);
+
+	/** NDA silent mode — stop recording memory for one project. */
+	void MuteAssistantMemory(const FString& StudioId, const FString& ProjectId,
+	                         bool bMuted, FOnShintAssistantComplete OnComplete);
+
+	/** Purge every fact for a closed project. Irreversible server-side. */
+	void PurgeAssistantProject(const FString& StudioId, const FString& ProjectId,
+	                           FOnShintAssistantComplete OnComplete);
+
+	// ── Studio rules ─────────────────────────────────────────────────────────
+	void GetAssistantRules(const FString& StudioId, const FString& ProjectId,
+	                       FOnShintAssistantRules OnComplete);
+
+	/** Activate a draft rule (bAccept) or discard it. Only active,
+	 *  user-confirmed rules ever run during a scan. */
+	void ConfirmAssistantRule(const FString& RuleId, bool bAccept,
+	                          FOnShintAssistantComplete OnComplete);
+
+	/** POST /assistant/decisions/check — call after a scan to surface
+	 *  "you already decided this" contradictions. Deterministic and errs
+	 *  toward silence; an empty array is the normal case. */
+	void CheckAssistantDecisions(const FString& StudioId, const FString& ProjectId,
+	                             const FString& ContextRef,
+	                             FOnShintAssistantDecisions OnComplete);
 
 	// ── Generic ───────────────────────────────────────────────────────────────
 	void SendRequest(const FString& FullUrl, EShintHttpMethod Method,

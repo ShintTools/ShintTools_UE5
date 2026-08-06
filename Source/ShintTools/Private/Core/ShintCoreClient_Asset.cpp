@@ -194,6 +194,9 @@ FShintAssetScanResult FShintCoreClient::ParseAssetScanResponse(const FShintReque
 		}
 	}
 
+	// Assistant contract §7 — top-level, additive. Absent on an older Core.
+	J->TryGetStringField(TEXT("analysis_id"), R.AnalysisId);
+
 	const TArray<TSharedPtr<FJsonValue>>* IssArr = nullptr;
 	if (!J->TryGetArrayField(TEXT("issues"), IssArr) || !IssArr)
 	{

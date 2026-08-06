@@ -56,6 +56,10 @@ public:
 	static const FName ShintPredictiveTabName;
 	// [LOD-STRIP-END]
 
+	/** Name of the AI Assistant dockable tab. Registered on EVERY tier —
+	 *  Free gets a working two-intent assistant, so this one is never gated. */
+	static const FName ShintAssistantTabName;
+
 	// Cached license status — populated at module startup by an async
 	static FString GetCachedTier();
 
@@ -97,6 +101,12 @@ private:
 	/** Spawns the Predictive Profiler dockable tab widget. */
 	TSharedRef<SDockTab> SpawnShintPredictiveTab(const FSpawnTabArgs& SpawnTabArgs);
 	// [LOD-STRIP-END]
+
+	/** Opens / brings-to-front the AI Assistant panel. */
+	void OpenShintAssistantPanel();
+
+	/** Spawns the AI Assistant dockable tab widget. */
+	TSharedRef<SDockTab> SpawnShintAssistantTab(const FSpawnTabArgs& SpawnTabArgs);
 
 	/** Creates the menu entry under Window > Developer Tools */
 	void BuildShintToolsMenu(FMenuBuilder& MenuBuilder);

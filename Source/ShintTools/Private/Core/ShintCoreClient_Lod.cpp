@@ -1146,6 +1146,14 @@ namespace
 		Body->SetNumberField(TEXT("max_explanations"), 5);
 		Body->SetArrayField(TEXT("assets"),          Arr);
 
+		// Assistant contract §7. The first batch leaves this empty and the
+		// server mints an analysis; every later batch echoes that id back so
+		// all batches accumulate into ONE analysis. Without it the assistant
+		// could only ever resolve the final batch while appearing to speak
+		// for the whole audit.
+		if (!S->Aggregate.AnalysisId.IsEmpty())
+			Body->SetStringField(TEXT("analysis_id"), S->Aggregate.AnalysisId);
+
 		S->Client->SendRequest(S->BaseUrl + TEXT("/assets/lod/audit"),
 			EShintHttpMethod::POST, FShintCoreClient::SerializeJson(Body),
 			FOnShintRequestComplete::CreateLambda(
@@ -1172,6 +1180,10 @@ namespace
 				S->Aggregate.EstimatedVramSavedMb            += R.EstimatedVramSavedMb;
 				S->Aggregate.EstimatedShaderInstructionsSaved += R.EstimatedShaderInstructionsSaved;
 				if (S->Aggregate.StatusCode == 0) S->Aggregate.StatusCode = R.StatusCode;
+
+				// Latch the first batch's id; later batches append to it.
+				if (S->Aggregate.AnalysisId.IsEmpty())
+					S->Aggregate.AnalysisId = R.AnalysisId;
 
 				SendLodAuditBatch(S);
 			}));
@@ -1261,6 +1273,9 @@ FShintLodAuditResult FShintCoreClient::ParseLodAuditResponse(
 	}
 
 	Out.bSuccess = true;
+
+	// Assistant contract §7 — top-level, additive. Absent on an older Core.
+	Root->TryGetStringField(TEXT("analysis_id"), Out.AnalysisId);
 
 	const TSharedPtr<FJsonObject>* Summary;
 	if (Root->TryGetObjectField(TEXT("summary"), Summary) && Summary->IsValid())
