@@ -47,8 +47,10 @@ FString FShintAssistantContext::GetModuleContextString()
 	{
 	case EShintAssistantModule::CodeValidator: return TEXT("code_validator");
 	case EShintAssistantModule::AssetNaming:   return TEXT("asset_naming");
+	// [LOD-STRIP-BEGIN]
 	case EShintAssistantModule::LodAudit:      return TEXT("lod_audit");
 	case EShintAssistantModule::Predictive:    return TEXT("predictive");
+	// [LOD-STRIP-END]
 	default:                                   return FString();
 	}
 }

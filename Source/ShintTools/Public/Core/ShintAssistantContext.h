@@ -27,8 +27,10 @@ enum class EShintAssistantModule : uint8
 	None,
 	CodeValidator,
 	AssetNaming,
+	// [LOD-STRIP-BEGIN]
 	LodAudit,
 	Predictive,
+	// [LOD-STRIP-END]
 };
 
 struct SHINTTOOLS_API FShintAssistantContext

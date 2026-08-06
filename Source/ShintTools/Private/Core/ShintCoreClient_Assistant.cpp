@@ -141,7 +141,9 @@ static TSharedRef<FJsonObject> BuildAssistantBody(
 	SetIf(TEXT("context_ref"),      Req.ContextRef);
 	SetIf(TEXT("rule_id"),          Req.RuleId);
 	SetIf(TEXT("asset_path"),       Req.AssetPath);
+	// [LOD-STRIP-BEGIN]
 	SetIf(TEXT("report_id"),        Req.ReportId);
+	// [LOD-STRIP-END]
 	SetIf(TEXT("platform_profile"), Req.PlatformProfile);
 	SetIf(TEXT("studio_id"),        Req.StudioId);
 	SetIf(TEXT("project_id"),       Req.ProjectId);
@@ -149,6 +151,7 @@ static TSharedRef<FJsonObject> BuildAssistantBody(
 
 	Body->SetStringField(TEXT("engine"), TEXT("unreal"));
 
+	// [LOD-STRIP-BEGIN]
 	if (Req.SelectedItemIds.Num() > 0)
 	{
 		TArray<TSharedPtr<FJsonValue>> Ids;
@@ -157,6 +160,7 @@ static TSharedRef<FJsonObject> BuildAssistantBody(
 			Ids.Add(MakeShared<FJsonValueString>(Id));
 		Body->SetArrayField(TEXT("selected_item_ids"), Ids);
 	}
+	// [LOD-STRIP-END]
 
 	return Body;
 }

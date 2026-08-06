@@ -718,8 +718,12 @@ struct FShintAssistantRequest
 	FString ContextRef;       // analysis_id from a scan
 	FString RuleId;
 	FString AssetPath;
-	FString ReportId;                 // simulate_change
-	TArray<FString> SelectedItemIds;  // simulate_change
+	// [LOD-STRIP-BEGIN]
+	// simulate_change grounding. Studio-only end to end — the report comes
+	// from the Predictive Profiler, which is not present in lower tiers.
+	FString ReportId;
+	TArray<FString> SelectedItemIds;
+	// [LOD-STRIP-END]
 	FString PlatformProfile;
 	FString StudioId;
 	FString ProjectId;
