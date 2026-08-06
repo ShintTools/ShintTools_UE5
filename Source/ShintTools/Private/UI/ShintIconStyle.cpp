@@ -83,6 +83,13 @@ TSharedRef<FSlateStyleSet> FShintIconStyle::Create()
 	Style->Set("ShintTools.Icons.Cross",    new IMAGE_BRUSH_SVG(TEXT("cross"),    Icon16));
 	Style->Set("ShintTools.Icons.Save",     new IMAGE_BRUSH_SVG(TEXT("save"),     Icon16));
 
+	// Assistant dock. Sized at the point of use rather than reused at 16 —
+	// the collapsed launcher is a 56px pill, so its glyph has to be bigger
+	// than every other icon in the set or it reads as a mis-centred dot.
+	Style->Set("ShintTools.Icons.Sparkles", new IMAGE_BRUSH_SVG(TEXT("sparkles"), FVector2D(14.0, 14.0)));
+	Style->Set("ShintTools.Icons.Bot",      new IMAGE_BRUSH_SVG(TEXT("bot"),      FVector2D(22.0, 22.0)));
+	Style->Set("ShintTools.Icons.Send",     new IMAGE_BRUSH_SVG(TEXT("send"),     Icon16));
+
 	return Style;
 }
 

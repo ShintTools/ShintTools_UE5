@@ -5,10 +5,22 @@
 ## [Unreleased] — AI Assistant panel (M5)
 
 ### Added
-- **AI Assistant panel** — a dockable nomad tab (Window ▸ AI Assistant)
-  the user anchors beside their work, in the style of an assistant
-  sidebar rather than a second window. Three destinations: **Chat**,
-  **Memory** and **Studio Rules**.
+- **AI Assistant dock** — a 56px launcher pinned to the bottom-right
+  corner of the editor that expands into a 380×500 card in place and
+  collapses back to the launcher, which doubles as the card's close
+  button. Opened from Window ▸ ShintTools ▸ AI Assistant, or from the
+  launcher once it is on screen; right-click the launcher to dismiss it
+  entirely. Three destinations inside: **Chat**, **Memory** and
+  **Studio Rules**.
+  - **Why not a dock tab.** It started as one, and a tab competes for
+    layout space with the thing the user is working on — opening the
+    assistant meant rearranging the editor, which is the opposite of
+    what an assistant is for. The dock displaces nothing. It floats in
+    its own borderless, per-pixel-transparent windows parented to the
+    editor's root window, so it stays above every tab and follows the
+    editor as it is moved, resized, maximised or dragged to another
+    monitor. The old tab spawner stays registered but hidden, so an
+    editor layout saved while it was docked still restores cleanly.
   - **Available on every plan.** Free gets a working two-intent
     assistant with no memory; the panel is never hidden behind a paid
     check. Which destinations and quick-prompts appear comes from

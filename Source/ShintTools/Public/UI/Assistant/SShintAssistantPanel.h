@@ -49,10 +49,29 @@ enum class EShintAssistantView : uint8
 class SShintAssistantPanel : public SCompoundWidget
 {
 public:
-	SLATE_BEGIN_ARGS(SShintAssistantPanel) {}
+	SLATE_BEGIN_ARGS(SShintAssistantPanel)
+		: _bCompact(false)
+	{}
+		/** Compact chrome, for the anchored dock (SShintAssistantDock).
+		 *
+		 *  Two differences, both because the dock draws its own card around
+		 *  this widget: the context strip is dropped (the dock's header
+		 *  already names the surface, and the context line moves inline above
+		 *  the thread), and every section paints no background of its own —
+		 *  otherwise a square fill would cover the card's rounded corners. */
+		SLATE_ARGUMENT(bool, bCompact)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
+
+	/** Drop the thread and start a new conversation. Nothing is deleted
+	 *  server-side: confirmed facts and active rules survive: this only stops
+	 *  the old thread from being the one new turns continue. */
+	void ClearConversation();
+
+	/** Put the caret in the composer. The dock calls this on open, since
+	 *  opening an assistant is always a prelude to typing. */
+	void FocusComposer();
 
 private:
 	// ── Sections ─────────────────────────────────────────────────────────────
@@ -65,6 +84,14 @@ private:
 
 	/** One rail button. Collapsed when the tier does not grant the view. */
 	TSharedRef<SWidget> BuildRailButton(EShintAssistantView View, const FText& Label);
+
+	/** The "ask me something" placeholder shown while the thread is empty.
+	 *  Replaced by the first real turn, restored by ClearConversation. */
+	void ShowEmptyState();
+
+	/** Background for a section, honouring compact mode: transparent there so
+	 *  the dock card's rounded corners are not squared off by a fill. */
+	FSlateColor SectionBg(const FLinearColor& Opaque) const;
 
 	// ── Chat ─────────────────────────────────────────────────────────────────
 	void    SendMessage(const FString& Text, const FString& ForcedIntent);
@@ -114,6 +141,13 @@ private:
 	FString                     ConversationId;
 
 	EShintAssistantView ActiveView = EShintAssistantView::Chat;
+
+	/** See the bCompact argument. Read in Construct and by SectionBg. */
+	bool bCompact = false;
+
+	/** The thread currently holds the placeholder, not real turns — so the
+	 *  next AppendTurn has to clear it before adding anything. */
+	bool bShowingEmptyState = false;
 
 	/** Guards against a slow reply landing in a thread the user has since
 	 *  reset, or a second message overtaking the first. Mirrors the

@@ -5,6 +5,7 @@
 #include "SShintWelcomeDialog.h"
 #include "ShintIconStyle.h"
 #include "Assistant/SShintAssistantPanel.h"
+#include "Assistant/SShintAssistantDock.h"
 // [LOD-STRIP-BEGIN]
 #include "Predictive/SShintPredictiveDashboard.h"
 // [LOD-STRIP-END]
@@ -130,6 +131,10 @@ void FShintToolsModule::ShutdownModule()
 {
 	RemoveLevelEditorMenuExtension();
 	UnregisterTabSpawner();
+	// The dock lives in its own windows, outside the tab manager — nothing
+	// else tears them down, and a window that outlives the module leaves the
+	// editor painting a dangling widget.
+	SShintAssistantDock::Shutdown();
 	FShintIconStyle::Shutdown();
 	UE_LOG(LogShintTools, Verbose, TEXT("ShintTools: Module shut down."));
 }
@@ -163,19 +168,20 @@ void FShintToolsModule::RegisterTabSpawner()
 		.SetIcon(FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.Profiler"));
 	// [LOD-STRIP-END]
 
-	// AI Assistant — a nomad tab the user is expected to DOCK beside their
-	// work (Unreal anchors a nomad tab to any side of the layout, which is
-	// what makes the "assistant sidebar" shape work without custom docking).
-	// Registered on every tier: Free reaches the endpoint too, and gating the
-	// tab would contradict the contract's "do not hide the assistant from Free
-	// users" — the individual capabilities gate themselves, server-side.
+	// AI Assistant — the assistant's own surface is now SShintAssistantDock,
+	// anchored to the editor's bottom-right corner instead of taking a slice
+	// of the layout (see that header for why). The spawner stays registered
+	// and HIDDEN: an editor layout saved while the old tab was docked still
+	// names this tab on restore, and an unregistered spawner turns that into a
+	// missing-tab warning on every startup. Hidden keeps the restore path
+	// working without offering a second, competing way in.
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
 		ShintAssistantTabName,
 		FOnSpawnTab::CreateRaw(this, &FShintToolsModule::SpawnShintAssistantTab))
 		.SetDisplayName(LOCTEXT("ShintAssistantTabTitle", "AI Assistant"))
 		.SetTooltipText(LOCTEXT("ShintAssistantTabTooltip",
 			"Ask about your scans — runs entirely on this machine"))
-		.SetGroup(WorkspaceMenu::GetMenuStructure().GetDeveloperToolsMiscCategory())
+		.SetMenuType(ETabSpawnerMenuType::Hidden)
 		.SetIcon(FSlateIcon(FShintIconStyle::GetStyleSetName(), "ShintTools.Icons.UI"));
 }
 
@@ -304,7 +310,9 @@ TSharedRef<SDockTab> FShintToolsModule::SpawnShintPredictiveTab(const FSpawnTabA
 
 void FShintToolsModule::OpenShintAssistantPanel()
 {
-	FGlobalTabmanager::Get()->TryInvokeTab(ShintAssistantTabName);
+	// Toggle, not open: the menu entry is the same affordance as the launcher
+	// itself, and a second click on either should put the assistant away.
+	SShintAssistantDock::Toggle();
 }
 
 TSharedRef<SDockTab> FShintToolsModule::SpawnShintAssistantTab(const FSpawnTabArgs& SpawnTabArgs)
