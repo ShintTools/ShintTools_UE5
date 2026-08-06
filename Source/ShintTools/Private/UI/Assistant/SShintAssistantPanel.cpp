@@ -17,6 +17,12 @@
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Styling/AppStyle.h"
 #include "Styling/SlateColor.h"
+#include "Brushes/SlateRoundedBoxBrush.h"
+#include "Styling/StyleDefaults.h"
+#include "Styling/SlateTypes.h"
+#include "Framework/Application/SlateApplication.h"
+#include "ShintIconStyle.h"
+#include "Widgets/Images/SImage.h"
 
 #define LOCTEXT_NAMESPACE "SShintAssistantPanel"
 
@@ -64,12 +70,74 @@ namespace
 	}
 }
 
+namespace ShintAssistantPanelPrivate
+{
+	// Heap-stable for the module's lifetime: Slate keeps the raw pointer, so a
+	// brush built on the stack would be read after it died. Same pattern as
+	// SShintCard.
+	static TUniquePtr<FSlateRoundedBoxBrush> GInputBrush;
+	static TUniquePtr<FSlateRoundedBoxBrush> GSendBrush;
+	static TUniquePtr<FEditableTextBoxStyle> GFlatInputStyle;
+
+	/** The composer field: a dark pill with a hairline outline. */
+	const FSlateBrush* InputBrush()
+	{
+		if (!GInputBrush.IsValid())
+		{
+			GInputBrush = MakeUnique<FSlateRoundedBoxBrush>(
+				FShintStyle::Colors::BgCard(),
+				FShintStyle::Radius::Card,
+				FShintStyle::Colors::BorderSubtle(),
+				/*OutlineWidth=*/1.f);
+		}
+		return GInputBrush.Get();
+	}
+
+	/** The send button's disc. */
+	const FSlateBrush* SendBrush()
+	{
+		if (!GSendBrush.IsValid())
+		{
+			GSendBrush = MakeUnique<FSlateRoundedBoxBrush>(
+				FShintStyle::Colors::BgCardHover(),
+				FShintStyle::Radius::Card);
+		}
+		return GSendBrush.Get();
+	}
+
+	/** The editor's text box with its own background removed, so the rounded
+	 *  border wrapping it is the only frame the user sees. Every state has to
+	 *  be cleared, not just Normal — otherwise the square editor brush
+	 *  reappears the moment the field takes focus, which is exactly when the
+	 *  user is looking at it. */
+	const FEditableTextBoxStyle* FlatInputStyle()
+	{
+		if (!GFlatInputStyle.IsValid())
+		{
+			const FSlateBrush* None = FStyleDefaults::GetNoBrush();
+
+			GFlatInputStyle = MakeUnique<FEditableTextBoxStyle>(
+				FAppStyle::Get().GetWidgetStyle<FEditableTextBoxStyle>(
+					"NormalEditableTextBox"));
+
+			GFlatInputStyle->SetBackgroundImageNormal(*None)
+			                .SetBackgroundImageHovered(*None)
+			                .SetBackgroundImageFocused(*None)
+			                .SetBackgroundImageReadOnly(*None)
+			                .SetPadding(FMargin(0.f));
+		}
+		return GFlatInputStyle.Get();
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Construct
 // ─────────────────────────────────────────────────────────────────────────────
 
 void SShintAssistantPanel::Construct(const FArguments& InArgs)
 {
+	bCompact = InArgs._bCompact;
+
 	CoreClient = MakeShared<FShintCoreClient>();
 	CoreClient->LoadConfig();
 
@@ -82,30 +150,94 @@ void SShintAssistantPanel::Construct(const FArguments& InArgs)
 	FShintAssistantContext::OnChanged.AddSP(
 		this, &SShintAssistantPanel::ConsumePendingExplain);
 
+	TSharedRef<SVerticalBox> Root = SNew(SVerticalBox);
+
+	// The dock draws its own header, so a second title bar here would be a
+	// title above a title. Only the tab-hosted panel needs the strip.
+	if (!bCompact)
+		Root->AddSlot().AutoHeight() [ BuildContextStrip() ];
+
+	Root->AddSlot().AutoHeight() [ BuildRail() ];
+
+	Root->AddSlot().FillHeight(1.f)
+	[
+		SNew(SWidgetSwitcher)
+		.WidgetIndex_Lambda([this]() { return static_cast<int32>(ActiveView); })
+		+ SWidgetSwitcher::Slot() [ BuildChatView()   ]
+		+ SWidgetSwitcher::Slot() [ BuildMemoryView() ]
+		+ SWidgetSwitcher::Slot() [ BuildRulesView()  ]
+	];
+
 	ChildSlot
 	[
 		SNew(SBorder)
 		.BorderImage(FAppStyle::Get().GetBrush("WhiteBrush"))
-		.BorderBackgroundColor(FShintStyle::Colors::Bg())
+		.BorderBackgroundColor(SectionBg(FShintStyle::Colors::Bg()))
 		.Padding(0.f)
 		[
-			SNew(SVerticalBox)
-
-			+ SVerticalBox::Slot().AutoHeight() [ BuildContextStrip() ]
-			+ SVerticalBox::Slot().AutoHeight() [ BuildRail() ]
-
-			+ SVerticalBox::Slot().FillHeight(1.f)
-			[
-				SNew(SWidgetSwitcher)
-				.WidgetIndex_Lambda([this]() { return static_cast<int32>(ActiveView); })
-				+ SWidgetSwitcher::Slot() [ BuildChatView()   ]
-				+ SWidgetSwitcher::Slot() [ BuildMemoryView() ]
-				+ SWidgetSwitcher::Slot() [ BuildRulesView()  ]
-			]
+			Root
 		]
 	];
 
+	ShowEmptyState();
+
 	RefreshCapabilities();
+}
+
+// A fill of its own would square off the rounded card the dock wraps this in,
+// so compact mode paints nothing and lets the card show through. Everywhere
+// else the panel is the whole surface and needs its own background.
+FSlateColor SShintAssistantPanel::SectionBg(const FLinearColor& Opaque) const
+{
+	return FSlateColor(bCompact ? FLinearColor::Transparent : Opaque);
+}
+
+// The thread starts empty, which without this reads as a broken panel rather
+// than an invitation. The sentence also states the one thing a new user cannot
+// guess: that questions are already grounded in whatever they have open, so
+// nothing needs pasting in.
+void SShintAssistantPanel::ShowEmptyState()
+{
+	if (!ThreadBox.IsValid()) return;
+
+	ThreadBox->ClearChildren();
+	bShowingEmptyState = true;
+
+	ThreadBox->AddSlot().AutoHeight()
+	[
+		SNew(STextBlock)
+		.Text(LOCTEXT("EmptyState",
+			"Ask anything about your project. The assistant already has the "
+			"context of the panel you are viewing."))
+		.Font(FShintStyle::Fonts::Body())
+		.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
+		.AutoWrapText(true)
+	];
+}
+
+void SShintAssistantPanel::ClearConversation()
+{
+	// Bump the token first: a reply still in flight for the old thread must
+	// not land in the new one — same guard SendMessage relies on.
+	++RequestToken;
+	bAwaitingReply = false;
+
+	ConversationId.Reset();
+	StreamBuffer.Reset();
+	StreamingText.Reset();
+	PendingExplainRuleId.Reset();
+	PendingExplainAssetPath.Reset();
+
+	if (StatusLine.IsValid())
+		StatusLine->SetText(FText::GetEmpty());
+
+	ShowEmptyState();
+}
+
+void SShintAssistantPanel::FocusComposer()
+{
+	if (Composer.IsValid())
+		FSlateApplication::Get().SetKeyboardFocus(Composer);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -226,7 +358,7 @@ TSharedRef<SWidget> SShintAssistantPanel::BuildRail()
 {
 	return SNew(SBorder)
 		.BorderImage(FAppStyle::Get().GetBrush("WhiteBrush"))
-		.BorderBackgroundColor(FShintStyle::Colors::BgCard())
+		.BorderBackgroundColor(SectionBg(FShintStyle::Colors::BgCard()))
 		.Padding(FMargin(FShintStyle::Space::S2, 0.f))
 		[
 			SNew(SHorizontalBox)
@@ -245,18 +377,37 @@ TSharedRef<SWidget> SShintAssistantPanel::BuildRail()
 
 TSharedRef<SWidget> SShintAssistantPanel::BuildChatView()
 {
-	return SNew(SVerticalBox)
+	TSharedRef<SVerticalBox> Chat = SNew(SVerticalBox);
 
-		+ SVerticalBox::Slot().FillHeight(1.f)
+	// Compact mode dropped the context strip, but the grounding line is the
+	// one thing that must survive it: without it a detailed answer to a
+	// three-word question looks like a guess.
+	if (bCompact)
+	{
+		Chat->AddSlot().AutoHeight()
+			.Padding(FShintStyle::Space::S4, FShintStyle::Space::S3,
+			         FShintStyle::Space::S4, 0.f)
 		[
-			SAssignNew(ThreadScroll, SScrollBox)
-			+ SScrollBox::Slot().Padding(FShintStyle::Space::S4)
-			[
-				SAssignNew(ThreadBox, SVerticalBox)
-			]
-		]
+			SNew(STextBlock)
+			.Text(this, &SShintAssistantPanel::GetContextLabel)
+			.Font(FShintStyle::Fonts::Caption())
+			.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextFaint()))
+			.AutoWrapText(true)
+		];
+	}
 
-		+ SVerticalBox::Slot().AutoHeight() [ BuildComposer() ];
+	Chat->AddSlot().FillHeight(1.f)
+	[
+		SAssignNew(ThreadScroll, SScrollBox)
+		+ SScrollBox::Slot().Padding(FShintStyle::Space::S4)
+		[
+			SAssignNew(ThreadBox, SVerticalBox)
+		]
+	];
+
+	Chat->AddSlot().AutoHeight() [ BuildComposer() ];
+
+	return Chat;
 }
 
 TSharedRef<SWidget> SShintAssistantPanel::BuildComposer()
@@ -296,7 +447,7 @@ TSharedRef<SWidget> SShintAssistantPanel::BuildComposer()
 
 	return SNew(SBorder)
 		.BorderImage(FAppStyle::Get().GetBrush("WhiteBrush"))
-		.BorderBackgroundColor(FShintStyle::Colors::BgTopbar())
+		.BorderBackgroundColor(SectionBg(FShintStyle::Colors::BgTopbar()))
 		.Padding(FMargin(FShintStyle::Space::S4, FShintStyle::Space::S3))
 		[
 			SNew(SVerticalBox)
@@ -310,23 +461,50 @@ TSharedRef<SWidget> SShintAssistantPanel::BuildComposer()
 
 				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 				[
-					SAssignNew(Composer, SEditableTextBox)
-					.HintText(LOCTEXT("ComposerHint", "Ask about this analysis…"))
-					.Font(FShintStyle::Fonts::Body())
-					.OnTextCommitted(this, &SShintAssistantPanel::OnComposerCommitted)
+					// The rounded field is drawn by this border, not by the
+					// text box: FEditableTextBoxStyle's own background is a
+					// square editor brush, and overriding the whole style just
+					// to round one corner set is more surface than wrapping it.
+					SNew(SBorder)
+					.BorderImage(ShintAssistantPanelPrivate::InputBrush())
+					.VAlign(VAlign_Center)
+					.Padding(FMargin(FShintStyle::Space::S3, FShintStyle::Space::S2))
+					[
+						SAssignNew(Composer, SEditableTextBox)
+						.Style(ShintAssistantPanelPrivate::FlatInputStyle())
+						.HintText(LOCTEXT("ComposerHint", "Ask about the active panel…"))
+						.Font(FShintStyle::Fonts::Body())
+						.OnTextCommitted(this, &SShintAssistantPanel::OnComposerCommitted)
+					]
 				]
 
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 				.Padding(FShintStyle::Space::S2, 0.f, 0.f, 0.f)
 				[
 					SNew(SButton)
-					.ContentPadding(FMargin(FShintStyle::Space::S4, FShintStyle::Space::S1))
+					.ButtonStyle(FAppStyle::Get(), "NoBorder")
+					.ContentPadding(0.f)
+					.ToolTipText(LOCTEXT("SendTip", "Send"))
 					.IsEnabled_Lambda([this]{ return !bAwaitingReply; })
 					.OnClicked(this, &SShintAssistantPanel::OnSendClicked)
 					[
-						SNew(STextBlock)
-						.Text(LOCTEXT("Send", "Send"))
-						.Font(FShintStyle::Fonts::Small())
+						SNew(SBox).WidthOverride(38.f).HeightOverride(38.f)
+						[
+							SNew(SBorder)
+							.BorderImage(ShintAssistantPanelPrivate::SendBrush())
+							.HAlign(HAlign_Center).VAlign(VAlign_Center)
+							.Padding(0.f)
+							[
+								SNew(SImage)
+								.Image(FShintIconStyle::GetBrush("ShintTools.Icons.Send"))
+								.ColorAndOpacity_Lambda([this]()
+								{
+									return FSlateColor(bAwaitingReply
+										? FShintStyle::Colors::TextFaint()
+										: FShintStyle::Colors::TextPrimary());
+								})
+							]
+						]
 					]
 				]
 			]
@@ -361,6 +539,14 @@ void SShintAssistantPanel::AppendTurn(
 	bool bContinued, bool bDegraded)
 {
 	if (!ThreadBox.IsValid()) return;
+
+	// The placeholder is a child of the thread, so the first real turn has to
+	// evict it rather than stack under it.
+	if (bShowingEmptyState)
+	{
+		ThreadBox->ClearChildren();
+		bShowingEmptyState = false;
+	}
 
 	const bool bIsUser = Role == TEXT("user");
 
