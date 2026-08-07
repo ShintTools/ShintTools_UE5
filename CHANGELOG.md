@@ -5,14 +5,17 @@
 ## [Unreleased] — AI Assistant panel (M5)
 
 ### Changed
-- **The Code Validator's per-row Preview and Explain buttons now match the
-  toolbar's.** They were the last controls still on the older, tighter style
-  — 6×2 padding, a smaller font, and ASCII markers (`▶`/`▼`, `✎`) baked into
-  the label — which read as a different generation of UI sitting inside the
-  same table. Both now use the toolbar's language: flat Surface, 12×6
-  padding, plain grey label, no glyph. Preview's open/closed state moves
-  into the label itself ("Preview" / "Hide Preview"), so nothing is lost
-  with the triangle.
+- **The Code Validator's per-row buttons now match the toolbar's.** Preview,
+  Explain, Apply and Ignore were the last controls still on the older,
+  tighter style — 6×2 or 12×5 padding, a smaller font, an icon brush on
+  Apply and ASCII markers (`▶`/`▼`, `✎`, `✗`) baked into the labels — which
+  read as a different generation of UI sitting inside the same table. All
+  four now use the toolbar's language: flat Surface, 12×6 padding, plain
+  label, no glyph. Preview's open/closed state moves into the label itself
+  ("Preview" / "Hide Preview"), so nothing is lost with the triangle, and
+  Apply keeps a green label because it is the one action in the row that
+  writes to the file — with the glyphs gone, colour is what tells it apart
+  from Ignore.
 - **The plugin now lives under Tools, not Window, in a section that says
   ShintTools.** Window is where Unreal keeps its own panels, and a plugin's
   entry point among them reads as part of the editor rather than as

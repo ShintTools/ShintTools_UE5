@@ -762,25 +762,30 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 					[
 						SNew(SBox).Visibility(bIsFixable ? EVisibility::Visible : EVisibility::Collapsed)
 						[
+							// Same button language as Select All / Preview / Explain:
+							// flat Surface fill, plain label, no icon. Apply keeps a
+							// green LABEL because it is the one action in the row that
+							// writes to the file — the colour is the only thing telling
+							// the two apart now that neither carries a glyph.
 							SNew(SHorizontalBox)
 							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 8.f, 0.f)
 							[
-								SNew(SButton).ContentPadding(FMargin(12.f, 5.f))
+								SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
+								.ButtonColorAndOpacity(FSlateColor(C_Surface()))
 								.OnClicked(this, &SShintToolsPanel::OnApplySingleFix, Item)
 								[
-									ShintBtnContent(TEXT("ShintTools.Icons.Tick"),
 									SNew(STextBlock).Text(LOCTEXT("ApplySingle", "Apply"))
-									.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green())),
-									FSlateColor(C_Green()))
+									.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Green()))
 								]
 							]
 							+ SHorizontalBox::Slot().AutoWidth()
 							[
-								SNew(SButton).ContentPadding(FMargin(12.f, 5.f))
+								SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
+								.ButtonColorAndOpacity(FSlateColor(C_Surface()))
 								.OnClicked(this, &SShintToolsPanel::OnIgnoreSingleFix, Item)
 								[
-									SNew(STextBlock).Text(LOCTEXT("IgnoreSingle", "✗  Ignore"))
-									.Font(F_Small()).ColorAndOpacity(FSlateColor(C_DimGray()))
+									SNew(STextBlock).Text(LOCTEXT("IgnoreSingle", "Ignore"))
+									.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Gray()))
 								]
 							]
 						]
