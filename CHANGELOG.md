@@ -2,7 +2,7 @@
 
 ---
 
-## [Unreleased] — AI Assistant panel (M5)
+## [1.5.0] - 2026-08-07 — AI Assistant panel (M5)
 
 ### Changed
 - **The Code Validator's per-row buttons now match the toolbar's.** Preview,
