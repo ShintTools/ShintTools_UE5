@@ -667,7 +667,12 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 						[
 							SNew(SBox).Visibility(bHasContext ? EVisibility::Visible : EVisibility::Collapsed)
 							[
-								SNew(SButton).ContentPadding(FMargin(6.f, 2.f))
+								// Same button language as the toolbar's Select All /
+								// Deselect All: flat Surface, 12x6 padding, F_Small,
+								// grey label, no glyph. These two were the last
+								// holdouts on the older, tighter style with ASCII
+								// markers baked into the text.
+								SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
 								.ButtonColorAndOpacity(FSlateColor(C_Surface()))
 								.OnClicked_Lambda([this, Item]() -> FReply {
 									Item->bPreviewExpanded = !Item->bPreviewExpanded;
@@ -687,11 +692,16 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 								})
 								[
 									SNew(STextBlock)
+									// The open/closed state reads from the label
+									// itself now. An ASCII triangle was carrying
+									// that job, and it is the single most dated
+									// thing in the row.
 									.Text_Lambda([Item]() {
-										return FText::FromString(Item->bPreviewExpanded
-											? TEXT("▼ Preview") : TEXT("▶ Preview"));
+										return Item->bPreviewExpanded
+											? LOCTEXT("HidePreviewBtn", "Hide Preview")
+											: LOCTEXT("PreviewBtn", "Preview");
 									})
-									.Font(F_Label()).ColorAndOpacity(FSlateColor(C_Blue()))
+									.Font(F_Small()).ColorAndOpacity(FSlateColor(C_Gray()))
 								]
 							]
 						]
@@ -702,7 +712,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 6.f, 0.f)
 						[
 							SNew(SButton)
-							.ContentPadding(FMargin(6.f, 2.f))
+							.ContentPadding(FMargin(12.f, 6.f))
 							.ButtonColorAndOpacity(FSlateColor(C_Surface()))
 							.ToolTipText(LOCTEXT("ExplainTip",
 								"Ask the AI Assistant to explain this issue in plain language."))
@@ -712,9 +722,12 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 							})
 							[
 								SNew(STextBlock)
-								.Text(LOCTEXT("ExplainBtn", "✎  Explain"))
-								.Font(F_Label())
-								.ColorAndOpacity(FSlateColor(FLinearColor(0.40f, 0.75f, 0.95f)))
+								.Text(LOCTEXT("ExplainBtn", "Explain"))
+								.Font(F_Small())
+								// C_Gray, like every other secondary action. The
+								// one-off blue literal here predated the shared
+								// palette and was the only place using it.
+								.ColorAndOpacity(FSlateColor(C_Gray()))
 							]
 						]
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)

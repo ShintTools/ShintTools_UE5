@@ -5,6 +5,14 @@
 ## [Unreleased] — AI Assistant panel (M5)
 
 ### Changed
+- **The Code Validator's per-row Preview and Explain buttons now match the
+  toolbar's.** They were the last controls still on the older, tighter style
+  — 6×2 padding, a smaller font, and ASCII markers (`▶`/`▼`, `✎`) baked into
+  the label — which read as a different generation of UI sitting inside the
+  same table. Both now use the toolbar's language: flat Surface, 12×6
+  padding, plain grey label, no glyph. Preview's open/closed state moves
+  into the label itself ("Preview" / "Hide Preview"), so nothing is lost
+  with the triangle.
 - **The plugin now lives under Tools, not Window, in a section that says
   ShintTools.** Window is where Unreal keeps its own panels, and a plugin's
   entry point among them reads as part of the editor rather than as
@@ -17,6 +25,17 @@
   click away directly under the header.
 
 ### Fixed
+- **Every question was ungrounded right after a scan.** The panel's merge
+  path — the one that keeps C++ and Blueprint findings visible together —
+  rebuilt issues, counters and the quality score but never carried the new
+  scan's `analysis_id` across. On the first merged scan of a session the
+  field was still empty, and publishing an empty id CLEARS the assistant's
+  context by contract, so the panel reported "No analysis in view"
+  immediately after a scan that had just produced hundreds of findings. On a
+  later scan the stale id was no better: answers were grounded in a
+  superseded analysis while the table showed the new one. The merged view
+  spans two server-side analyses and only one can be the referent — it now
+  takes the freshest, which is the scan the user just ran.
 - **The retired AI Assistant tab kept coming back.** The dock replaced it,
   but an editor layout saved while the tab was docked still names it, and
   Unreal restores it on every startup — leaving the spawner registered but

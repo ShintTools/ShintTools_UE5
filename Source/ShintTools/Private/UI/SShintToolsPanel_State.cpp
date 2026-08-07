@@ -106,6 +106,21 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 			if (I.Severity == TEXT("warning")) ++LastCodeResult.TotalWarnings;
 		}
 
+		// Carry THIS scan's analysis id across. The merge path rebuilt issues,
+		// counters and the score but never touched AnalysisId, so after a
+		// merge the field kept whatever it held before — on a fresh session,
+		// nothing. The publish below then handed the assistant an empty id,
+		// which CLEARS the context by contract, and the panel reported "no
+		// analysis in view" immediately after a scan that had just produced
+		// hundreds of findings. Every question was ungrounded from then on.
+		//
+		// Guarded on non-empty so an older Core that sends no id leaves the
+		// previous grounding intact instead of wiping it.
+		if (!Result.AnalysisId.IsEmpty())
+		{
+			LastCodeResult.AnalysisId = Result.AnalysisId;
+		}
+
 		// Refresh the score from THIS scan's response. The merge path used to
 		// drop the new quality_score on the floor, so a BP scan after a C++
 		// scan kept showing the C++ score forever and the OverviewHero froze
