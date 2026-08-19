@@ -2,6 +2,57 @@
 
 ---
 
+## [1.6.0] - 2026-08-19 — Predictive Profiler contract audit + Asset Naming Bot navigation
+
+### Fixed
+- **Predictive Profiler texture pricing could silently fall back to RGBA8 on
+  formats the core actually recognizes.** The asset collector
+  (`ShintCoreClient_Predictive.cpp`) derived the `compression` field via raw
+  `UEnum::GetNameStringByValue()` reflection instead of the LOD Auditor's
+  curated `TC_*` mapping — a name the core's `vram_model` alias table doesn't
+  recognize prices as RGBA8 (4 bytes/px), the same class of bug as the Unity
+  DXT1 VRAM-inflation fix (2.4.0-2.4.2). The mapping now lives once, as
+  `FShintCoreClient::TextureCompressionToString`, shared by the LOD Auditor
+  and Predictive, and covers every `TC_*` value the core's alias table has an
+  entry for (adds `TC_Alpha`, `TC_DistanceFieldFont`, `TC_HDR_F32`,
+  `TC_HalfFloat`, `TC_LQ`, previously unmapped and silently defaulted).
+- **Predictive's scene digest priced every ticking actor at the native
+  rate, including ticking Blueprints.** `CollectSceneDigest()` only ever
+  filled `ticking_actors`; the core's Layer 2 (`layer2_scene.py`) prices
+  Blueprint tick dispatch at ~10x the native rate via the separate
+  `ticking_blueprints` field and per-class `heavy_blueprints` items, both of
+  which were always empty. A project whose CPU cost is dominated by ticking
+  Blueprint actors — the common case — under-priced its own dominant CPU
+  risk by roughly an order of magnitude with no error or warning. The
+  collector now splits ticking actors into native vs. Blueprint-authored (via
+  `UClass::ClassGeneratedBy`), reports `skeletal_meshes`, and groups ticking
+  Blueprint actors by class into `heavy_blueprints` so each earns its own
+  CostItem.
+
+### Added
+- **Asset Naming Bot rows navigate to their asset.** Clicking anywhere on a
+  finding row's info column (not the checkbox) resolves the row's package
+  path via the AssetRegistry and syncs the Content Browser to it — select
+  and reveal, not open the asset editor. An asset renamed or deleted since
+  the scan (the common case right after an applied fix) gets a quiet,
+  non-error notification instead of a red toast or a silent no-op.
+
+### Notes
+- Verified against a live Core (2.17.7) via direct HTTP calls: `/predict/*`
+  request/response shapes match `core/modules/predictive/schema.py` exactly
+  for every field this client parses. `PredictiveReport.scene_summaries` is
+  part of the contract and is not yet surfaced in the dashboard UI (no zone
+  renders it) — left unparsed client-side; not a regression, just unused.
+  `AnalyzeRequest.config` (render/build settings) is part of the contract but
+  the core does not read it anywhere in the scoring path yet, so the client
+  intentionally does not collect it either — collecting it now would be dead
+  weight until Layer 4 consumes it core-side.
+- Core-side gap found, not fixed here (reported, not patched around):
+  `lod_auditor.vram_model._FORMAT_ALIASES` has no entry for
+  `TC_HDR_Compressed` (the common "HDR Compressed (BC6H)" setting) or
+  `TC_Displacementmap`, so textures using either compression setting price as
+  RGBA8 on both the LOD Auditor and Predictive paths regardless of this fix.
+
 ## [1.5.0] - 2026-08-07 — AI Assistant panel (M5)
 
 ### Changed

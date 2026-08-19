@@ -3,10 +3,18 @@
 // [LOD-STRIP-BEGIN]
 // Predictive Profiler endpoints (Studio tier) — split out of ShintCoreClient.cpp.
 //
-// Collects a scene digest (actors/ticking/lights), render+build config, raw
-// source, and a lean asset list via the editor APIs, POSTs them to
+// Collects a scene digest (actors/ticking Blueprints/skeletal meshes/lights),
+// raw source, and a lean asset list via the editor APIs, POSTs them to
 // /predict/analyze, and parses the risk report back. A second entry point,
 // SimulatePrediction, drives the Impact Simulator (/predict/simulate).
+//
+// NOTE: the "config" ingest kind (render/build settings — Lumen/Nanite/
+// raytracing/target platforms/compression) is part of the contract
+// (ProjectConfig in schema.py) but is not sent here — the core does not
+// currently read AnalyzeRequest.config anywhere in the scoring path
+// (verified: no reference in predictive_orchestrator.py or layer4_scores.py
+// past the pass-through), so collecting it client-side would be dead weight
+// until the core wires it up. Revisit once Layer 4 actually consumes it.
 //
 // Mirrors the frozen v1.0 contract in docs/predictive/API.md. Predictive
 // PRICES cost — titles are entity names/locations, never rule sentences.
@@ -33,6 +41,8 @@
 #include "Components/DirectionalLightComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SpotLightComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/Blueprint.h"
 
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -140,25 +150,55 @@ namespace
 
 	// One scene digest from the active editor world. Fields the UE5 side fills;
 	// Unity-only fields are simply omitted (the core defaults them).
+	//
+	// ticking_actors vs ticking_blueprints matters: Layer 2 (layer2_scene.py)
+	// prices Blueprint tick dispatch at ~10x the native rate. Actors were
+	// previously all lumped into ticking_actors regardless of origin, so a
+	// scene heavy on ticking Blueprint actors (the common case) priced its
+	// dominant CPU cost at the native rate — an order-of-magnitude
+	// under-estimate of cpu_risk, silently. heavy_blueprints lets each
+	// ticking Blueprint class earn its own CostItem (grouped by class, not
+	// per-instance) instead of only contributing to the aggregate.
 	TSharedPtr<FJsonObject> CollectSceneDigest()
 	{
 		if (!GEditor) return nullptr;
 		UWorld* World = GEditor->GetEditorWorldContext().World();
 		if (!World) return nullptr;
 
-		int32 ActorCount    = 0;
-		int32 TickingActors = 0;
+		int32 ActorCount           = 0;
+		int32 TickingActors        = 0;   // native (non-Blueprint) only
+		int32 TickingBlueprints    = 0;
+		int32 SkeletalMeshCount    = 0;
 		TArray<TSharedPtr<FJsonValue>> Lights;
+
+		// Ticking Blueprint actors, grouped by generating Blueprint asset path
+		// (one CostItem per class, not per instance — matches how a fix is
+		// actually applied: disable Tick on the Blueprint, not per placement).
+		TMap<FString, int32> BpInstancesByPath;
 
 		for (TActorIterator<AActor> It(World); It; ++It)
 		{
 			AActor* Actor = *It;
 			if (!IsValid(Actor)) continue;
 			++ActorCount;
+
+			TArray<USkeletalMeshComponent*> SkelComps;
+			Actor->GetComponents(SkelComps);
+			SkeletalMeshCount += SkelComps.Num();
+
 			if (Actor->PrimaryActorTick.bCanEverTick &&
 			    Actor->PrimaryActorTick.bStartWithTickEnabled)
 			{
-				++TickingActors;
+				UClass* Class = Actor->GetClass();
+				if (UBlueprint* Bp = Class ? Cast<UBlueprint>(Class->ClassGeneratedBy) : nullptr)
+				{
+					++TickingBlueprints;
+					BpInstancesByPath.FindOrAdd(Bp->GetPathName())++;
+				}
+				else
+				{
+					++TickingActors;
+				}
 			}
 
 			TArray<ULightComponent*> LightComps;
@@ -176,10 +216,23 @@ namespace
 			}
 		}
 
+		TArray<TSharedPtr<FJsonValue>> HeavyBlueprints;
+		for (const TPair<FString, int32>& Pair : BpInstancesByPath)
+		{
+			TSharedRef<FJsonObject> BpJson = MakeShared<FJsonObject>();
+			BpJson->SetStringField(TEXT("path"), Pair.Key);
+			BpJson->SetBoolField(TEXT("tick_enabled"), true);
+			BpJson->SetNumberField(TEXT("instances"), Pair.Value);
+			HeavyBlueprints.Add(MakeShared<FJsonValueObject>(BpJson));
+		}
+
 		TSharedRef<FJsonObject> Scene = MakeShared<FJsonObject>();
 		Scene->SetStringField(TEXT("scene_name"), World->GetMapName());
 		Scene->SetNumberField(TEXT("actor_count"), ActorCount);
 		Scene->SetNumberField(TEXT("ticking_actors"), TickingActors);
+		Scene->SetNumberField(TEXT("ticking_blueprints"), TickingBlueprints);
+		Scene->SetNumberField(TEXT("skeletal_meshes"), SkeletalMeshCount);
+		Scene->SetArrayField(TEXT("heavy_blueprints"), HeavyBlueprints);
 		Scene->SetArrayField(TEXT("lights"), Lights);
 		return Scene;
 	}
@@ -220,12 +273,13 @@ namespace
 			J->SetNumberField(TEXT("width"),  Tex->GetSizeX());
 			J->SetNumberField(TEXT("height"), Tex->GetSizeY());
 			J->SetBoolField(TEXT("mips_enabled"), Tex->GetNumMips() > 1);
-			// Compression enum name — the core normalizes it; unmapped formats
-			// fall back to a measured size or RGBA8.
-			const UEnum* Enum = StaticEnum<TextureCompressionSettings>();
+			// Same curated TC_* mapping the LOD Auditor sends — NOT raw
+			// UEnum::GetNameStringByValue() reflection. Reflection risks a
+			// name the core's alias table doesn't recognize (silently priced
+			// as RGBA8), the exact class of bug the Unity DXT1 VRAM fix
+			// (2.4.0-2.4.2) already burned this product on once.
 			J->SetStringField(TEXT("compression"),
-				Enum ? Enum->GetNameStringByValue(Tex->CompressionSettings)
-				     : TEXT(""));
+				FShintCoreClient::TextureCompressionToString(Tex->CompressionSettings));
 			Out.Add(MakeShared<FJsonValueObject>(J));
 		}
 		else if (UStaticMesh* Mesh = Cast<UStaticMesh>(Obj))

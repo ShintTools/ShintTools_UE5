@@ -257,6 +257,10 @@ private:
 	FReply OnSelectAllAssetsClicked();
 	FReply OnDeselectAllAssetsClicked();   // T6
 	FReply OnApplySelectedAssetFixesClicked();
+	// Reveal-in-Content-Browser — click an asset naming row to navigate to it
+	// (select + reveal, not open the asset editor). Lives on the row's info
+	// column, not the checkbox slot, so it never eats the selection click.
+	FReply OnAssetRowNavigateClicked(FShintAssetItemPtr Item);
 	// [DASH-STRIP-BEGIN]
 	FReply OnSendAssetToDashboardClicked();
 	// [DASH-STRIP-END]

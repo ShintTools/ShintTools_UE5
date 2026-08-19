@@ -90,6 +90,9 @@ public class ShintTools : ModuleRules
 			// Asset tools (IAssetTools::RenameAssets + AssetRegistry discovery)
 			"AssetTools",
 			"AssetRegistry",
+			// Asset Naming Bot row click — IContentBrowserSingleton::SyncBrowserToAssets
+			// (reveal/select, not open the asset editor).
+			"ContentBrowser",
 
 			// Plugin manager (IPluginManager for config paths)
 			"Projects",

@@ -56,29 +56,40 @@
 // classes. Assets that fail to load are skipped, never aborting the batch.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Map TextureCompressionSettings to the TC_* string the core's
+// lod_auditor.vram_model._FORMAT_ALIASES table understands (shared with
+// Predictive — see the declaration in ShintCoreClient.h). Every entry here
+// mirrors a key that table actually has an alias for (verified against
+// core/modules/lod_auditor/vram_model.py); anything left out — including
+// TC_HDR_Compressed and TC_Displacementmap, both real 5.x enum values with
+// NO alias on the core side as of this writing — falls back to TC_Default
+// rather than sending a name the core would silently price as RGBA8 under a
+// key it doesn't recognize either way. (TC_HDR_Compressed is the common
+// "HDR Compressed (BC6H)" setting; its absence from the core's alias table
+// is a core-side gap worth reporting, not a client workaround.)
+FString FShintCoreClient::TextureCompressionToString(TextureCompressionSettings TC)
+{
+	switch (TC)
+	{
+		case TC_Default:               return TEXT("TC_Default");
+		case TC_Normalmap:             return TEXT("TC_Normalmap");
+		case TC_Masks:                 return TEXT("TC_Masks");
+		case TC_Grayscale:             return TEXT("TC_Grayscale");
+		case TC_Alpha:                 return TEXT("TC_Alpha");
+		case TC_DistanceFieldFont:     return TEXT("TC_DistanceFieldFont");
+		case TC_HDR:                   return TEXT("TC_HDR");
+		case TC_HDR_F32:               return TEXT("TC_HDR_F32");
+		case TC_HalfFloat:             return TEXT("TC_HalfFloat");
+		case TC_BC7:                   return TEXT("TC_BC7");
+		case TC_LQ:                    return TEXT("TC_LQ");
+		case TC_EditorIcon:            return TEXT("RGBA8");
+		case TC_VectorDisplacementmap: return TEXT("RGBA8");
+		default:                       return TEXT("TC_Default");
+	}
+}
+
 namespace
 {
-	// Map UE2 TextureCompressionSettings enum to the TC_* string the core's
-	// vram_model.normalize_compression() understands. Only the formats the
-	// rules care about are mapped; anything else passes through as the raw
-	// enum name and the server falls back to RGBA8 sizing.
-	FString CompressionToString(TextureCompressionSettings TC)
-	{
-		switch (TC)
-		{
-			case TC_Default:        return TEXT("TC_Default");
-			case TC_Normalmap:      return TEXT("TC_Normalmap");
-			case TC_Masks:          return TEXT("TC_Masks");
-			case TC_Grayscale:      return TEXT("TC_Grayscale");
-			case TC_HDR:            return TEXT("TC_HDR");
-			case TC_HDR_Compressed: return TEXT("TC_HDR_Compressed");
-			case TC_BC7:            return TEXT("TC_BC7");
-			case TC_EditorIcon:     return TEXT("RGBA8");
-			case TC_VectorDisplacementmap: return TEXT("RGBA8");
-			default:                return TEXT("TC_Default");
-		}
-	}
-
 	// EBlendMode -> the taxonomy string the core rules read
 	// (Opaque / Masked / Translucent / Additive / Modulate). Used both for the
 	// material's own blend_mode and the mesh's used_material_blend_modes list
@@ -272,7 +283,7 @@ namespace
 		Obj->SetNumberField(TEXT("width"),  Tex->GetSizeX());
 		Obj->SetNumberField(TEXT("height"), Tex->GetSizeY());
 		Obj->SetStringField(TEXT("compression"),
-			CompressionToString(Tex->CompressionSettings));
+			FShintCoreClient::TextureCompressionToString(Tex->CompressionSettings));
 		Obj->SetBoolField(TEXT("srgb"), Tex->SRGB);
 		Obj->SetBoolField(TEXT("mips_enabled"),
 			Tex->MipGenSettings != TMGS_NoMipmaps);
@@ -1037,7 +1048,7 @@ namespace
 						->GetNameStringByValue(T->LODGroup), TEXT("TEXTUREGROUP_"))
 					: TEXT("World");
 				Meta.Format = StripPrefix(
-					CompressionToString(T->CompressionSettings), TEXT("TC_"));
+					FShintCoreClient::TextureCompressionToString(T->CompressionSettings), TEXT("TC_"));
 				S.MetaByPath.Add(AssetPath, MoveTemp(Meta));
 			}
 		}

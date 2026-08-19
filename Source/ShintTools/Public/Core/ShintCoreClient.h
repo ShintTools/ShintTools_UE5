@@ -8,6 +8,11 @@
 #include "Security/ShintSecurity.h"
 #include "Transport/ShintHttpTypes.h"
 
+// Forward declare rather than pulling Engine/TextureDefines.h into a header
+// this widely included — TextureCompressionToString() only needs the enum
+// by value. Plain (non-class) UENUM, so the bare name is the true type.
+enum TextureCompressionSettings : int;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HTTP primitives — EShintHttpMethod now lives in Transport/ShintHttpTypes.h
 // so the new transport layer can share it without an ODR clash.
@@ -927,12 +932,23 @@ public:
 	// parse each batch response. Pure static JSON->struct helper, no state.
 	static FShintLodAuditResult ParseLodAuditResponse(const FShintRequestResult& Raw);
 
+	// Map the TextureCompressionSettings enum to the TC_* string the core's
+	// lod_auditor.vram_model._FORMAT_ALIASES table understands. Shared by the
+	// LOD Auditor's extractor AND the Predictive Profiler's asset collector
+	// (ShintCoreClient_Predictive.cpp) — Predictive used to derive this via
+	// raw UEnum::GetNameStringByValue() reflection, which is one registration
+	// quirk away from silently emitting a name the core doesn't recognize
+	// (falls back to RGBA8 sizing, the same class of bug as the Unity DXT1
+	// VRAM-inflation fix). One curated mapping, one place it can be wrong.
+	static FString TextureCompressionToString(TextureCompressionSettings TC);
+
 	// ── Predictive Profiler (Studio tier) — local engine ──────────────────────
 	/**
-	 * Analyze a project's predicted cost. Sends assets + scene digest +
-	 * render/build config + raw source in one /predict/analyze POST (one-shot;
-	 * the collectors already batch assets at 150). The report is the simulator's
-	 * input — keep it (SimulatePrediction can also run stateless from CostItems).
+	 * Analyze a project's predicted cost. Sends assets + a scene digest
+	 * (actors/ticking Blueprints/skeletal meshes/lights) + raw source via the
+	 * core's batched-ingest session (assets chunked at 150 — the LOD-audit
+	 * OOM lesson). The report is the simulator's input — keep it
+	 * (SimulatePrediction can also run stateless from CostItems).
 	 *
 	 * @param Profile  platform profile name ("desktop_60", "mobile_30", …).
 	 */

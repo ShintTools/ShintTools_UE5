@@ -32,6 +32,13 @@
 
 #include "Misc/Paths.h"
 #include "Widgets/Images/SImage.h"
+#include "Widgets/Notifications/SNotificationList.h"
+#include "Framework/Notifications/NotificationManager.h"
+
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "ContentBrowserModule.h"
+#include "IContentBrowserSingleton.h"
 
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
 
@@ -409,59 +416,72 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateAssetIssueRow(
 				]
 				+ SHorizontalBox::Slot().FillWidth(1.f)
 				[
-					SNew(SVerticalBox)
-
-					// Type + path row
-					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)
+					// Borderless button around the row's info column — click
+					// to reveal the asset in the Content Browser. The checkbox
+					// sits in its own slot above (untouched), so this never eats
+					// the selection click, and there is no per-row Apply/Ignore
+					// button here to collide with (Fix/Send are bulk actions in
+					// the toolbar above).
+					SNew(SButton)
+					.ButtonStyle(FAppStyle::Get(), "NoBorder")
+					.ContentPadding(0.f)
+					.ToolTipText(LOCTEXT("ANBRevealTip", "Click to reveal in Content Browser"))
+					.OnClicked(this, &SShintToolsPanel::OnAssetRowNavigateClicked, Item)
 					[
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
-						[
-							SNew(STextBlock).Text(FText::FromString(TEXT("⚠"))).Font(F_Small())
-							.ColorAndOpacity(FSlateColor(C_Yellow()))
-						]
+						SNew(SVerticalBox)
 
-						// Asset-type sprite, immediately left of the type name —
-						// mirrors the Unity client's row anatomy.
-						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-						  .Padding(0.f, 0.f, 6.f, 0.f)
-						[
-							SNew(SBox).WidthOverride(16.f).HeightOverride(16.f)
-							[
-								SNew(SImage).Image(ShintAssetTypeIcon(Item->AssetType))
-							]
-						]
-						+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f)
-						[
-							SNew(STextBlock).Text(FText::FromString(Item->AssetType))
-							.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
-							.ColorAndOpacity(FSlateColor(C_White()))
-						]
-						+ SHorizontalBox::Slot().FillWidth(1.f)
-						[
-							SNew(STextBlock).Text(FText::FromString(Item->AssetPath))
-							.Font(F_Mono()).ColorAndOpacity(FSlateColor(C_Gray()))
-						]
-					]
-
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						SNew(SBorder).BorderImage(ST4::Solid(C_CodeBG()))
-						.Padding(FMargin(8.f, 4.f))
+						// Type + path row
+						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)
 						[
 							SNew(SHorizontalBox)
 							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
-							[ SNew(STextBlock).Text(FText::FromString(TEXT(">"))).Font(F_Mono())
-							  .ColorAndOpacity(FSlateColor(C_Red())) ]
-							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 12.f, 0.f)
-							[ SNew(STextBlock).Text(FText::FromString(Item->CurrentName))
-							  .Font(F_Mono()).ColorAndOpacity(FSlateColor(C_DiffRed())) ]
-							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
-							[ SNew(STextBlock).Text(FText::FromString(TEXT("→"))).Font(F_Mono())
-							  .ColorAndOpacity(FSlateColor(C_Green())) ]
+							[
+								SNew(STextBlock).Text(FText::FromString(TEXT("⚠"))).Font(F_Small())
+								.ColorAndOpacity(FSlateColor(C_Yellow()))
+							]
+
+							// Asset-type sprite, immediately left of the type name —
+							// mirrors the Unity client's row anatomy.
+							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+							  .Padding(0.f, 0.f, 6.f, 0.f)
+							[
+								SNew(SBox).WidthOverride(16.f).HeightOverride(16.f)
+								[
+									SNew(SImage).Image(ShintAssetTypeIcon(Item->AssetType))
+								]
+							]
+							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f)
+							[
+								SNew(STextBlock).Text(FText::FromString(Item->AssetType))
+								.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+								.ColorAndOpacity(FSlateColor(C_White()))
+							]
 							+ SHorizontalBox::Slot().FillWidth(1.f)
-							[ SNew(STextBlock).Text(FText::FromString(Item->SuggestedName))
-							  .Font(F_Mono()).ColorAndOpacity(FSlateColor(C_DiffGreen())) ]
+							[
+								SNew(STextBlock).Text(FText::FromString(Item->AssetPath))
+								.Font(F_Mono()).ColorAndOpacity(FSlateColor(C_Gray()))
+							]
+						]
+
+						+ SVerticalBox::Slot().AutoHeight()
+						[
+							SNew(SBorder).BorderImage(ST4::Solid(C_CodeBG()))
+							.Padding(FMargin(8.f, 4.f))
+							[
+								SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
+								[ SNew(STextBlock).Text(FText::FromString(TEXT(">"))).Font(F_Mono())
+								  .ColorAndOpacity(FSlateColor(C_Red())) ]
+								+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 12.f, 0.f)
+								[ SNew(STextBlock).Text(FText::FromString(Item->CurrentName))
+								  .Font(F_Mono()).ColorAndOpacity(FSlateColor(C_DiffRed())) ]
+								+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f)
+								[ SNew(STextBlock).Text(FText::FromString(TEXT("→"))).Font(F_Mono())
+								  .ColorAndOpacity(FSlateColor(C_Green())) ]
+								+ SHorizontalBox::Slot().FillWidth(1.f)
+								[ SNew(STextBlock).Text(FText::FromString(Item->SuggestedName))
+								  .Font(F_Mono()).ColorAndOpacity(FSlateColor(C_DiffGreen())) ]
+							]
 						]
 					]
 				]
@@ -546,5 +566,40 @@ FReply SShintToolsPanel::OnSendAssetToDashboardClicked()
 	return FReply::Handled();
 }
 // [DASH-STRIP-END]
+
+// Reveal-in-Content-Browser — resolve the row's package path to a live
+// FAssetData via the AssetRegistry and sync the Content Browser to it
+// (select + reveal, not FAssetEditorManager::OpenEditorForAsset — the user
+// asked to navigate, not open the asset editor). The common post-scan case
+// is the asset having just been renamed/deleted by an applied fix or by the
+// user directly, so a miss here is expected, not exceptional: it gets a
+// quiet notification, not ShintShowErrorToast's red CS_Fail chrome.
+FReply SShintToolsPanel::OnAssetRowNavigateClicked(FShintAssetItemPtr Item)
+{
+	if (!Item.IsValid() || Item->AssetPath.IsEmpty())
+	{
+		return FReply::Handled();
+	}
+
+	IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
+		TEXT("AssetRegistry")).Get();
+
+	TArray<FAssetData> Found;
+	AR.GetAssetsByPackageName(FName(*Item->AssetPath), Found);
+	if (Found.Num() == 0)
+	{
+		FNotificationInfo Info(LOCTEXT("ANBRevealMissing", "Asset no longer found — it may have been renamed or deleted since the scan."));
+		Info.ExpireDuration       = 4.0f;
+		Info.bUseLargeFont        = false;
+		Info.bUseSuccessFailIcons = false;
+		FSlateNotificationManager::Get().AddNotification(Info);
+		return FReply::Handled();
+	}
+
+	FContentBrowserModule& CBModule =
+		FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
+	CBModule.Get().SyncBrowserToAssets(Found);
+	return FReply::Handled();
+}
 
 #undef LOCTEXT_NAMESPACE
