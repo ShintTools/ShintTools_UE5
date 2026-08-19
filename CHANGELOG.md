@@ -2,6 +2,64 @@
 
 ---
 
+## [1.6.0] — 2026-08-19
+
+### Fixed
+- **The Code Validator's "Safety Check" applied fixes without ever checking
+  anything.** `/validate/check-fix-safety` does not exist on the Core (404 on
+  every call). `ParseSafetyCheckResponse` failed open — a 404 parsed to the
+  struct's default `bSafe = true`, so `OnSafetyCheckComplete` applied the
+  fixes as if the server-side dry-run had actually run and found nothing
+  wrong, while the Yes/No prompt told the user ShintTools "will dry-run the
+  fix server-side and warn you about anything that could ripple into other
+  files." `FShintSafetyCheckResult` now carries `bCheckRan`, set only when
+  the server returned a body that actually parsed. `OnSafetyCheckComplete`
+  branches three ways instead of two: checked-and-safe applies as before,
+  checked-and-unsafe shows the existing warning dialog, and
+  **check-never-ran** now shows a new "Safety Check Unavailable" dialog that
+  tells the user the dry-run didn't happen and makes them choose explicitly
+  between applying anyway or cancelling — it no longer applies silently. The
+  "No" path on the initial Yes/No prompt (user explicitly opts out of the
+  dry-run) is unaffected — that's a deliberate choice, not a failed check,
+  and still applies straight away. (`ShintCoreClient_Validator.cpp`,
+  `SShintToolsPanel_Fixes.cpp`, `ShintCoreClient.h`)
+- **`ValidateBlueprints` loaded every Blueprint in the project and sent them
+  in one HTTP request.** `AR.GetAssets()` over all of `/Game`, then a
+  synchronous `AssetData.GetAsset()` per result accumulated into a single
+  giant `files` array for one POST — the exact OOM/timeout pattern the LOD
+  Auditor was rewritten to stop doing. This scan also chains automatically
+  off the Asset Naming Bot scan, so a project with thousands of Blueprints
+  froze the editor for minutes and timed out at 90s (reported to the user as
+  "couldn't reach the Core") even for someone who never opened the Code
+  Validator. Now chunks the scan into batches of 150 Blueprints (mirrors
+  `kLodAuditBatchSize` / `kPredictAssetBatch`), chained through async HTTP
+  completions with an explicit `CollectGarbage()` between batches so loaded
+  UBlueprints are actually reclaimed before the next chunk loads — not just
+  implied by a comment. A hard failure on any batch aborts the whole scan
+  with that error instead of silently returning a partial result. Known,
+  documented limitation: the Core's `/validate/blueprints` route has no
+  `analysis_id` continuation parameter (unlike `/assets/lod/audit`), so on a
+  project big enough to need more than one batch, only the first batch's
+  findings are resolvable via the assistant's `context_ref` — closing that
+  gap needs Core-side support, not a client workaround.
+  (`ShintCoreClient_Validator.cpp`, `ShintCoreClient.h`)
+- **The Fab/Marketplace first-run Core installer could hang the editor and
+  then crash.** The window's destructor called `WorkerFuture.Wait()`,
+  blocking the game thread for the full length of a `docker pull` (2-8
+  minutes) — Cancel only requested the window close, so the editor appeared
+  frozen with no feedback until the pull finished. Worse, the worker's
+  `AsyncTask(GameThread, ...)` progress callback captured a raw `this`; if
+  the window was closed and the widget destroyed while the pull was still
+  running, that queued task ran `OnProgress()` on freed memory. The
+  destructor no longer waits (`Async(EAsyncExecution::Thread, ...)` keeps
+  the task running independently of the `TFuture` handle regardless), and
+  `RunWorker` is now static, taking a `TWeakPtr<SShintCoreInstallerWindow>`
+  that every posted Game Thread task `Pin()`s before touching the widget —
+  a closed window makes the worker's remaining progress updates silent
+  no-ops instead of a use-after-free. (`SShintCoreInstallerWindow.cpp/.h`)
+
+---
+
 ## [1.6.0] - 2026-08-19 — Predictive Profiler contract audit + Asset Naming Bot navigation
 
 ### Fixed

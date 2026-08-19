@@ -253,6 +253,10 @@ private:
 	void   FetchFixPreview(FShintIssueItemPtr Item);
 	void   OnSafetyCheckComplete(const FShintSafetyCheckResult& Result);
 	void   ShowSafetyWarningDialog(const FShintSafetyCheckResult& Result);
+	// The dry-run itself didn't run (404 / transport error / bad body) —
+	// distinct from ShowSafetyWarningDialog, which is shown when it DID run
+	// and flagged the fix unsafe.
+	void   ShowSafetyUnavailableDialog();
 	void   ProceedWithCodeFixes();
 	FReply OnSelectAllAssetsClicked();
 	FReply OnDeselectAllAssetsClicked();   // T6

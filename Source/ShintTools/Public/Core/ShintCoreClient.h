@@ -177,7 +177,15 @@ DECLARE_DELEGATE_OneParam(FOnShintFixComplete, const FShintFixResult&);
 
 struct FShintSafetyCheckResult
 {
-	bool            bSafe    = true;
+	// Whether the server actually ran the dry-run and we got a parseable
+	// body back — NOT whether the fix is safe. /validate/check-fix-safety
+	// does not exist on the Core as of this writing (404 on every call), so
+	// this stays false on every real request today. Callers MUST branch on
+	// this before trusting bSafe: bSafe defaults to true so a check that
+	// never ran doesn't read as "unsafe", but it must never be read as
+	// "confirmed safe" either — that's what bCheckRan is for.
+	bool            bCheckRan = false;
+	bool            bSafe     = true;
 	TArray<FString> Warnings;
 	FString         Preview;
 };
@@ -888,7 +896,13 @@ public:
 	/** Preview-only: calls /validate/fix for a single issue and returns the result without writing to disk. */
 	void FetchSingleFixPreview(const FShintCodeIssue& Issue, FOnShintFixComplete OnComplete);
 
-	/** Pre-flight safety check: calls /validate/check-fix-safety. On HTTP error, treats as safe. */
+	/**
+	 * Pre-flight safety check: calls /validate/check-fix-safety.
+	 * On HTTP error (including 404 — this endpoint does not exist on the
+	 * Core today) the returned result has bCheckRan=false. It does NOT
+	 * "treat the fix as safe" — the caller is responsible for telling the
+	 * user the dry-run didn't run and asking explicitly before applying.
+	 */
 	void CheckFixSafety(const TArray<FShintCodeIssue>& Issues, FOnShintSafetyCheckComplete OnComplete);
 
 	// ── Code Validator — external web dashboard ──────────────────────────────
@@ -1120,6 +1134,13 @@ public:
 	static FString SerializeJson(const TSharedRef<FJsonObject>& Obj);
 	static FString AssetTypeToCategory(const FString& AssetType);
 
+	// Public so the batched ValidateBlueprints driver (a file-local helper
+	// in ShintCoreClient_Validator.cpp, which chains one request per
+	// Blueprint chunk — see kBlueprintValidateBatchSize) can parse each
+	// batch response. Pure static JSON->struct helper, no state. Mirrors
+	// ParseLodAuditResponse's reason for being public.
+	static FShintValidateResult  ParseValidateResponse (const FShintRequestResult& Raw);
+
 private:
 	void OnHttpRequestComplete(FHttpRequestPtr Request, FHttpResponsePtr Response,
 	                           bool bConnectedSuccessfully, FOnShintRequestComplete OnComplete);
@@ -1130,7 +1151,6 @@ private:
 	                          FOnShintRequestComplete OnComplete);
 
 	static FString MethodToString(EShintHttpMethod Method);
-	static FShintValidateResult  ParseValidateResponse (const FShintRequestResult& Raw);
 	static FShintAssetScanResult ParseAssetScanResponse(const FShintRequestResult& Raw);
 	static FShintFixResult       ParseFixResponse      (const FShintRequestResult& Raw);
 	static FShintFixResult       ParseTreeSitterFixResponse(const FShintRequestResult& Raw);

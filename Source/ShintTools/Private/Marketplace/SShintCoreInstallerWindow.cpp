@@ -149,12 +149,14 @@ void SShintCoreInstallerWindow::Construct(const FArguments& InArgs)
 
 SShintCoreInstallerWindow::~SShintCoreInstallerWindow()
 {
-	// Wait for the worker thread to finish before the widget is freed
-	// -- the worker captures `this` and posts back to the Game Thread.
-	if (WorkerFuture.IsValid())
-	{
-		WorkerFuture.Wait();
-	}
+	// Do NOT WorkerFuture.Wait() here -- a docker pull is a 2-8 minute
+	// operation and this dtor runs on the Game Thread when the window is
+	// closed (including via Cancel). Blocking here used to freeze the whole
+	// editor for the remainder of the pull with no feedback. The worker
+	// never touches `this` directly (see RunWorker) -- it only reaches the
+	// widget through a TWeakPtr, Pinned on the Game Thread inside the
+	// posted AsyncTask, so it's safe for the worker to keep running (and
+	// simply no-op its progress callbacks) after this object is gone.
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -256,10 +258,13 @@ FReply SShintCoreInstallerWindow::OnPrimaryClicked()
 	bIsRunning = true;
 	PrimaryButtonLabel->SetText(LOCTEXT("Installing", "Installing..."));
 
-	// Spawn worker.
-	WorkerFuture = Async(EAsyncExecution::Thread, [this]()
+	// Spawn worker. Weak self only -- if the window is closed mid-pull the
+	// widget can be destroyed while this task is still running; RunWorker
+	// must never dereference a raw `this`.
+	TWeakPtr<SShintCoreInstallerWindow> WeakSelf(SharedThis(this));
+	WorkerFuture = Async(EAsyncExecution::Thread, [WeakSelf]()
 	{
-		RunWorker();
+		RunWorker(WeakSelf);
 	});
 
 	return FReply::Handled();
@@ -280,17 +285,24 @@ FReply SShintCoreInstallerWindow::OnCancelClicked()
 // Worker / progress
 // ─────────────────────────────────────────────────────────────────────────────
 
-void SShintCoreInstallerWindow::RunWorker()
+void SShintCoreInstallerWindow::RunWorker(TWeakPtr<SShintCoreInstallerWindow> WeakSelf)
 {
 	FShintCoreInstaller Installer;
 
-	Installer.OnProgress = [this](const FShintInstallProgress& P)
+	Installer.OnProgress = [WeakSelf](const FShintInstallProgress& P)
 	{
-		// Marshal to the Game Thread -- Slate is not thread-safe.
+		// Marshal to the Game Thread -- Slate is not thread-safe. Only ever
+		// reach the widget through the weak pointer, Pinned once we're
+		// actually on the Game Thread: if the window was closed while the
+		// pull was running, Pin() fails and we silently drop the update
+		// instead of touching a freed widget.
 		FShintInstallProgress Copy = P;
-		AsyncTask(ENamedThreads::GameThread, [this, Copy]()
+		AsyncTask(ENamedThreads::GameThread, [WeakSelf, Copy]()
 		{
-			OnProgress(Copy);
+			if (TSharedPtr<SShintCoreInstallerWindow> Self = WeakSelf.Pin())
+			{
+				Self->OnProgress(Copy);
+			}
 		});
 	};
 

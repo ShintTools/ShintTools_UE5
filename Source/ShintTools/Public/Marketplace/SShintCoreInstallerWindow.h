@@ -63,8 +63,17 @@ private:
 	/** Refresh the visible state after Step/Percent changes. */
 	void RefreshFromState();
 
-	/** Worker thread entrypoint -- runs the installer. */
-	void RunWorker();
+	/**
+	 * Worker thread entrypoint -- runs the installer.
+	 *
+	 * Static and keyed off a weak pointer on purpose: a docker pull can take
+	 * minutes, and the user closing the window must not block the game
+	 * thread waiting for it to finish. This function (and everything it
+	 * schedules back onto the Game Thread) only ever touches the widget
+	 * through WeakSelf.Pin() -- if the widget is already gone it bails
+	 * silently instead of dereferencing a dangling `this`.
+	 */
+	static void RunWorker(TWeakPtr<SShintCoreInstallerWindow> WeakSelf);
 
 	TSharedPtr<SWindow>           ParentWindow;
 	TSharedPtr<STextBlock>        StatusLabel;
@@ -79,6 +88,11 @@ private:
 	int32             CurrentPercent = 0;
 	bool              bIsRunning = false;
 
-	/** The worker future -- kept so dtor can wait on it. */
+	/**
+	 * The worker future. The dtor does NOT wait on it -- Async(Thread, ...)
+	 * keeps the task running independently of this TFuture handle, so
+	 * dropping it here is a fire-and-forget, not a cancel. Kept mainly so
+	 * OnPrimaryClicked has somewhere to stash the handle.
+	 */
 	TFuture<void>     WorkerFuture;
 };

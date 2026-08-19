@@ -5,7 +5,14 @@
 // Code path:
 //   OnApplySelectedCodeFixesClicked / OnApplySingleFix
 //     → Yes/No safety dry-run prompt
-//     → OnSafetyCheckComplete → ProceedWithCodeFixes
+//       — No  → ProceedWithCodeFixes directly (user chose to skip)
+//       — Yes → CoreClient->CheckFixSafety → OnSafetyCheckComplete, which
+//                branches THREE ways on the result, not two:
+//                  • bCheckRan && bSafe   → ProceedWithCodeFixes
+//                  • bCheckRan && !bSafe  → ShowSafetyWarningDialog
+//                  • !bCheckRan           → ShowSafetyUnavailableDialog
+//                    (the dry-run endpoint 404s on every Core today — this
+//                    must never be silently treated as "safe")
 //     → CoreClient->ApplyCodeFixes(...) (HTTP)
 //   FetchFixPreview — on-demand /validate/fix call for one issue's
 //     tree-sitter window, used by the row's expand button.
@@ -123,25 +130,25 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 	const FText DialogTitle = FText::FromString(TEXT("ShintTools — Safety Check"));
 	const FText DialogBody  = FText::FromString(TEXT(
 		"Do you want to check if the fix breaks any code structure?\n\n"
-		"Recommended: pick Yes. ShintTools will dry-run the fix server-side "
-		"and warn you about anything that could ripple into other files.\n\n"
-		"Pick No to apply immediately without the safety dry-run."));
+		"Recommended: pick Yes. ShintTools will try to dry-run the fix "
+		"server-side and warn you about anything that could ripple into "
+		"other files. If the dry-run isn't available, you'll be asked "
+		"again before anything is applied.\n\n"
+		"Pick No to apply immediately without attempting the safety dry-run."));
 	const EAppReturnType::Type Choice =
 		FMessageDialog::Open(EAppMsgType::YesNo, DialogBody, DialogTitle);
 
-	SetCodeState(EModuleState::Running);
-
 	if (Choice == EAppReturnType::Yes)
 	{
+		SetCodeState(EModuleState::Running);
 		CoreClient->CheckFixSafety(Accepted,
 			FOnShintSafetyCheckComplete::CreateSP(this, &SShintToolsPanel::OnSafetyCheckComplete));
 	}
 	else
 	{
-		// User opted to skip the dry-run — short-circuit straight to apply.
-		FShintSafetyCheckResult Skipped;
-		Skipped.bSafe = true;
-		OnSafetyCheckComplete(Skipped);
+		// User explicitly chose to skip the dry-run — apply straight away,
+		// no extra prompt. This is their decision, not a failed check.
+		ProceedWithCodeFixes();
 	}
 	return FReply::Handled();
 }
@@ -179,24 +186,25 @@ FReply SShintToolsPanel::OnApplySingleFix(FShintIssueItemPtr Item)
 	const FText DialogTitle = FText::FromString(TEXT("ShintTools — Safety Check"));
 	const FText DialogBody  = FText::FromString(TEXT(
 		"Do you want to check if the fix breaks any code structure?\n\n"
-		"Recommended: pick Yes. ShintTools will dry-run the fix server-side "
-		"and warn you about anything that could ripple into other files.\n\n"
-		"Pick No to apply immediately without the safety dry-run."));
+		"Recommended: pick Yes. ShintTools will try to dry-run the fix "
+		"server-side and warn you about anything that could ripple into "
+		"other files. If the dry-run isn't available, you'll be asked "
+		"again before anything is applied.\n\n"
+		"Pick No to apply immediately without attempting the safety dry-run."));
 	const EAppReturnType::Type Choice =
 		FMessageDialog::Open(EAppMsgType::YesNo, DialogBody, DialogTitle);
 
-	SetCodeState(EModuleState::Running);
-
 	if (Choice == EAppReturnType::Yes)
 	{
+		SetCodeState(EModuleState::Running);
 		CoreClient->CheckFixSafety(Issues,
 			FOnShintSafetyCheckComplete::CreateSP(this, &SShintToolsPanel::OnSafetyCheckComplete));
 	}
 	else
 	{
-		FShintSafetyCheckResult Skipped;
-		Skipped.bSafe = true;
-		OnSafetyCheckComplete(Skipped);
+		// User explicitly chose to skip the dry-run — apply straight away,
+		// no extra prompt. This is their decision, not a failed check.
+		ProceedWithCodeFixes();
 	}
 	return FReply::Handled();
 }
@@ -206,16 +214,109 @@ FReply SShintToolsPanel::OnApplySingleFix(FShintIssueItemPtr Item)
 // ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::OnSafetyCheckComplete(const FShintSafetyCheckResult& Result)
 {
+	if (!Result.bCheckRan)
+	{
+		// The dry-run never happened — 404 (the endpoint doesn't exist on
+		// this Core), a transport error, or an unparseable body. This is
+		// NOT the same as "checked and safe": applying silently here would
+		// be exactly the false promise this fix exists to remove. Restore
+		// idle and let the user decide explicitly.
+		SetCodeState(EModuleState::Idle);
+		ShowSafetyUnavailableDialog();
+		return;
+	}
+
 	if (Result.bSafe)
 	{
 		ProceedWithCodeFixes();
 	}
 	else
 	{
-		// Not safe — restore idle and show warning dialog.
+		// Checked, and the server flagged it unsafe — restore idle and show
+		// the warning dialog.
 		SetCodeState(EModuleState::Idle);
 		ShowSafetyWarningDialog(Result);
 	}
+}
+
+void SShintToolsPanel::ShowSafetyUnavailableDialog()
+{
+	TSharedRef<SWindow> Dialog = SNew(SWindow)
+		.Title(LOCTEXT("SafetyUnavailableTitle", "Safety Check Unavailable"))
+		.ClientSize(FVector2D(480, 240))
+		.SupportsMaximize(false)
+		.SupportsMinimize(false)
+		.IsTopmostWindow(true)
+		.SizingRule(ESizingRule::FixedSize);
+
+	TWeakPtr<SWindow> WeakDialog(Dialog);
+
+	Dialog->SetContent(
+		SNew(SBorder)
+		.BorderImage(FAppStyle::GetBrush("NoBorder"))
+		.Padding(24.f)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 12.f)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("SafetyUnavailableHeader", "The safety dry-run isn't available"))
+				.Font(FShintStyle::Fonts::H2())
+				.ColorAndOpacity(C_Yellow())
+			]
+			+ SVerticalBox::Slot().FillHeight(1.f).Padding(0.f, 0.f, 0.f, 16.f)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("SafetyUnavailableBody",
+					"ShintTools couldn't reach the fix safety check on this Core, so "
+					"it has NOT verified whether these fixes could ripple into other "
+					"files. You can apply them without that check, or cancel and try "
+					"again later."))
+				.Font(F_Small())
+				.ColorAndOpacity(C_White())
+				.AutoWrapText(true)
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(8.f, 0.f, 0.f, 0.f)
+				[
+					SNew(SButton)
+					.ContentPadding(FMargin(14.f, 7.f))
+					.ButtonColorAndOpacity(C_Surface())
+					.OnClicked_Lambda([WeakDialog]() -> FReply
+					{
+						if (WeakDialog.IsValid()) WeakDialog.Pin()->RequestDestroyWindow();
+						return FReply::Handled();
+					})
+					[
+						SNew(STextBlock).Text(LOCTEXT("Cancel", "Cancel"))
+						.Font(F_Body()).ColorAndOpacity(C_Gray())
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(8.f, 0.f, 0.f, 0.f)
+				[
+					SNew(SButton)
+					.ContentPadding(FMargin(14.f, 7.f))
+					.ButtonColorAndOpacity(C_Yellow())
+					.OnClicked_Lambda([this, WeakDialog]() -> FReply
+					{
+						if (WeakDialog.IsValid()) WeakDialog.Pin()->RequestDestroyWindow();
+						ProceedWithCodeFixes();
+						return FReply::Handled();
+					})
+					[
+						SNew(STextBlock)
+						.Text(LOCTEXT("ApplyAnyway", "Apply Anyway"))
+						.Font(F_Body()).ColorAndOpacity(C_BG())
+					]
+				]
+			]
+		]
+	);
+
+	FSlateApplication::Get().AddModalWindow(Dialog, FSlateApplication::Get().GetActiveTopLevelWindow());
 }
 
 void SShintToolsPanel::ShowSafetyWarningDialog(const FShintSafetyCheckResult& Result)

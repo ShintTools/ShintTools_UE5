@@ -28,6 +28,7 @@
 
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
+#include "UObject/UObjectGlobals.h" // CollectGarbage — forced GC between ValidateBlueprints batches
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
@@ -251,27 +252,21 @@ void FShintCoreClient::ValidateProject(
 // Code Validator — blueprints
 // ─────────────────────────────────────────────────────────────────────────────
 
-void FShintCoreClient::ValidateBlueprints(
-	const FString& ContentDir, FOnShintValidateComplete OnComplete)
+namespace
 {
-	const double BenchStart = FPlatformTime::Seconds();
-	IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+	// One HTTP request carries at most this many Blueprints. The old
+	// single-shot flow called AR.GetAssets() over the whole /Game tree, then
+	// AssetData.GetAsset() (a synchronous load) on EVERY result before
+	// building one giant "files" array for a single POST — exactly the
+	// pattern the LOD Auditor was rewritten to stop doing (see
+	// kLodAuditBatchSize in ShintCoreClient_Lod.cpp): editor OOM / GBs of
+	// loaded UBlueprints on large projects, then a 90s HTTP timeout the user
+	// sees as "couldn't reach the Core". This scan also chains automatically
+	// off the Asset Naming Bot (SShintToolsPanel_Http.cpp), so a user who
+	// never opens the Code Validator paid for the crash too.
+	constexpr int32 kBlueprintValidateBatchSize = 150;
 
-	FARFilter Filter;
-	Filter.ClassPaths.Add(UBlueprint::StaticClass()->GetClassPathName());
-	Filter.PackagePaths.Add(TEXT("/Game"));
-	Filter.bRecursivePaths   = true;
-	Filter.bRecursiveClasses = true;
-
-	TArray<FAssetData> BlueprintAssets;
-	AR.GetAssets(Filter, BlueprintAssets);
-
-	UE_LOG(LogShintTools, Verbose, TEXT("ShintCoreClient: Found %d project blueprints under /Game/"), BlueprintAssets.Num());
-
-	TArray<TSharedPtr<FJsonValue>> FilesArr;
-
-	TArray<TSharedPtr<FJsonValue>> EmptyArr;
-	auto MakeEmptyStats = []() -> TSharedRef<FJsonObject>
+	TSharedRef<FJsonObject> MakeEmptyBlueprintStats()
 	{
 		TSharedRef<FJsonObject> S = MakeShared<FJsonObject>();
 		S->SetNumberField(TEXT("total_nodes"),        0);
@@ -281,12 +276,37 @@ void FShintCoreClient::ValidateBlueprints(
 		S->SetBoolField  (TEXT("has_begin_play_super"), false);
 		S->SetBoolField  (TEXT("has_end_play_super"),   false);
 		return S;
+	}
+
+	// Everything an in-flight batched Blueprint validate needs, kept alive
+	// across the async request chain by a TSharedRef captured in each
+	// completion lambda — same idiom as FLodAuditBatch.
+	struct FBlueprintValidateBatch
+	{
+		TSharedRef<FShintCoreClient> Client;
+		TArray<FAssetData>           Assets;
+		int32                        Cursor = 0;
+
+		// Request config — identical on every batch.
+		FString ProjectName, ApiKeyMongo, BaseUrl;
+
+		// Accumulated across all batches; the single result the caller sees.
+		FShintValidateResult    Aggregate;
+		int32                    LoadedCount  = 0;
+		int32                    SkippedCount = 0;
+		double                   BenchStart   = 0.0;
+		FOnShintValidateComplete OnComplete;
+
+		explicit FBlueprintValidateBatch(TSharedRef<FShintCoreClient> InClient)
+			: Client(MoveTemp(InClient)) {}
 	};
 
-	int32 LoadedCount = 0;
-	int32 SkippedCount = 0;
-
-	for (const FAssetData& AssetData : BlueprintAssets)
+	// Build one Blueprint's "files[]" entry. Wire format is unchanged from
+	// the old single-shot ValidateBlueprints — this is that same per-asset
+	// body, just extracted so it can run per batch instead of over the
+	// whole project in one loop.
+	TSharedRef<FJsonObject> BuildBlueprintValidateJson(
+		const FAssetData& AssetData, FBlueprintValidateBatch& S)
 	{
 		const FString BPName    = AssetData.AssetName.ToString();
 		const FString BPPackage = AssetData.PackageName.ToString();
@@ -299,15 +319,15 @@ void FShintCoreClient::ValidateBlueprints(
 		UBlueprint* BP = Cast<UBlueprint>(AssetData.GetAsset());
 		if (!BP)
 		{
+			TArray<TSharedPtr<FJsonValue>> EmptyArr;
 			FO->SetArrayField (TEXT("graphs"),    EmptyArr);
 			FO->SetArrayField (TEXT("variables"), EmptyArr);
 			FO->SetArrayField (TEXT("functions"), EmptyArr);
-			FO->SetObjectField(TEXT("stats"),     MakeEmptyStats());
-			FilesArr.Add(MakeShared<FJsonValueObject>(FO));
-			++SkippedCount;
-			continue;
+			FO->SetObjectField(TEXT("stats"),     MakeEmptyBlueprintStats());
+			++S.SkippedCount;
+			return FO;
 		}
-		++LoadedCount;
+		++S.LoadedCount;
 
 		TArray<UEdGraph*> AllGraphs;
 		AllGraphs.Append(BP->UbergraphPages);
@@ -481,27 +501,149 @@ void FShintCoreClient::ValidateBlueprints(
 		FO->SetArrayField (TEXT("variables"), VariablesArr);
 		FO->SetArrayField (TEXT("functions"), FunctionsArr);
 		FO->SetObjectField(TEXT("stats"),     StatsObj);
-		FilesArr.Add(MakeShared<FJsonValueObject>(FO));
+		return FO;
 	}
 
+	void SendBlueprintValidateBatch(TSharedRef<FBlueprintValidateBatch> S);
+
+	// All batches done (or one failed): fire the single completion the
+	// caller is waiting on.
+	void FinalizeBlueprintValidate(TSharedRef<FBlueprintValidateBatch> S)
+	{
+		UE_LOG(LogShintTools, Verbose,
+			TEXT("[BENCH] ValidateBlueprints: %.2f s, %d/%d BPs loaded (%d skipped), %d issues (batched x%d)"),
+			FPlatformTime::Seconds() - S->BenchStart, S->LoadedCount, S->Assets.Num(),
+			S->SkippedCount, S->Aggregate.Issues.Num(), kBlueprintValidateBatchSize);
+		S->OnComplete.ExecuteIfBound(S->Aggregate);
+	}
+
+	// Process the next chunk of Blueprints and POST it; on completion, chain
+	// to the next chunk. Runs on the game thread (the HTTP manager
+	// dispatches request completions there), so GetAsset()/Slate stay safe.
+	void SendBlueprintValidateBatch(TSharedRef<FBlueprintValidateBatch> S)
+	{
+		if (S->Cursor >= S->Assets.Num())
+		{
+			FinalizeBlueprintValidate(S);
+			return;
+		}
+
+		TArray<TSharedPtr<FJsonValue>> FilesArr;
+		const int32 End = FMath::Min(S->Cursor + kBlueprintValidateBatchSize, S->Assets.Num());
+		for (int32 i = S->Cursor; i < End; ++i)
+			FilesArr.Add(MakeShared<FJsonValueObject>(BuildBlueprintValidateJson(S->Assets[i], *S)));
+		S->Cursor = End;
+
+		// Force a real GC now, while nothing outside this scope still holds
+		// the UBlueprints (and their graphs) this batch just loaded via
+		// GetAsset(). The LOD auditor's batching comments promise "GC
+		// between batches" but never actually call it — relying on the
+		// editor's periodic collection, which is not guaranteed to run
+		// before the next batch has already loaded its own chunk. An
+		// explicit collect here is what actually keeps memory flat across a
+		// multi-thousand-Blueprint project instead of just slowing the OOM
+		// ramp down.
+		CollectGarbage(RF_NoFlags, /*bPerformFullPurge=*/ true);
+
+		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+		Body->SetStringField(TEXT("project_name"), S->ProjectName);
+		Body->SetStringField(TEXT("engine"),       TEXT("unreal"));
+		Body->SetStringField(TEXT("api_key"),      S->ApiKeyMongo);
+		Body->SetArrayField (TEXT("files"),        FilesArr);
+
+		S->Client->SendRequest(S->BaseUrl + TEXT("/validate/blueprints"),
+			EShintHttpMethod::POST, FShintCoreClient::SerializeJson(Body),
+			FOnShintRequestComplete::CreateLambda(
+				[S](const FShintRequestResult& Raw) mutable
+			{
+				FShintValidateResult R = FShintCoreClient::ParseValidateResponse(Raw);
+
+				// A hard failure on any batch aborts the whole chain with
+				// that error, rather than silently reporting a partial
+				// result that would look like a clean scan of the full
+				// project — same contract as the LOD auditor's batching.
+				if (!R.bSuccess)
+				{
+					S->Aggregate.bSuccess     = false;
+					S->Aggregate.ErrorMessage = R.ErrorMessage.IsEmpty()
+						? TEXT("Blueprint validation request failed.")
+						: R.ErrorMessage;
+					FinalizeBlueprintValidate(S);
+					return;
+				}
+
+				S->Aggregate.Issues.Append(MoveTemp(R.Issues));
+				S->Aggregate.TotalIssues   += R.TotalIssues;
+				S->Aggregate.TotalErrors   += R.TotalErrors;
+				S->Aggregate.TotalWarnings += R.TotalWarnings;
+				S->Aggregate.FilesScanned  += R.FilesScanned;
+				if (S->Aggregate.StatusCode == 0) S->Aggregate.StatusCode = R.StatusCode;
+
+				// Assistant contract §7 — unlike /assets/lod/audit, the
+				// /validate/blueprints route has no analysis_id continuation
+				// parameter: every batch mints its OWN analysis document
+				// server-side (verified against the running Core — the
+				// request model has no such field). Latch the first batch's
+				// id so the assistant stays grounded exactly as before this
+				// fix in the common case (a project's Blueprints fit in one
+				// batch). On a project big enough to need more than one
+				// batch, findings from later batches still show up in the
+				// list but are NOT individually resolvable via context_ref —
+				// a real, known gap. Closing it properly needs the same
+				// server-side continuation support the LOD auditor has;
+				// that is a Core change, not something to fake client-side.
+				if (S->Aggregate.AnalysisId.IsEmpty())
+					S->Aggregate.AnalysisId = R.AnalysisId;
+
+				// Quality score is computed per-request over just that
+				// batch's Blueprints, not the whole project — same
+				// limitation as AnalysisId above. Latch the first batch's
+				// score instead of overwriting it with an equally-partial
+				// later one.
+				if (!S->Aggregate.bHasCategoryBreakdown && R.QualityScoreOverall >= 0.f)
+				{
+					S->Aggregate.QualityScoreOverall   = R.QualityScoreOverall;
+					S->Aggregate.bHasCategoryBreakdown = R.bHasCategoryBreakdown;
+					S->Aggregate.PerformanceScore      = R.PerformanceScore;
+					S->Aggregate.SecurityScore         = R.SecurityScore;
+					S->Aggregate.BestPracticesScore    = R.BestPracticesScore;
+					S->Aggregate.MaintainabilityScore  = R.MaintainabilityScore;
+					S->Aggregate.NamingScore           = R.NamingScore;
+				}
+
+				SendBlueprintValidateBatch(S);
+			}));
+	}
+}
+
+void FShintCoreClient::ValidateBlueprints(
+	const FString& ContentDir, FOnShintValidateComplete OnComplete)
+{
+	IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+
+	FARFilter Filter;
+	Filter.ClassPaths.Add(UBlueprint::StaticClass()->GetClassPathName());
+	Filter.PackagePaths.Add(TEXT("/Game"));
+	Filter.bRecursivePaths   = true;
+	Filter.bRecursiveClasses = true;
+
+	TSharedRef<FBlueprintValidateBatch> State = MakeShared<FBlueprintValidateBatch>(AsShared());
+	AR.GetAssets(Filter, State->Assets);
+
+	State->ProjectName = Config.ProjectName;
+	State->ApiKeyMongo = Config.ApiKeyMongo;
+	State->BaseUrl     = Config.GetBaseUrl();
+	State->BenchStart  = FPlatformTime::Seconds();
+	State->OnComplete  = OnComplete;
+	// Optimistic: stays true unless a batch reports a hard failure. A
+	// project with zero Blueprints therefore finishes as a clean success.
+	State->Aggregate.bSuccess = true;
+
 	UE_LOG(LogShintTools, Verbose,
-		TEXT("ShintCoreClient: %d/%d blueprints loaded (%d skipped), sending to /validate/blueprints"),
-		LoadedCount, BlueprintAssets.Num(), SkippedCount);
+		TEXT("ShintCoreClient: Found %d project blueprints under /Game/, validating in batches of %d"),
+		State->Assets.Num(), kBlueprintValidateBatchSize);
 
-	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
-	Body->SetStringField(TEXT("engine"),       TEXT("unreal"));
-	Body->SetStringField(TEXT("api_key"),      Config.ApiKeyMongo);
-	Body->SetArrayField (TEXT("files"),        FilesArr);
-
-	SendRequest(Config.GetBaseUrl() + TEXT("/validate/blueprints"), EShintHttpMethod::POST, SerializeJson(Body),
-		FOnShintRequestComplete::CreateLambda([OnComplete, BenchStart, LoadedCount](const FShintRequestResult& Raw) mutable {
-			FShintValidateResult R = FShintCoreClient::ParseValidateResponse(Raw);
-			UE_LOG(LogShintTools, Verbose,
-				TEXT("[BENCH] ValidateBlueprints: %.2f s, %d BPs loaded, %d issues"),
-				FPlatformTime::Seconds() - BenchStart, LoadedCount, R.Issues.Num());
-			OnComplete.ExecuteIfBound(R);
-		}));
+	SendBlueprintValidateBatch(State);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1189,7 +1331,11 @@ namespace
 	// the split.
 	FShintSafetyCheckResult ParseSafetyCheckResponse(const FShintRequestResult& Raw)
 	{
-		FShintSafetyCheckResult Res; // bSafe = true by default — never block on error
+		// bCheckRan stays false unless the server actually returned a body we
+		// could parse — a transport failure or a 404 (the endpoint does not
+		// exist on the Core today) must NOT read as "the dry-run ran and
+		// found nothing wrong". See FShintSafetyCheckResult's comment.
+		FShintSafetyCheckResult Res;
 		if (!Raw.bSuccess || Raw.ResponseBody.IsEmpty())
 			return Res;
 
@@ -1197,6 +1343,8 @@ namespace
 		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Raw.ResponseBody);
 		if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
 			return Res;
+
+		Res.bCheckRan = true;
 
 		bool bSafe = true;
 		if (Root->TryGetBoolField(TEXT("safe"), bSafe))
