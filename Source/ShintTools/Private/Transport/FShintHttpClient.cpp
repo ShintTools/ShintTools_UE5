@@ -6,6 +6,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "ShintTools.h"  // LogShintTools
+#include "ShintEngineCompat.h"
 
 FString FShintHttpClient::MethodToString(EShintHttpMethod Method)
 {
@@ -88,8 +89,10 @@ void FShintHttpClient::Send(
 	// plugin reported "Could not reach the LLM" even though the core returned a
 	// valid 200 (short <30s generations slipped under it, which is why it looked
 	// intermittent). Match the activity timeout to the total so a long, quiet
-	// generation is never mistaken for a dead connection.
-	Req->SetActivityTimeout(RequestTimeout);
+	// generation is never mistaken for a dead connection. The per-request setter
+	// only exists from 5.4 up; on 5.2/5.3 ShintCompat::SetActivityTimeout is a
+	// no-op and the engine-wide [HTTP] HttpActivityTimeout applies instead.
+	ShintCompat::SetActivityTimeout(Req, RequestTimeout);
 
 	if (!Req->ProcessRequest())
 	{

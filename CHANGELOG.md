@@ -2,6 +2,42 @@
 
 ---
 
+## [1.6.1] — 2026-08-20
+
+### Fixed
+- **The plugin did not compile on UE 5.2 or 5.3.** Fab builds the submitted
+  source itself, once per engine slot, so three APIs that only exist further
+  up the range were hard build failures on the two oldest slots — not
+  warnings. `IHttpRequest::SetActivityTimeout` (5.4+, used on both the
+  blocking and the streaming path), `IHttpRequest::SetResponseBodyReceiveStream`
+  (5.3+, the SSE live-token hook), and the `FMessageDialog::Open` overload
+  that takes the title by reference (5.3+, which is also where the
+  `const FText*` form 5.2 is limited to became deprecated — so neither
+  spelling works everywhere on its own). The declared range has been 5.2-5.8
+  since 1.5.0 on the strength of a static audit that missed all three; the
+  audit is not a substitute for a compile.
+
+  All three now go through `Public/Utils/ShintEngineCompat.h`, which derives
+  its version tests from `ENGINE_MAJOR_VERSION`/`ENGINE_MINOR_VERSION`
+  directly. Each shim degrades rather than disables:
+  - **5.2** has no receive-stream hook, so the assistant's reply buffers and
+    is parsed in one shot at completion — the answer arrives whole instead of
+    token by token. Every SSE event the panel needs (chunk text, error
+    frames, the terminal `done` payload, and the raw body behind a non-2xx)
+    is still recovered, including the 403 tier-gate body.
+  - **5.2 and 5.3** have no per-request activity timeout and no runtime
+    override — `FHttpModule` exposes a getter only — so the project's
+    engine-wide `[HTTP] HttpActivityTimeout` applies. Streaming keeps bytes
+    moving token by token, so the real exposure is a cold-model prompt-eval
+    that stays silent past that limit.
+
+  Verified by building the full tree on 5.7 and, separately, a copy with the
+  compat macros forced to their 5.2 values — the fallback branches are never
+  reached by a 5.7 compile otherwise, so a typo in them would have surfaced
+  only as a second Fab rejection.
+
+---
+
 ## [1.6.0] — 2026-08-19
 
 ### Fixed

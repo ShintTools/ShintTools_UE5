@@ -32,6 +32,7 @@
 #include "SShintToolsPanel_Private.h"
 #include "ShintTools.h"
 #include "ShintCoreClient.h"
+#include "ShintEngineCompat.h"
 
 #include "ShintStyle.h"
 
@@ -136,7 +137,7 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 		"again before anything is applied.\n\n"
 		"Pick No to apply immediately without attempting the safety dry-run."));
 	const EAppReturnType::Type Choice =
-		FMessageDialog::Open(EAppMsgType::YesNo, DialogBody, DialogTitle);
+		ShintCompat::OpenDialog(EAppMsgType::YesNo, DialogBody, DialogTitle);
 
 	if (Choice == EAppReturnType::Yes)
 	{
@@ -192,7 +193,7 @@ FReply SShintToolsPanel::OnApplySingleFix(FShintIssueItemPtr Item)
 		"again before anything is applied.\n\n"
 		"Pick No to apply immediately without attempting the safety dry-run."));
 	const EAppReturnType::Type Choice =
-		FMessageDialog::Open(EAppMsgType::YesNo, DialogBody, DialogTitle);
+		ShintCompat::OpenDialog(EAppMsgType::YesNo, DialogBody, DialogTitle);
 
 	if (Choice == EAppReturnType::Yes)
 	{

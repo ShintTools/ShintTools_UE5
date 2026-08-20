@@ -25,9 +25,14 @@ Fab requires a SEPARATE upload per supported engine version slot (5.2-5.8),
 each with its own .uplugin EngineVersion matching that slot — uploading the
 same file to every slot gets the submission rejected ("all download links
 contain the files for version 5.2 instead of their corresponding engine
-versions"). The source is verified compatible across the whole range (see
-CHANGELOG "Known issues" / the 5.2-5.8 compat audit), so each zip below is
-identical content with only EngineVersion rewritten per slot.
+versions"). The source compiles across the whole range, so each zip below is identical
+content with only EngineVersion rewritten per slot. Three APIs need it to stay
+that way -- SetActivityTimeout (5.4+), SetResponseBodyReceiveStream (5.3+) and
+FMessageDialog::Open's by-reference title (5.3+) -- all routed through
+Source/ShintTools/Public/Utils/ShintEngineCompat.h. A static read of the API
+surface is NOT enough to claim compatibility: the 1.5.0 audit did exactly that
+and Fab's 5.2 and 5.3 builds still failed on all three. Only a compile counts,
+so re-check that header before widening or moving the declared range.
 
 Usage (from the plugin repo root)::
 

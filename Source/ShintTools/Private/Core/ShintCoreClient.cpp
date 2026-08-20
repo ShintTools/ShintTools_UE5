@@ -23,6 +23,7 @@
 
 #include "ShintCoreClient.h"
 #include "ShintTools.h"
+#include "ShintEngineCompat.h"
 
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
@@ -74,6 +75,20 @@ public:
 	FString ErrorText;     // first {"error"} event, if any
 	float   GenSeconds = 0.f;
 	bool    bDone = false;
+
+	// 5.2 fallback: no SetResponseBodyReceiveStream, so nothing reached us
+	// while the request was in flight and the whole body shows up here at
+	// completion. Same parse, one shot. The chunk sink is dropped first — the
+	// caller has already rendered the final text by the time this runs, and a
+	// late burst of chunks would land in a bubble that is no longer live.
+	void ParseBufferedBody(const TArray<uint8>& Body)
+	{
+		ChunkSink = nullptr;
+		if (Body.Num() > 0)
+		{
+			Serialize(const_cast<uint8*>(Body.GetData()), Body.Num());
+		}
+	}
 
 	// Whole body decoded — used to surface a non-2xx error body (e.g. a 403
 	// tier-gate JSON) that never arrives as an SSE event.
@@ -357,8 +372,9 @@ void FShintCoreClient::SendRequest(
 	// silent for the full 30-45s CPU generation, so the 30s default aborted it
 	// mid-generation and the plugin reported "Could not reach the LLM" even
 	// though the core returned a valid 200. (The streaming endpoint below avoids
-	// the gap entirely; this keeps the non-streaming path safe too.)
-	Req->SetActivityTimeout(TimeoutSecs);
+	// the gap entirely; this keeps the non-streaming path safe too.) The setter
+	// only exists from 5.4 up — see ShintCompat::SetActivityTimeout.
+	ShintCompat::SetActivityTimeout(Req, TimeoutSecs);
 
 	if (!Req->ProcessRequest())
 	{
@@ -410,7 +426,11 @@ void FShintCoreClient::SendRequestStream(
 				});
 		});
 
-	Req->SetResponseBodyReceiveStream(Parser);
+	// Live token drip. Returns false on 5.2, which has no receive-stream hook:
+	// the body then buffers whole and OnHttpStreamComplete feeds it to the same
+	// parser at the end, so the answer lands in one piece instead of token by
+	// token. Every event the panel needs still arrives.
+	ShintCompat::SetResponseBodyReceiveStream(Req, Parser);
 
 	Req->OnProcessRequestComplete().BindSP(
 		AsShared(), &FShintCoreClient::OnHttpStreamComplete, Parser, OnComplete);
@@ -419,7 +439,7 @@ void FShintCoreClient::SendRequestStream(
 	// active token-by-token, but the initial prompt-eval before the first token
 	// can still approach the old 30s default on a cold model.
 	Req->SetTimeout(180.0f);
-	Req->SetActivityTimeout(180.0f);
+	ShintCompat::SetActivityTimeout(Req, 180.0f);
 
 	if (!Req->ProcessRequest())
 	{
@@ -446,6 +466,13 @@ void FShintCoreClient::OnHttpStreamComplete(
 		OnComplete.ExecuteIfBound(Result);
 		return;
 	}
+
+#if !SHINT_HTTP_HAS_RECEIVE_STREAM
+	// Nothing was piped in as it arrived on this engine — parse it now, before
+	// the status checks, so a non-2xx error body is still recoverable via
+	// RawBody() exactly as it is on the streaming path.
+	Parser->ParseBufferedBody(Response->GetContent());
+#endif
 
 	Result.StatusCode = Response->GetResponseCode();
 	const bool bHttpOk = (Result.StatusCode >= 200 && Result.StatusCode < 300);
