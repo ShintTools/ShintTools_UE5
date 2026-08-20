@@ -11,9 +11,7 @@
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
 #include "ShintCoreClient.h"
-// [DASH-STRIP-BEGIN]
 #include "ShintDashboardSync.h"
-// [DASH-STRIP-END]
 
 #include "ShintStyle.h"
 
@@ -340,7 +338,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 			// POSTs the scan to shint.tools, part of the paid SaaS offering.
 			// Hidden completely on free so the user never sees an affordance
 			// that always 403s.
-			// [DASH-STRIP-BEGIN]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f)
 			[
 				SAssignNew(SendAssetBtn, SButton)
@@ -359,7 +356,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 					.ColorAndOpacity(FSlateColor(C_Gray()))
 				]
 			]
-			// [DASH-STRIP-END]
 			// Primary action — default button + white label, matching the
 			// Asset Optimizer's bulk Fix.
 			+ SHorizontalBox::Slot().AutoWidth()
@@ -542,7 +538,6 @@ FReply SShintToolsPanel::OnDeselectAllAssetsClicked()
 	return FReply::Handled();
 }
 
-// [DASH-STRIP-BEGIN]
 FReply SShintToolsPanel::OnSendAssetToDashboardClicked()
 {
 	// Send only the ticked rows. The per-row checkbox toggles bChecked on the
@@ -565,7 +560,6 @@ FReply SShintToolsPanel::OnSendAssetToDashboardClicked()
 		FOnShintWebDashboardComplete::CreateSP(this, &SShintToolsPanel::OnAssetDashboardComplete));
 	return FReply::Handled();
 }
-// [DASH-STRIP-END]
 
 // Reveal-in-Content-Browser — resolve the row's package path to a live
 // FAssetData via the AssetRegistry and sync the Content Browser to it

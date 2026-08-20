@@ -9,9 +9,6 @@ namespace
 	FString               GAnalysisId;
 	EShintAssistantModule GModule = EShintAssistantModule::None;
 	FString               GSummary;
-	// [LOD-STRIP-BEGIN]
-	FString               GReportId;
-	// [LOD-STRIP-END]
 
 	// Queued "Explain this finding" from a results row. Held until the panel
 	// takes it, so a click that also opens the panel still gets answered.
@@ -94,20 +91,7 @@ FString FShintAssistantContext::GetModuleContextString()
 	{
 	case EShintAssistantModule::CodeValidator: return TEXT("code_validator");
 	case EShintAssistantModule::AssetNaming:   return TEXT("asset_naming");
-	// [LOD-STRIP-BEGIN]
-	case EShintAssistantModule::LodAudit:      return TEXT("lod_audit");
-	case EShintAssistantModule::Predictive:    return TEXT("predictive");
-	// [LOD-STRIP-END]
 	default:                                   return FString();
 	}
 }
 
-// [LOD-STRIP-BEGIN]
-void FShintAssistantContext::PublishReport(const FString& ReportId)
-{
-	GReportId = ReportId;
-	OnChanged.Broadcast();
-}
-
-FString FShintAssistantContext::GetReportId() { return GReportId; }
-// [LOD-STRIP-END]

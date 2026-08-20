@@ -240,275 +240,7 @@ struct FShintAssetFixResult
 };
 DECLARE_DELEGATE_OneParam(FOnShintAssetFixComplete, const FShintAssetFixResult&);
 
-// [LOD-STRIP-BEGIN]
-// ─────────────────────────────────────────────────────────────────────────────
-// LOD Auditor (Studio tier) — mesh/texture/material optimisation audit.
-// Mirrors the core Finding shape from /assets/lod/audit. The plugin extracts
-// per-asset metadata (LOD counts, triangles, texture sizes, material slots)
-// via the editor APIs and POSTs them; the server returns one finding per
-// violation plus an aggregate summary. ai_guidance is only present when the
-// request opted into bounded LLM enrichment (explain=true).
-// ─────────────────────────────────────────────────────────────────────────────
 
-struct FShintLodFinding
-{
-	FString AssetPath;
-	FString RuleId;            // e.g. "LD003"
-	FString RuleName;          // humanised title from the server
-	FString Category;          // "Mesh" | "Texture" | "Material" | ...
-	FString Severity;          // "warning" | "info" | "error"
-	FString Message;
-	FString Guidance;          // deterministic, engine-aware fix guidance
-	FString AiGuidance;        // optional LLM guidance (top-N when explain=true)
-	bool    bAutoFixable = false;
-
-	// Estimated saving if the fix is applied — drives the summary + sort order.
-	double  VramMb             = 0.0;
-	int32   ShaderInstructions = 0;
-
-	// ── Asset Optimizer table display fields ────────────────────────────────
-	// Width/Height/Group/Format are joined client-side from the collection pass
-	// (the server findings don't echo them back). Current/PotentialVramMb are
-	// parsed from the finding's current/recommended dicts (present only for the
-	// size-changing rules — others leave them 0 and the table shows "—").
-	int32   Width           = 0;
-	int32   Height          = 0;
-	FString Group;             // per-family: texture LOD group / Static / Master…
-	FString Format;            // per-family: compression / "Nanite" / blend mode
-	FString ResText;           // per-family RESOLUTION cell when W/H don't apply
-	                           //   (meshes: "12,345 tris", materials: "140 instr")
-	double  CurrentVramMb   = 0.0;
-	double  PotentialVramMb = 0.0;
-
-	// ── Auto-fix targets (parsed from the finding's "recommended" dict) ──────
-	// Drive the per-row "Fix" flow, which writes an optimised *duplicate* and
-	// leaves the original untouched. Absent for non-size rules (left 0/empty).
-	int32   RecMaxSize = 0;     // recommended.max_texture_size  (LT003 oversized)
-	FString RecCompression;    // recommended.compression       (LT001/LT007)
-
-	// ── In-place auto-fix descriptor (§20.5) ─────────────────────────────────
-	// The full flattened "recommended" dict (string→string) drives the in-place
-	// fixer registry: each recognised key (compression, recompute_normals,
-	// two_sided, …) maps to one property write / build-settings change. Empty
-	// for rules the server did not mark auto-fixable. Confidence gates batch
-	// apply (§13.5: high pre-checked, medium unchecked, low per-row confirm).
-	TMap<FString, FString> Recommended;
-	FString Confidence;        // "high" | "medium" | "low" (default treated high)
-};
-
-struct FShintLodAuditResult
-{
-	bool    bSuccess        = false;
-	int32   StatusCode      = 0;
-	FString ErrorMessage;
-
-	int32   AssetsAudited   = 0;
-	int32   IssuesFound     = 0;
-	int32   AutoFixable     = 0;
-	double  EstimatedVramSavedMb            = 0.0;
-	int32   EstimatedShaderInstructionsSaved = 0;
-
-	// Client-computed during the collection pass (not from the server) — drive
-	// the Asset Optimizer KPI tiles (per-category file counts + total VRAM).
-	int32   TexturesAudited  = 0;
-	int32   MeshesAudited     = 0;
-	int32   MaterialsAudited  = 0;
-	double  TotalVramMb       = 0.0;   // sum of resident texture VRAM
-
-	// Assistant contract §7 — see FShintValidateResult::AnalysisId. The audit
-	// is collected in chained batches, so only the LAST batch's id survives
-	// into the merged result: it is the one whose stored document holds the
-	// findings the user is looking at.
-	FString AnalysisId;
-
-	TArray<FShintLodFinding> Findings;
-};
-DECLARE_DELEGATE_OneParam(FOnShintLodAuditComplete, const FShintLodAuditResult&);
-// [LOD-STRIP-END]
-
-// [LOD-STRIP-BEGIN]
-// ─────────────────────────────────────────────────────────────────────────────
-// Predictive Profiler (Studio tier) — mirrors the core /predict/* contract v1.0
-// (docs/predictive/API.md). The plugin collects the scene digest + render/build
-// config + raw source, POSTs to /predict/analyze, and renders a risk dashboard
-// (score gauges, frame-budget bar, top-issue list) + an Impact Simulator
-// (/predict/simulate). Every number is a band: {Min, Expected, Max} + a
-// confidence tag. Predictive PRICES cost — it does not diagnose; the title is
-// the entity name/location, never a rule sentence.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// One banded figure. Mirrors the core's Prediction type. Zeroed band == "no
-// value" (Expected 0 with empty Unit).
-struct FShintPrediction
-{
-	double  Expected  = 0.0;
-	double  Min       = 0.0;
-	double  Max       = 0.0;
-	FString Unit;              // "ms_frame" | "mb" | "mb_min" | "s" | "min"
-	FString Confidence;        // "high" | "medium" | "low"
-	FString Basis;             // one human sentence explaining the figure
-
-	bool IsSet() const { return !Unit.IsEmpty(); }
-
-	// "+0.9–1.8 ms · est. +1.4 ms" style, sign-aware (deltas are negative).
-	FString ToDisplay() const;
-	// "est. +1.4 ms" — just the headline value + unit.
-	FString ToHeadline() const;
-};
-
-// One 0-100 risk score plus the item ids that drive it (top-5).
-struct FShintPredictScore
-{
-	int32           Value = 0;
-	TArray<FString> Drivers;
-};
-
-// One priced item — a row of the report and the simulator's selection unit.
-// impact/recovery are keyed by dimension ("cpu_ms_frame"|"gpu_ms_frame"|
-// "vram_mb"|"ram_mb"|"gc_mb_min"|"build_mb"). Remediation present only when
-// there IS a known optimization (bHasRemediation); otherwise it's just
-// name + cost.
-struct FShintPredictIssue
-{
-	FString ItemId;            // "ci-0042" — stable within a report
-	int32   Layer     = 0;     // 1 assets | 2 scene | 3 code
-	int32   Rank      = 0;
-	FString Severity;          // "critical" | "warning" | "info"
-	FString Title;             // entity name/location — NOT a description
-	FString RuleId;            // source rule (metadata, not shown as title)
-	FString SourceKind;        // "texture" | "code" | "scene" | ...
-	FString SourcePath;
-	int32   SourceLine = 0;
-
-	// The item's TOTAL cost, keyed by dimension. The primary "cost" chip.
-	TMap<FString, FShintPrediction> Impact;
-
-	// Remediation — present only when there is something to recover.
-	bool                            bHasRemediation = false;
-	FString                         RemediationAction;
-	TMap<FString, FShintPrediction> Recovery;   // what a fix buys back
-	bool                            bAutoFixable = false;
-
-	// Runtime UI state — not sent over wire.
-	bool    bChecked = false;
-
-	// Budget-normalized dominant dimension, as picked by the Core (which knows
-	// the platform budgets — 40 MB of VRAM and 0.4 ms of CPU aren't comparable
-	// as raw magnitudes, only as shares of their own budget). Empty on older
-	// Core payloads that predate this field; DominantDimension() falls back to
-	// a magnitude comparison only in that case.
-	FString PrimaryDimension;
-
-	// The dominant impact dimension + its headline value, for the table's
-	// right-aligned cost chip (e.g. "MEM  +18–26 MB  est. +23 MB").
-	FString DominantDimension() const;
-};
-
-// One stacked segment of the frame-budget bar (a layer/module contribution).
-struct FShintBudgetSegment
-{
-	FString Label;             // "Code patterns" | "Scene dispatch" | ...
-	double  ExpectedMs = 0.0;
-};
-
-// One CPU/GPU budget line: predicted spend vs budget, with a stack breakdown.
-struct FShintBudgetLine
-{
-	double                       BudgetMs = 0.0;
-	FShintPrediction             Predicted;   // .IsSet() false == no data
-	TArray<FShintBudgetSegment>  Breakdown;
-};
-
-// The Core's authoritative frame-time figure — NOT cpu + gpu. CPU/GPU work
-// on a frame is pipelined, so frame time is governed by the slower of the
-// two (the bottleneck); summing both axes overstates the frame.
-struct FShintFrameLine
-{
-	double  BudgetMs    = 0.0;
-	double  PredictedMs = 0.0;
-	FString Bottleneck;   // "cpu" | "gpu" | "" when unscored
-	bool    bIsSet      = false;
-};
-
-// The full analyze report.
-struct FShintPredictReport
-{
-	bool    bSuccess    = false;
-	int32   StatusCode  = 0;
-	FString ErrorMessage;
-
-	FString ReportId;
-	FString Engine;
-	FString ProjectName;
-
-	// Platform profile (denominators the dashboard renders raw).
-	FString ProfileName;         // "desktop_60"
-	FString ProfileDisplayName;
-	double  FrameBudgetMs = 0.0;
-	FString ReferenceHw;
-
-	// Scores.
-	FShintPredictScore CpuRisk;
-	FShintPredictScore GpuRisk;
-	FShintPredictScore MemoryRisk;
-	FShintPredictScore BuildHealth;
-	int32              OverallHealth = 0;
-
-	// Frame budget.
-	FShintBudgetLine Cpu;
-	FShintBudgetLine Gpu;
-	FShintFrameLine  Frame;   // authoritative frame prediction (bottleneck-based)
-
-	// Memory / build headline predictions (may be unset).
-	FShintPrediction Vram;
-	int32            VramBudgetMb = 0;
-	FShintPrediction Ram;
-	int32            RamBudgetMb  = 0;
-	FShintPrediction BuildSizeMb;
-
-	// Items — top_issues is the ranked head; we keep the full cost_items so the
-	// simulator can run stateless if the cached report expires.
-	TArray<FShintPredictIssue> TopIssues;
-	TArray<FShintPredictIssue> CostItems;
-
-	// Transparency footer.
-	FString CalibrationVersion;
-	int32   CodeIssuesUncosted = 0;
-	FString Disclaimer;
-};
-DECLARE_DELEGATE_OneParam(FOnShintPredictComplete, const FShintPredictReport&);
-
-// Impact Simulator result — deltas per dimension + before/after scores.
-struct FShintSimScores
-{
-	FShintPredictScore CpuRisk;
-	FShintPredictScore GpuRisk;
-	FShintPredictScore MemoryRisk;
-	FShintPredictScore BuildHealth;
-	int32              OverallHealth = 0;
-};
-
-struct FShintPredictRecommendation
-{
-	FString ItemId;
-	FString Reason;            // "Largest remaining recovery: +0.29 ms (cpu…)"
-	bool    bAutoFixable = false;
-};
-
-struct FShintSimulateResult
-{
-	bool    bSuccess    = false;
-	int32   StatusCode  = 0;
-	FString ErrorMessage;
-
-	int32                            SelectedCount = 0;
-	TMap<FString, FShintPrediction>  Deltas;        // negative = recovered
-	FShintSimScores                  Before;
-	FShintSimScores                  After;
-	TArray<FShintPredictRecommendation> Recommendations;
-};
-DECLARE_DELEGATE_OneParam(FOnShintSimulateComplete, const FShintSimulateResult&);
-// [LOD-STRIP-END]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Quality Score (Slice B) — full breakdown fetched via /metrics/score/latest
@@ -557,7 +289,6 @@ DECLARE_DELEGATE_OneParam(FOnShintQualityScoreHistoryComplete, const FShintQuali
 // The "Send to Dashboard" feature is a paid-tier-only POST that lives in
 // its own translation unit so other builds can skip the code path.
 
-// [AGENT-STRIP-BEGIN]
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent — Auto-Fix Plan (Indie tier)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -609,7 +340,6 @@ struct FShintAgentExplainResponse
 };
 
 DECLARE_DELEGATE_OneParam(FOnShintAgentExplainComplete, const FShintAgentExplainResponse&);
-// [AGENT-STRIP-END]
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -731,12 +461,6 @@ struct FShintAssistantRequest
 	FString ContextRef;       // analysis_id from a scan
 	FString RuleId;
 	FString AssetPath;
-	// [LOD-STRIP-BEGIN]
-	// simulate_change grounding. Studio-only end to end — the report comes
-	// from the Predictive Profiler, which is not present in lower tiers.
-	FString ReportId;
-	TArray<FString> SelectedItemIds;
-	// [LOD-STRIP-END]
 	FString PlatformProfile;
 	FString StudioId;
 	FString ProjectId;
@@ -927,63 +651,6 @@ public:
 	void ReportAssetFixesToServer(const TArray<FShintAssetIssue>& Fixed,
 	                              FOnShintAssetFixComplete OnComplete);
 
-	// [LOD-STRIP-BEGIN]
-	// ── LOD Auditor (Studio tier) — local engine ─────────────────────────────
-	/**
-	 * Audits every mesh / texture / material under /Game for LOD and
-	 * optimisation issues. Loads each asset, extracts the metadata the core
-	 * rules need (LOD counts + per-LOD triangles, texture dimensions +
-	 * compression, material slot counts), and POSTs to /assets/lod/audit.
-	 *
-	 * @param Profile     "default" | "mobile" — selects the threshold set.
-	 * @param bExplainTop When true, asks the server to attach LLM ai_guidance
-	 *                    to the top findings (Studio only; ~30s/finding on CPU).
-	 */
-	void AuditLods(const FString& Profile, bool bExplainTop,
-	               FOnShintLodAuditComplete OnComplete, bool bDeepScan = false);
-	// Public so the batched-audit driver (a file-local helper in
-	// ShintCoreClient_Lod.cpp, which chains one request per asset chunk) can
-	// parse each batch response. Pure static JSON->struct helper, no state.
-	static FShintLodAuditResult ParseLodAuditResponse(const FShintRequestResult& Raw);
-
-	// Map the TextureCompressionSettings enum to the TC_* string the core's
-	// lod_auditor.vram_model._FORMAT_ALIASES table understands. Shared by the
-	// LOD Auditor's extractor AND the Predictive Profiler's asset collector
-	// (ShintCoreClient_Predictive.cpp) — Predictive used to derive this via
-	// raw UEnum::GetNameStringByValue() reflection, which is one registration
-	// quirk away from silently emitting a name the core doesn't recognize
-	// (falls back to RGBA8 sizing, the same class of bug as the Unity DXT1
-	// VRAM-inflation fix). One curated mapping, one place it can be wrong.
-	static FString TextureCompressionToString(TextureCompressionSettings TC);
-
-	// ── Predictive Profiler (Studio tier) — local engine ──────────────────────
-	/**
-	 * Analyze a project's predicted cost. Sends assets + a scene digest
-	 * (actors/ticking Blueprints/skeletal meshes/lights) + raw source via the
-	 * core's batched-ingest session (assets chunked at 150 — the LOD-audit
-	 * OOM lesson). The report is the simulator's input — keep it
-	 * (SimulatePrediction can also run stateless from CostItems).
-	 *
-	 * @param Profile  platform profile name ("desktop_60", "mobile_30", …).
-	 */
-	void AnalyzePrediction(const FString& Profile, FOnShintPredictComplete OnComplete);
-
-	/**
-	 * Impact Simulator — POST /predict/simulate against a cached report. Passes
-	 * the selected item ids; the optional NewProfile answers "what if I port
-	 * this?" (both before/after recomputed on that profile). InlineCostItems is
-	 * the stateless fallback when the cached report has expired.
-	 */
-	void SimulatePrediction(const FString& ReportId,
-	                        const TArray<FString>& SelectedItemIds,
-	                        const FString& NewProfile,
-	                        const TArray<FShintPredictIssue>& InlineCostItems,
-	                        FOnShintSimulateComplete OnComplete);
-
-	// Public pure JSON->struct helpers (no state) — mirror ParseLodAuditResponse.
-	static FShintPredictReport   ParsePredictResponse(const FShintRequestResult& Raw);
-	static FShintSimulateResult  ParseSimulateResponse(const FShintRequestResult& Raw);
-	// [LOD-STRIP-END]
 
 	// ── Asset Naming Bot — external web dashboard ────────────────────────────
 	//   Moved to FShintDashboardSync::SendAssetNaming
@@ -993,7 +660,6 @@ public:
 	void SendDashboardReport(const FShintDashboardReport& Report,
 	                         FOnShintDashboardComplete OnComplete);
 
-	// [AGENT-STRIP-BEGIN]
 	// ── Agent — Auto-Fix Plan (Indie tier) ────────────────────────────────────
 	/**
 	 * Sends the validator's last result to /agent/plan and receives a
@@ -1031,7 +697,6 @@ public:
 	void RequestExplainIssueStream(const FShintCodeIssue&       Issue,
 	                               FOnShintStreamChunk          OnChunk,
 	                               FOnShintAgentExplainComplete OnComplete);
-	// [AGENT-STRIP-END]
 
 	// ── Assistant (all tiers) — /assistant/* ─────────────────────────────────
 	// Implemented in ShintCoreClient_Assistant.cpp. Never strip-gated: the
@@ -1167,9 +832,7 @@ private:
 	                                 TArray<FShintCodeIssue>     TreeSitterIssues,
 	                                 FOnShintFixComplete         OnComplete);
 
-	// [AGENT-STRIP-BEGIN]
 	static FShintAgentPlanResult ParseAgentPlanResponse(const FShintRequestResult& Raw);
-	// [AGENT-STRIP-END]
 
 	FShintCoreConfig Config;
 };

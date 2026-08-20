@@ -28,9 +28,7 @@
 #include "SShintToolsPanel_Private.h"
 #include "ShintTools.h"
 #include "ShintCoreClient.h"
-// [DASH-STRIP-BEGIN]
 #include "ShintDashboardSync.h"
-// [DASH-STRIP-END]
 #include "CoreProcessManager.h"
 
 // Shared design-system widgets (UI redesign foundation)
@@ -50,9 +48,7 @@
 void SShintToolsPanel::Construct(const FArguments& InArgs)
 {
 	CoreClient     = MakeShared<FShintCoreClient>();
-	// [DASH-STRIP-BEGIN]
 	DashboardSync  = MakeShared<FShintDashboardSync>(*CoreClient);
-	// [DASH-STRIP-END]
 	ProcessManager = MakeShared<FCoreProcessManager>();
 
 	// Kick off an initial /health probe so the Settings tab's LED + the
@@ -77,9 +73,6 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 		{
 		case EShintDestination::Code:     return LOCTEXT("TitleCode",     "Code Validator");
 		case EShintDestination::Assets:   return LOCTEXT("TitleAssets",   "Asset Naming Bot");
-		// [LOD-STRIP-BEGIN]
-		case EShintDestination::LodAudit: return LOCTEXT("TitleLod",      "LOD Auditor");
-		// [LOD-STRIP-END]
 		case EShintDestination::Settings: return LOCTEXT("TitleSettings", "Settings");
 		case EShintDestination::Overview:
 		default:                          return LOCTEXT("TitleOverview", "Overview");
@@ -202,11 +195,6 @@ void SShintToolsPanel::Construct(const FArguments& InArgs)
 					+ SWidgetSwitcher::Slot()
 					[ WrapSection(BuildAssetNamingSection()) ]
 
-					// [LOD-STRIP-BEGIN]
-					// 3 — LOD Auditor (Studio tier; rail entry hidden on lower tiers)
-					+ SWidgetSwitcher::Slot()
-					[ WrapSection(BuildLodAuditSection()) ]
-					// [LOD-STRIP-END]
 
 					// 4 — Settings (was Config Section, now its own destination)
 					+ SWidgetSwitcher::Slot()

@@ -27,10 +27,6 @@ enum class EShintAssistantModule : uint8
 	None,
 	CodeValidator,
 	AssetNaming,
-	// [LOD-STRIP-BEGIN]
-	LodAudit,
-	Predictive,
-	// [LOD-STRIP-END]
 };
 
 struct SHINTTOOLS_API FShintAssistantContext
@@ -84,16 +80,6 @@ struct SHINTTOOLS_API FShintAssistantContext
 	static bool ConsumePendingExplain(FString& OutRuleId, FString& OutAssetPath,
 	                                  FString& OutQuestion);
 
-	// [LOD-STRIP-BEGIN]
-	/**
-	 * The Predictive Profiler's report id, kept separately from AnalysisId
-	 * because `simulate_change` needs `report_id` + `selected_item_ids`
-	 * rather than a `context_ref` — they are different grounding channels in
-	 * the contract, and a LOD audit must not overwrite a live report.
-	 */
-	static void    PublishReport(const FString& ReportId);
-	static FString GetReportId();
-	// [LOD-STRIP-END]
 
 	/** Fired whenever the context changes, so an open panel can relabel its
 	 *  context strip without polling. */

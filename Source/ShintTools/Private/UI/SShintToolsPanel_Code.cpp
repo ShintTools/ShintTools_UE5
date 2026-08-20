@@ -19,9 +19,7 @@
 
 #include "Framework/Docking/TabManager.h"   // TryInvokeTab — Explain -> Assistant
 #include "Misc/Paths.h"
-// [DASH-STRIP-BEGIN]
 #include "ShintDashboardSync.h"
-// [DASH-STRIP-END]
 
 #include "ShintStyle.h"
 #include "SShintSeverityBadge.h"
@@ -391,7 +389,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			// /license/status probe; it defaults to "free" until that resolves,
 			// which is intentional — a paid user simply sees the button appear
 			// after the probe lands.
-			// [DASH-STRIP-BEGIN]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f)
 			[
 				SAssignNew(SendCodeBtn, SButton)
@@ -410,7 +407,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 					.ColorAndOpacity(FSlateColor(C_Gray()))
 				]
 			]
-			// [DASH-STRIP-END]
 			// Primary action — default button + white label, matching the
 			// Asset Optimizer's bulk Fix.
 			+ SHorizontalBox::Slot().AutoWidth()
@@ -887,14 +883,12 @@ FReply SShintToolsPanel::OnDeselectAllCodeClicked()
 	return FReply::Handled();
 }
 
-// [DASH-STRIP-BEGIN]
 FReply SShintToolsPanel::OnSendCodeToDashboardClicked()
 {
 	DashboardSync->SendCodeValidator(LastCodeResult,
 		FOnShintWebDashboardComplete::CreateSP(this, &SShintToolsPanel::OnCodeDashboardComplete));
 	return FReply::Handled();
 }
-// [DASH-STRIP-END]
 
 FReply SShintToolsPanel::OnIgnoreSingleFix(FShintIssueItemPtr Item)
 {

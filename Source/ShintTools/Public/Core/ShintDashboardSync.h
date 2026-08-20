@@ -12,10 +12,6 @@
 class FShintCoreClient;
 struct FShintValidateResult;
 struct FShintAssetScanResult;
-// [LOD-STRIP-BEGIN]
-struct FShintLodAuditResult;
-struct FShintPredictReport;
-// [LOD-STRIP-END]
 
 /**
  * Result of a POST to the external shint.tools dashboard.
@@ -81,39 +77,6 @@ public:
 	void SendAssetNaming(const FShintAssetScanResult& LastResult,
 		FOnShintWebDashboardComplete OnComplete);
 
-	// [LOD-STRIP-BEGIN]
-	/**
-	 * Sends the LOD Auditor RESULTS (metrics only) to the dashboard.
-	 * Privacy: per-finding metadata + aggregate KPIs are sent; no asset bytes.
-	 * Endpoint: POST {DashboardUrl}/api/public/lod-auditor/analyze
-	 * Body: { project_name, engine,
-	 *         findings: [{asset_path, rule_id, rule_name, category, severity,
-	 *                     message, auto_fixable, vram_mb, shader_instructions}],
-	 *         stats:    {assets_audited, issues_found, auto_fixable,
-	 *                    textures, meshes, materials, total_vram_mb,
-	 *                    estimated_vram_saved_mb, estimated_shader_saved} }
-	 * Auth:  Authorization: Bearer <per-project key>
-	 */
-	void SendLodAudit(const FShintLodAuditResult& LastResult,
-		FOnShintWebDashboardComplete OnComplete);
-
-	/**
-	 * Sends the Predictive Profiler RESULTS (scores + top issues) to the
-	 * dashboard. Privacy: same posture as SendLodAudit — priced-item
-	 * metadata + aggregate scores, no asset bytes.
-	 * Endpoint: POST {DashboardUrl}/api/public/predictive-profiler/analyze
-	 * Body: { project_name, engine, profile,
-	 *         scores: {cpu_risk, gpu_risk, memory_risk, build_health,
-	 *                  overall_project_health},
-	 *         top_issues: [{item_id, layer, severity, title, rule_id,
-	 *                       auto_fixable}],
-	 *         stats: {top_issues_count, cost_items_count,
-	 *                 code_issues_uncosted, calibration_version} }
-	 * Auth:  Authorization: Bearer <per-project key>
-	 */
-	void SendPredictive(const FShintPredictReport& LastReport,
-		FOnShintWebDashboardComplete OnComplete);
-	// [LOD-STRIP-END]
 
 private:
 	FShintCoreClient& Client;

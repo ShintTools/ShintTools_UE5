@@ -356,7 +356,6 @@ void FShintCoreClient::SendRequest(
 		AsShared(), &FShintCoreClient::OnHttpRequestComplete, OnComplete);
 	// 90s covers full-project scans.
 	float TimeoutSecs = 90.0f;
-	// [AGENT-STRIP-BEGIN]
 	// /agent/explain runs the local LLM and takes 30-45s typical / 60-90s on
 	// slow CPUs — give it 180s so a single slow generation doesn't cut the
 	// spinner off mid-stream.
@@ -364,7 +363,6 @@ void FShintCoreClient::SendRequest(
 	{
 		TimeoutSecs = 180.0f;
 	}
-	// [AGENT-STRIP-END]
 	Req->SetTimeout(TimeoutSecs);
 	// Match the ACTIVITY timeout to the total. SetTimeout bounds the whole
 	// request, but UE's HTTP backend separately aborts when no bytes flow for

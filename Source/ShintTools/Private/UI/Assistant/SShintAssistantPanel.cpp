@@ -658,9 +658,6 @@ void SShintAssistantPanel::SendMessage(const FString& Text, const FString& Force
 	Req.AssetPath = MoveTemp(PendingExplainAssetPath);
 	PendingExplainRuleId.Reset();
 	PendingExplainAssetPath.Reset();
-	// [LOD-STRIP-BEGIN]
-	Req.ReportId       = FShintAssistantContext::GetReportId();
-	// [LOD-STRIP-END]
 
 	bAwaitingReply = true;
 	const uint64 Token = ++RequestToken;

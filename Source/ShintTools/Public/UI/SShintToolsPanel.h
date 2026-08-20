@@ -3,13 +3,11 @@
 
 #include "CoreMinimal.h"
 #include "ShintCoreClient.h"
-// [DASH-STRIP-BEGIN]
 // FShintWebDashboardResult / FOnShintWebDashboardComplete used by the
 // OnCodeDashboardComplete / OnAssetDashboardComplete signatures below.
 // These types moved out of ShintCoreClient.h in the dashboard-sync
 // refactor.
 #include "ShintDashboardSync.h"
-// [DASH-STRIP-END]
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
@@ -111,32 +109,6 @@ struct FShintAssetItem
 };
 using FShintAssetItemPtr = TSharedPtr<FShintAssetItem>;
 
-// [LOD-STRIP-BEGIN]
-// One LOD audit finding row. Wraps FShintLodFinding (the client/transport
-// struct) with display-only state. Guidance + AiGuidance are rendered in an
-// expandable detail block under the row.
-struct FShintLodFindingItem
-{
-	FShintLodFinding Finding;     // server result, copied verbatim
-	bool bDetailExpanded = false; // user toggled the guidance panel open
-	bool bChecked        = false; // row checkbox — drives the bulk "Fix (N)"
-	// Kept alive for the lifetime of the row so the thumbnail widget it backs
-	// stays valid (FAssetThumbnail must outlive the widget MakeThumbnailWidget
-	// returns). Created lazily in GenerateLodFindingRow.
-	TSharedPtr<class FAssetThumbnail> Thumbnail;
-};
-using FShintLodFindingPtr = TSharedPtr<FShintLodFindingItem>;
-
-// Asset Optimizer result tab — findings are grouped by asset family. Other
-// catches every finding whose category isn't Texture/Mesh/Material (e.g.
-// Mobile-profile findings) — without it those findings counted toward the
-// ISSUES KPI but had no tab that would ever show them.
-enum class ELodTab : uint8 { Textures, Meshes, Materials, Other };
-
-// Top-level LOD Auditor destinations (§21). The Assets view hosts the
-// Textures/Meshes/Materials sub-tabs; the rest are new views.
-enum class ELodView : uint8 { Summary, Assets, Fixes, Budgets };
-// [LOD-STRIP-END]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Panel widget
@@ -197,23 +169,6 @@ private:
 	TSharedRef<SWidget> BuildAssetResultsPanel();
 	TSharedRef<SWidget> BuildAssetTypeMenuContent();
 
-	// [LOD-STRIP-BEGIN]
-	// ── LOD Auditor / Asset Optimizer (Studio tier) ───────────────────────────
-	TSharedRef<SWidget> BuildLodAuditSection();
-	TSharedRef<SWidget> BuildLodKpiRow();
-	TSharedRef<SWidget> BuildLodToolbar();      // tabs + filters + bulk actions
-	TSharedRef<SWidget> BuildLodResultsPanel();
-	TSharedRef<SWidget> BuildLodTableHeader();
-	TSharedRef<ITableRow> GenerateLodFindingRow(
-		FShintLodFindingPtr Item, const TSharedRef<STableViewBase>& Owner);
-	// §21 — the top-level LOD views + their nav.
-	TSharedRef<SWidget> BuildLodViewNav();       // Summary/Assets/Fixes/Budgets
-	TSharedRef<SWidget> BuildLodSummaryView();   // KPIs + VRAM treemap
-	TSharedRef<SWidget> BuildLodFixesView();     // in-place fix journal + Revert
-	TSharedRef<SWidget> BuildLodBudgetsView();   // per-platform memory budgets
-	TSharedRef<ITableRow> GenerateLodJournalRow(
-		TSharedPtr<struct FShintLodJournalRow> Item, const TSharedRef<STableViewBase>& Owner);
-	// [LOD-STRIP-END]
 
 	// ── Row generators for SListView ──────────────────────────────────────────
 	TSharedRef<ITableRow> GenerateCodeIssueRow(
@@ -228,9 +183,7 @@ private:
 	FReply OnSelectAllCodeClicked();
 	FReply OnDeselectAllCodeClicked();
 	FReply OnApplySelectedCodeFixesClicked();
-	// [DASH-STRIP-BEGIN]
 	FReply OnSendCodeToDashboardClicked();
-	// [DASH-STRIP-END]
 	// OnAutoFixPlanClicked / OnAgentPlanComplete / ShowAgentPlanDialog
 	// were removed in 1.7.11 alongside the Auto-Fix Plan button. The
 	// per-row Explain entry point covers the same UX with focused
@@ -265,51 +218,8 @@ private:
 	// (select + reveal, not open the asset editor). Lives on the row's info
 	// column, not the checkbox slot, so it never eats the selection click.
 	FReply OnAssetRowNavigateClicked(FShintAssetItemPtr Item);
-	// [DASH-STRIP-BEGIN]
 	FReply OnSendAssetToDashboardClicked();
-	// [DASH-STRIP-END]
 
-	// [LOD-STRIP-BEGIN]
-	// ── LOD Auditor handlers ──────────────────────────────────────────────────
-	FReply OnAuditLodsClicked();
-	void   OnLodAuditComplete(const FShintLodAuditResult& Result);
-	void   PopulateLodFindingList(const FShintLodAuditResult& Result);
-	void   RefreshLodStats();
-	void   RefreshLodFilteredList();        // re-apply tab + filters → visible rows
-	void   SetLodTab(ELodTab Tab);
-	int32  LodCheckedCount() const;         // selected rows (bulk Fix label)
-	void   SetLodAllChecked(bool bChecked); // Select All / Deselect All (current tab)
-	FReply OnLodFixRow(FShintLodFindingPtr Item);
-	FReply OnLodFixSelected();
-	FReply OnLodExport();
-	// Writes an optimised *duplicate* of the finding's texture (original left
-	// untouched), applying the server's recommended max-size / compression.
-	// Returns false + fills OutError on failure; OutNewPath = new asset path.
-	bool   ApplyLodFixDuplicate(const FShintLodFinding& Finding,
-	                            FString& OutNewPath, FString& OutError);
-	// §21 view switching + new-view refresh + in-place (registry) fix handlers.
-	void   SetLodView(ELodView View);
-	void   RefreshLodTreemap();       // rebuild the Summary treemap from findings
-	void   RefreshLodFixesList();     // reload the in-place fix journal
-	// Drops finding(s) from LastLodResult (the single source every KPI/
-	// treemap/row reads from) and rebuilds the derived views once — the row,
-	// its contribution to ISSUES/EST. SAVING, and its treemap cell all
-	// disappear together the instant a fix actually applies, instead of
-	// waiting for the next full scan. Batch callers (Fix Selected/Fix All)
-	// must collect keys during their loop and call the plural once
-	// afterward — RemoveFixedLodFinding rebuilds LodFilteredItems in place,
-	// so calling it mid-iteration over that same array would invalidate the
-	// loop.
-	void   RemoveFixedLodFinding(const FString& AssetPath, const FString& RuleId);
-	void   RemoveFixedLodFindings(const TArray<TPair<FString, FString>>& Keys);
-	FReply OnLodFixInPlace(FShintLodFindingPtr Item);   // registry apply (one row)
-	FReply OnLodFixAllInPlace();                        // registry apply (batch)
-	FReply OnLodRevertFix(TSharedPtr<struct FShintLodJournalRow> Row);
-	// Push the LOD audit RESULTS (metrics only) to the external dashboard.
-	FReply OnSendLodToDashboardClicked();
-	void   OnLodDashboardComplete(const FShintWebDashboardResult& Result);
-	TSharedPtr<class STextBlock> SendLodBtnLabel;
-	// [LOD-STRIP-END]
 
 	// ── HTTP callbacks ────────────────────────────────────────────────────────
 	void OnHealthCheckComplete(const FShintRequestResult& Result);
@@ -317,16 +227,12 @@ private:
 	void OnBlueprintValidateComplete(const FShintValidateResult& Result);
 	void OnBlueprintNamingScanComplete(const FShintValidateResult& Result); // asset-scan chain: naming only
 	void OnCodeFixComplete(const FShintFixResult& Result, uint32 FixGeneration);
-	// [DASH-STRIP-BEGIN]
 	void OnCodeDashboardComplete(const FShintWebDashboardResult& Result);
-	// [DASH-STRIP-END]
 	void OnAssetScanComplete(const FShintAssetScanResult& Result);
 	/** Asset scan triggered by Scan Blueprints — auto-filters to Blueprints, no BP-naming chain. */
 	void OnAssetScanFromBPComplete(const FShintAssetScanResult& Result);
 	void OnAssetFixComplete(const FShintAssetFixResult& Result);
-	// [DASH-STRIP-BEGIN]
 	void OnAssetDashboardComplete(const FShintWebDashboardResult& Result);
-	// [DASH-STRIP-END]
 
 	// ── UI state helpers ──────────────────────────────────────────────────────
 	void SetStatus(ECoreStatus S);
@@ -372,9 +278,7 @@ private:
 	// transport from CoreClient; lifetime is tied to CoreClient via
 	// the shared_ptr -- DashboardSync holds a reference, never null
 	// for the panel's lifetime.
-	// [DASH-STRIP-BEGIN]
 	TSharedPtr<class FShintDashboardSync> DashboardSync;
-	// [DASH-STRIP-END]
 	TSharedPtr<FCoreProcessManager> ProcessManager;
 
 	ECoreStatus  StatusState = ECoreStatus::Unknown;
@@ -383,45 +287,15 @@ private:
 
 	FShintValidateResult  LastCodeResult;
 	FShintAssetScanResult LastAssetResult;
-	// [LOD-STRIP-BEGIN]
-	FShintLodAuditResult  LastLodResult;       // LOD Auditor (Studio)
-	// [LOD-STRIP-END]
 	FShintQualityScoreSnapshot LastQualityScore;  // Slice B
 
 	// All issues from last scan
 	TArray<FShintIssueItemPtr> AllCodeItems;
 	TArray<FShintAssetItemPtr> AllAssetItems;
-	// [LOD-STRIP-BEGIN]
-	TArray<FShintLodFindingPtr> LodFindingItems;    // all findings from last audit
-	TArray<FShintLodFindingPtr> LodFilteredItems;   // visible rows (tab + filters)
-	// "AssetPath|RuleId" of every finding successfully fixed this editor
-	// session. A fresh scan re-reads the same (possibly still-dirty,
-	// unsaved) in-memory asset and would normally not re-flag it — this set
-	// is the fast path that also hides the row the INSTANT a fix applies,
-	// without waiting for the next scan. Cleared on every new scan (a fresh
-	// server-side result is itself authoritative once it arrives).
-	TSet<FString> AppliedLodFixKeys;
-	// Shared thumbnail renderer pool for the Asset Optimizer table (Stage 2b).
-	// Lazily created on first row generation; one pool backs every row's 34px
-	// thumbnail so the editor renders real asset previews instead of a swatch.
-	TSharedPtr<class FAssetThumbnailPool> LodThumbnailPool;
-	// [LOD-STRIP-END]
 	// Currently visible (after filter)
 	TArray<FShintIssueItemPtr> CodeIssueItems;
 	TArray<FShintAssetItemPtr> AssetIssueItems;
 
-	// [LOD-STRIP-BEGIN]
-	// LOD Auditor / Asset Optimizer UI state
-	EModuleState LodState        = EModuleState::Idle;
-	bool         bLodExplainTop  = false;     // "Explain top issues" toggle
-	bool         bLodDeepScan    = false;     // "Deep Scan" toggle (mesh-desc)
-	FString      LodProfile      = TEXT("default"); // "default" | "mobile"
-	ELodTab      LodActiveTab    = ELodTab::Textures;
-	FString      LodSearchText;
-	FString      LodGroupFilter    = TEXT("All Groups");
-	FString      LodFormatFilter   = TEXT("All Formats");
-	FString      LodSeverityFilter = TEXT("All Severities");
-	// [LOD-STRIP-END]
 
 	EIssueFilter         CurrentFilter            = EIssueFilter::All;
 	EIssueCategoryFilter CurrentCategoryFilter    = EIssueCategoryFilter::All;
@@ -452,35 +326,6 @@ private:
 	// ── Slate refs ────────────────────────────────────────────────────────────
 	TSharedPtr<SListView<FShintIssueItemPtr>> CodeIssueListView;
 	TSharedPtr<SListView<FShintAssetItemPtr>> AssetIssueListView;
-	// [LOD-STRIP-BEGIN]
-	TSharedPtr<SListView<FShintLodFindingPtr>> LodFindingListView;
-
-	// KPI tiles (Asset Optimizer): value + colored breakdown subtitle.
-	TSharedPtr<STextBlock> LodFiles_Label;       // FILES — total audited
-	TSharedPtr<STextBlock> LodFilesSub_Label;    //   "Textures: N  Meshes: N"
-	TSharedPtr<STextBlock> LodMemImpact_Label;   // MEMORY IMPACT — total VRAM
-	TSharedPtr<STextBlock> LodMemSavings_Label;  // MEMORY SAVINGS — MB
-	TSharedPtr<STextBlock> LodSavingsPct_Label;  //   "37.8% Reduction"
-	TSharedPtr<STextBlock> LodFrameTime_Label;   // FRAME TIME SAVINGS (stub)
-	TSharedPtr<STextBlock> LodIssues_Label;      // ISSUES — total
-	TSharedPtr<STextBlock> LodIssuesSub_Label;   //   "Textures: N  Meshes: N"
-	TSharedPtr<STextBlock> LodFixSelected_Label; // bulk "Fix (N)" (checked rows)
-	// Retained for back-compat with older stat refs (unused by the new layout).
-	TSharedPtr<STextBlock> LodAudited_Label;
-	TSharedPtr<STextBlock> LodVramSaved_Label;
-	TSharedPtr<SButton>    AuditLodBtn;
-	TSharedPtr<STextBlock> AuditLodBtnLabel;
-	TSharedPtr<SWidget>    LodEmptyState;
-	TSharedPtr<class SBox> LodTableHeaderBox;  // per-tab column header host
-
-	// §21 — top-level view switching + new destinations.
-	ELodView LodActiveView = ELodView::Summary;
-	TSharedPtr<class SWidgetSwitcher>  LodViewSwitcher;
-	TSharedPtr<class SShintTreemap>    LodTreemap;
-	TArray<TSharedPtr<struct FShintLodJournalRow>> LodJournalRows;
-	TSharedPtr<SListView<TSharedPtr<struct FShintLodJournalRow>>> LodFixesListView;
-	FString LodFixConfidence = TEXT("high");   // Fix-All confidence floor
-	// [LOD-STRIP-END]
 
 	TSharedPtr<STextBlock> CodeFiles_Label;
 	TSharedPtr<STextBlock> CodeErrors_Label;
