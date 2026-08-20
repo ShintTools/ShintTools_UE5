@@ -1,32 +1,4 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
-//
-// Apply-fix flows for both the Code Validator and the Asset Naming Bot.
-//
-// Code path:
-//   OnApplySelectedCodeFixesClicked / OnApplySingleFix
-//     → Yes/No safety dry-run prompt
-//       — No  → ProceedWithCodeFixes directly (user chose to skip)
-//       — Yes → CoreClient->CheckFixSafety → OnSafetyCheckComplete, which
-//                branches THREE ways on the result, not two:
-//                  • bCheckRan && bSafe   → ProceedWithCodeFixes
-//                  • bCheckRan && !bSafe  → ShowSafetyWarningDialog
-//                  • !bCheckRan           → ShowSafetyUnavailableDialog
-//                    (the dry-run endpoint 404s on every Core today — this
-//                    must never be silently treated as "safe")
-//     → CoreClient->ApplyCodeFixes(...) (HTTP)
-//   FetchFixPreview — on-demand /validate/fix call for one issue's
-//     tree-sitter window, used by the row's expand button.
-//
-// Asset path:
-//   OnApplySelectedAssetFixesClicked — the heavy AssetTools rename flow,
-//     emits CoreRedirects entries to DefaultEngine.ini, recompiles
-//     descendant Blueprints, re-points referencers while KEEPING the redirector
-//     stubs (so no reference ever dangles), auto-saves dirty packages, then
-//     reports the batch to the server.
-//
-// Pulled out of the main panel TU because these are the only flows that
-// reach into AssetTools / AssetRegistry / Kismet / FileHelpers and they
-// drag a heavy include surface that the rest of the panel does not need.
 
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
@@ -48,7 +20,6 @@
 
 #include "Styling/AppStyle.h"
 
-// Asset tools (for IAssetTools::RenameAssets + FixupReferencers)
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -63,24 +34,15 @@
 
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Code fix entry points
-// ─────────────────────────────────────────────────────────────────────────────
-
 FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 {
 	TArray<FShintCodeIssue> Accepted;
 
 	for (const FShintIssueItemPtr& Item : AllCodeItems)
 	{
-		// Only accept issues that are checked AND actually auto-fixable.
+
 		if (!Item->bChecked || !Item->bIsAutoFixable) continue;
-		// BP issues use plugin-side handlers — no FixSuggestion required.
-		// #27 — C++ AST-level rules are auto-fixable via the TreeSitter
-		// endpoint using FileContent, with no line-level fix_suggestion. Only
-		// reject items that have nothing to work with: no suggestion AND no
-		// file content. ApplyCodeFixes already routes FileContent issues to
-		// the TreeSitter path, so excluding them here was dropping valid fixes.
+
 		if (!Item->bIsBlueprint && Item->FixSuggestion.IsEmpty()
 			&& Item->FileContent.IsEmpty()) continue;
 
@@ -101,7 +63,6 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 		Accepted.Add(I);
 	}
 
-	// Log why Accepted might be empty — counters are independent of bIsAutoFixable.
 	int32 TotalChecked = 0, TotalNotFixable = 0, TotalNoFixSuggestion = 0;
 	for (const FShintIssueItemPtr& Item : AllCodeItems)
 	{
@@ -123,11 +84,6 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 
 	PendingCodeFixes = Accepted;
 
-	// T4 — Always ask first. The safety check is the dry-run that flags fixes
-	// which would alter signatures, public API, or otherwise risk breaking
-	// dependent code. The previous flow ran it implicitly, so the user never
-	// knew it happened and either trusted the silent green path or was confused
-	// by the warning popping up out of nowhere.
 	const FText DialogTitle = FText::FromString(TEXT("ShintTools — Safety Check"));
 	const FText DialogBody  = FText::FromString(TEXT(
 		"Do you want to check if the fix breaks any code structure?\n\n"
@@ -147,8 +103,7 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 	}
 	else
 	{
-		// User explicitly chose to skip the dry-run — apply straight away,
-		// no extra prompt. This is their decision, not a failed check.
+
 		ProceedWithCodeFixes();
 	}
 	return FReply::Handled();
@@ -156,8 +111,7 @@ FReply SShintToolsPanel::OnApplySelectedCodeFixesClicked()
 
 FReply SShintToolsPanel::OnApplySingleFix(FShintIssueItemPtr Item)
 {
-	// #27 — mirror the batch-apply guard: a C++ item with FileContent is
-	// fixable via the TreeSitter path even without a line-level fix_suggestion.
+
 	if (!Item.IsValid() || !Item->bIsAutoFixable
 		|| (!Item->bIsBlueprint && Item->FixSuggestion.IsEmpty()
 			&& Item->FileContent.IsEmpty()))
@@ -182,8 +136,6 @@ FReply SShintToolsPanel::OnApplySingleFix(FShintIssueItemPtr Item)
 
 	PendingCodeFixes = Issues;
 
-	// T4 — same Yes/No prompt as the batch path so the single-issue Apply
-	// button gives the user the same control over the safety dry-run.
 	const FText DialogTitle = FText::FromString(TEXT("ShintTools — Safety Check"));
 	const FText DialogBody  = FText::FromString(TEXT(
 		"Do you want to check if the fix breaks any code structure?\n\n"
@@ -203,25 +155,17 @@ FReply SShintToolsPanel::OnApplySingleFix(FShintIssueItemPtr Item)
 	}
 	else
 	{
-		// User explicitly chose to skip the dry-run — apply straight away,
-		// no extra prompt. This is their decision, not a failed check.
+
 		ProceedWithCodeFixes();
 	}
 	return FReply::Handled();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Safety check
-// ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::OnSafetyCheckComplete(const FShintSafetyCheckResult& Result)
 {
 	if (!Result.bCheckRan)
 	{
-		// The dry-run never happened — 404 (the endpoint doesn't exist on
-		// this Core), a transport error, or an unparseable body. This is
-		// NOT the same as "checked and safe": applying silently here would
-		// be exactly the false promise this fix exists to remove. Restore
-		// idle and let the user decide explicitly.
+
 		SetCodeState(EModuleState::Idle);
 		ShowSafetyUnavailableDialog();
 		return;
@@ -233,8 +177,7 @@ void SShintToolsPanel::OnSafetyCheckComplete(const FShintSafetyCheckResult& Resu
 	}
 	else
 	{
-		// Checked, and the server flagged it unsafe — restore idle and show
-		// the warning dialog.
+
 		SetCodeState(EModuleState::Idle);
 		ShowSafetyWarningDialog(Result);
 	}
@@ -444,9 +387,6 @@ void SShintToolsPanel::ProceedWithCodeFixes()
 	PendingCodeFixes.Empty();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// On-demand fix preview — /validate/fix call for a single row.
-// ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::FetchFixPreview(FShintIssueItemPtr Item)
 {
 	if (!Item.IsValid() || Item->FileContent.IsEmpty() || Item->bFixPreviewLoading) return;
@@ -460,8 +400,7 @@ void SShintToolsPanel::FetchFixPreview(FShintIssueItemPtr Item)
 	Issue.Line        = Item->Line;
 	Issue.FileContent = Item->FileContent;
 
-	// Capture info needed to extract the window from fixed_code.
-	const int32 ContextStart = Item->ContextLineStart; // 1-based
+	const int32 ContextStart = Item->ContextLineStart;
 	TArray<FString> BeforeLines;
 	Item->ContextBefore.ParseIntoArray(BeforeLines, TEXT("\n"), false);
 	const int32 NumContextLines = FMath::Max(1, BeforeLines.Num());
@@ -503,9 +442,6 @@ void SShintToolsPanel::FetchFixPreview(FShintIssueItemPtr Item)
 		}));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Asset rename + CoreRedirects flow
-// ─────────────────────────────────────────────────────────────────────────────
 FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 {
 	if (!FModuleManager::Get().IsModuleLoaded(TEXT("AssetTools"))) return FReply::Handled();
@@ -519,35 +455,23 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 		FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
 
 	TArray<FAssetRenameData> RenameData;
-	// Old/new paths captured BEFORE RenameAssets() (after the rename,
-	// Asset->GetPathName() reports the new path). Redirect entries + server
-	// rows are emitted AFTER the rename, per asset, only for renames that
-	// verifiably happened — RenameAssets can partially fail, and emitting up
-	// front wrote poisoned [CoreRedirects] mappings for renames that never
-	// occurred.
+
 	struct FShintPendingRename
 	{
 		UObject*           Asset = nullptr;
 		FShintAssetItemPtr Item;
-		FString            OldPackage;   // /Game/.../OldName
-		FString            NewPackage;   // /Game/.../NewName
+		FString            OldPackage;
+		FString            NewPackage;
 	};
 	TArray<FShintPendingRename> Pending;
 	int32 SkippedCircular  = 0;
 	int32 SkippedCollision = 0;
 	int32 SkippedLoadFail  = 0;
 
-	// Iterate the FULL backing store, not the filtered view. The previous
-	// behavior renamed only the currently-visible items, so any active type
-	// filter (Materials / Textures / etc.) silently skipped everything else
-	// even though "Apply Corrections" advertises "all selected".
 	for (const FShintAssetItemPtr& Item : AllAssetItems)
 	{
 		if (!Item->bChecked) continue;
 
-		// E-001: skip circular / no-op renames. If the suggested name equals
-		// the current on-disk name, firing a rename creates a self-referencing
-		// ObjectRedirector and triggers an UE5 ensure.
 		if (Item->SuggestedName.IsEmpty() ||
 			Item->SuggestedName.Equals(Item->CurrentName, ESearchCase::CaseSensitive))
 		{
@@ -555,7 +479,6 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 			continue;
 		}
 
-		// Load the UObject from its package path (/Game/...AssetName).
 		UObject* Asset = StaticLoadObject(UObject::StaticClass(), nullptr, *Item->AssetPath);
 		if (!Asset)
 		{
@@ -568,8 +491,6 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 		const FString NewPackagePath = FPaths::GetPath(Item->AssetPath);
 
-		// E-002: skip if the destination package already exists. Otherwise UE5
-		// fails the rename with "An object named 'X' already exists".
 		{
 			const FString NewPackageName = NewPackagePath / Item->SuggestedName;
 			TArray<FAssetData> ExistingAssets;
@@ -589,8 +510,8 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 		FShintPendingRename P;
 		P.Asset      = Asset;
 		P.Item       = Item;
-		P.OldPackage = Item->AssetPath;                       // /Game/.../OldName
-		P.NewPackage = NewPackagePath / Item->SuggestedName;  // /Game/.../NewName
+		P.OldPackage = Item->AssetPath;
+		P.NewPackage = NewPackagePath / Item->SuggestedName;
 		Pending.Add(MoveTemp(P));
 	}
 
@@ -603,18 +524,9 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 	if (RenameData.IsEmpty()) return FReply::Handled();
 
-	// Pre-rename: gather every BP whose parent class is in this rename batch.
-	// After the parents rename, RenameAssets/FixupReferencers updates loaded
-	// references but leaves the **in-memory generated class pointer** on each
-	// child BP stale (it still resolves to the old class name via cached
-	// UClass*). Re-compiling each child after the rename forces the kismet
-	// compiler to rebuild the parent pointer through the new class path.
 	TSet<UBlueprint*> DescendantBPsToRecompile;
 	{
-		// Build map of OLD generated-class path -> NEW generated-class path
-		// from the pending Blueprint renames (must run BEFORE the rename —
-		// afterwards the old class path is gone). A child collected for a
-		// rename that then fails just gets a harmless recompile.
+
 		TMap<FString, FString> OldBPClassToNew;
 		for (const FShintPendingRename& P : Pending)
 		{
@@ -643,8 +555,6 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 				if (!BPData.GetTagValue(FBlueprintTags::ParentClassPath, ParentClassPath))
 					continue;
 
-				// The tag is stored either bare ("/Game/Foo.Foo_C") or wrapped
-				// ("/Script/Engine.Class'/Game/Foo.Foo_C'"); strip the wrapper.
 				if (ParentClassPath.Contains(TEXT("'")))
 				{
 					int32 First = INDEX_NONE, Last = INDEX_NONE;
@@ -657,8 +567,7 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 				if (OldBPClassToNew.Contains(ParentClassPath))
 				{
-					// GetAsset() forces a synchronous load — required so the
-					// child is in memory when we recompile it after the rename.
+
 					if (UBlueprint* Child = Cast<UBlueprint>(BPData.GetAsset()))
 						DescendantBPsToRecompile.Add(Child);
 				}
@@ -675,11 +584,6 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 	AssetTools.RenameAssets(RenameData);
 
-	// Verify EACH rename before emitting anything derived from it.
-	// RenameAssets can partially fail (checkout refusal, in-memory-only
-	// package, external locks); the previous flow ignored its result and
-	// emitted [CoreRedirects] mappings, server rows and success counts for
-	// renames that never happened.
 	TArray<FShintRedirectEntry>  RedirectEntries;
 	TArray<FShintAssetIssue>     ForServer;
 	TArray<UObjectRedirector*>   OurRedirectors;
@@ -701,13 +605,6 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 			continue;
 		}
 
-		// Redirect mappings for DefaultEngine.ini. Three kinds, because UE5
-		// resolves references through different paths depending on context:
-		//   +PackageRedirects (always)  — soft asset paths "/Game/.../OldName"
-		//   +ObjectRedirects  (always)  — UObject paths    ".../OldName.OldName"
-		//   +ClassRedirects   (BP only) — generated class  ".../OldName.OldName_C"
-		// Emitting only one of these per asset used to break soft references
-		// in unloaded packages and child Blueprints of a renamed parent.
 		const FString OldBase = FPaths::GetBaseFilename(P.OldPackage);
 		const FString NewBase = P.Item->SuggestedName;
 		{
@@ -742,9 +639,6 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 
 		TouchedPackages.AddUnique(P.Asset->GetOutermost());
 
-		// Collect ONLY the redirector this rename left at the old package
-		// path. The previous flow swept every redirector under /Game and
-		// fixed up assets completely unrelated to this batch.
 		TArray<FAssetData> OldPkgAssets;
 		AR.GetAssetsByPackageName(FName(*P.OldPackage), OldPkgAssets);
 		for (const FAssetData& AD : OldPkgAssets)
@@ -761,33 +655,16 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 			FailedRenames, Pending.Num());
 	}
 
-	// Re-point every referencer at the new asset but KEEP the redirector
-	// (ERedirectFixupMode::LeaveFixedUpRedirectors). Deleting it here
-	// (DeleteFixedUpRedirectors) was the cause of "renaming breaks references":
-	// FixupReferencers can only re-save referencers it can load AND check out
-	// — the currently-open level, read-only packages, and anything it fails to
-	// resolve are left dangling the instant the redirector is gone. The
-	// [CoreRedirects] fallback we also write does NOT cover them, because
-	// CoreRedirects are read from the .ini only at editor startup, so nothing
-	// catches those references until the next launch. Leaving the redirector
-	// makes the rename reference-safe immediately: every reference form (soft /
-	// hard / by-package / by-object / unloaded) resolves through it. The stub
-	// is cosmetic and the user can run Content Browser → "Fix Up Redirectors"
-	// whenever they want to sweep them.
 	if (!OurRedirectors.IsEmpty())
 	{
 		UE_LOG(LogShintTools, Verbose,
 			TEXT("ShintPanel: re-pointing referencers of %d redirector(s), keeping the stubs"),
 			OurRedirectors.Num());
 		AssetTools.FixupReferencers(OurRedirectors,
-			/*bCheckoutDialogPrompt=*/false,
+			false,
 			ERedirectFixupMode::LeaveFixedUpRedirectors);
 	}
 
-	// T2 — Persist redirect mappings to DefaultEngine.ini. ObjectRedirector
-	// .uasset files cover live references but are fragile (deleted by clean,
-	// missed by native parent-class lookup on child Blueprints). The
-	// [CoreRedirects] entries make the rename survive both.
 	{
 		const int32 Added = WriteShintCoreRedirects(RedirectEntries);
 		if (Added > 0)
@@ -798,10 +675,6 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 		}
 	}
 
-	// Recompile every descendant BP we collected before the rename. Without
-	// this, child BPs still resolve their ParentClass through the old in-memory
-	// pointer and report "Class not found" the next time they're loaded by
-	// name (which the user perceives as "the bot broke my parents").
 	if (!DescendantBPsToRecompile.IsEmpty())
 	{
 		int32 Recompiled = 0;
@@ -816,11 +689,6 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 			Recompiled);
 	}
 
-	// Save the packages THIS batch touched (renamed assets + recompiled
-	// children) so the rename survives an editor close. Saving every dirty
-	// content package here silently committed the user's unrelated
-	// half-finished edits — auto-save must stay scoped to our own writes.
-	// (FixupReferencers already saves the referencer packages it re-points.)
 	{
 		for (UBlueprint* Child : DescendantBPsToRecompile)
 		{
@@ -837,8 +705,8 @@ FReply SShintToolsPanel::OnApplySelectedAssetFixesClicked()
 		{
 			const bool bSaved = FEditorFileUtils::PromptForCheckoutAndSave(
 				ToSave,
-				/*bCheckDirty=*/true,
-				/*bPromptToSave=*/false) == FEditorFileUtils::EPromptReturnCode::PR_Success;
+				true,
+				false) == FEditorFileUtils::EPromptReturnCode::PR_Success;
 			UE_LOG(LogShintTools, Verbose,
 				TEXT("ShintPanel: auto-saved %d package(s) from this batch (success=%d)"),
 				ToSave.Num(), bSaved ? 1 : 0);

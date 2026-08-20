@@ -1,9 +1,4 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
-//
-// Code Validator implementations split out of ShintCoreClient.cpp.
-// The whole class still lives in ShintCoreClient.h — UBT compiles every
-// .cpp in the module, so member functions can be physically scattered
-// without touching headers or callsites.
 
 #include "ShintCoreClient.h"
 #include "ShintTools.h"
@@ -28,7 +23,7 @@
 
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
-#include "UObject/UObjectGlobals.h" // CollectGarbage — forced GC between ValidateBlueprints batches
+#include "UObject/UObjectGlobals.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
@@ -43,22 +38,9 @@
 
 namespace
 {
-	// Re-entrancy guard for the post-fix recompile (issue #313). The Apply
-	// button stays interactive while the 10-60s `Build.bat <Project>Editor`
-	// runs, so a second Apply is easy — and two concurrent builds contend over
-	// the same UBT/linker locks + output DLL, so the second fails ("recompile
-	// fails after recompile"). This process-global flag — touched only on the
-	// game thread (launch + the AsyncTask completion) so it needs no atomics —
-	// makes an overlapping Apply skip the redundant build; the applied source
-	// fixes are still written and are picked up by the in-flight build (or the
-	// next one).
+
 	static bool GPostFixRecompileInFlight = false;
 
-	// Bug 1 fix: the post-fix recompile (Build.bat) runs hidden via
-	// ExecProcess, so without visible feedback the editor looks frozen / like
-	// the fix never applied — especially in the marketplace build where there
-	// is no IDE/console. These show a non-blocking editor notification while
-	// the incremental build runs and update it with the result.
 	TSharedPtr<SNotificationItem> ShintBeginRecompileNotification()
 	{
 		FNotificationInfo Info(FText::FromString(
@@ -103,10 +85,6 @@ namespace
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Code Validator — single file
-// ─────────────────────────────────────────────────────────────────────────────
-
 void FShintCoreClient::ValidateCode(
 	const FString& AbsFilePath, const FString& Content,
 	const FString& Engine, FOnShintValidateComplete OnComplete)
@@ -115,9 +93,7 @@ void FShintCoreClient::ValidateCode(
 	Body->SetStringField(TEXT("file_path"), AbsFilePath);
 	Body->SetStringField(TEXT("content"),   Content);
 	Body->SetStringField(TEXT("engine"),    Engine);
-	// api_key drives resolve_tier on the core; without it every paid
-	// user was bucketed as "free" with the limit_applied flag tripped.
-	// See ValidateBlueprints for the matching comment.
+
 	Body->SetStringField(TEXT("api_key"),   Config.ApiKeyMongo);
 
 	SendRequest(Config.GetBaseUrl() + TEXT("/validate/code"), EShintHttpMethod::POST, SerializeJson(Body),
@@ -126,10 +102,6 @@ void FShintCoreClient::ValidateCode(
 		}));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Code Validator — full project
-// ─────────────────────────────────────────────────────────────────────────────
-
 void FShintCoreClient::ValidateProject(
 	const FString& SourceDir, FOnShintValidateComplete OnComplete)
 {
@@ -137,9 +109,6 @@ void FShintCoreClient::ValidateProject(
 	TArray<FString> AbsFiles;
 	CollectSourceFiles(SourceDir, AbsFiles);
 
-	// Drop anything matching the user's excluded_paths preference. Substring
-	// match (case-insensitive) so an entry like "Source/Plugins/" filters out
-	// every file under that subtree regardless of platform path separator.
 	if (!Config.ExcludedPaths.IsEmpty())
 	{
 		const int32 PreCount = AbsFiles.Num();
@@ -196,8 +165,6 @@ void FShintCoreClient::ValidateProject(
 		return;
 	}
 
-	// project_id removed in 1.7.11 — the dashboard uses the per-project API
-	// key for identification; the local core uses project_name + api_key.
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetStringField(TEXT("project_name"), Config.ProjectName);
 	Body->SetStringField(TEXT("engine"), TEXT("unreal"));
@@ -248,22 +215,9 @@ void FShintCoreClient::ValidateProject(
 	);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Code Validator — blueprints
-// ─────────────────────────────────────────────────────────────────────────────
-
 namespace
 {
-	// One HTTP request carries at most this many Blueprints. The old
-	// single-shot flow called AR.GetAssets() over the whole /Game tree, then
-	// AssetData.GetAsset() (a synchronous load) on EVERY result before
-	// building one giant "files" array for a single POST — exactly the
-	// pattern the LOD Auditor was rewritten to stop doing (see
-	// kLodAuditBatchSize in ShintCoreClient_Lod.cpp): editor OOM / GBs of
-	// loaded UBlueprints on large projects, then a 90s HTTP timeout the user
-	// sees as "couldn't reach the Core". This scan also chains automatically
-	// off the Asset Naming Bot (SShintToolsPanel_Http.cpp), so a user who
-	// never opens the Code Validator paid for the crash too.
+
 	constexpr int32 kBlueprintValidateBatchSize = 150;
 
 	TSharedRef<FJsonObject> MakeEmptyBlueprintStats()
@@ -278,19 +232,14 @@ namespace
 		return S;
 	}
 
-	// Everything an in-flight batched Blueprint validate needs, kept alive
-	// across the async request chain by a TSharedRef captured in each
-	// completion lambda — same idiom as FLodAuditBatch.
 	struct FBlueprintValidateBatch
 	{
 		TSharedRef<FShintCoreClient> Client;
 		TArray<FAssetData>           Assets;
 		int32                        Cursor = 0;
 
-		// Request config — identical on every batch.
 		FString ProjectName, ApiKeyMongo, BaseUrl;
 
-		// Accumulated across all batches; the single result the caller sees.
 		FShintValidateResult    Aggregate;
 		int32                    LoadedCount  = 0;
 		int32                    SkippedCount = 0;
@@ -301,10 +250,6 @@ namespace
 			: Client(MoveTemp(InClient)) {}
 	};
 
-	// Build one Blueprint's "files[]" entry. Wire format is unchanged from
-	// the old single-shot ValidateBlueprints — this is that same per-asset
-	// body, just extracted so it can run per batch instead of over the
-	// whole project in one loop.
 	TSharedRef<FJsonObject> BuildBlueprintValidateJson(
 		const FAssetData& AssetData, FBlueprintValidateBatch& S)
 	{
@@ -416,11 +361,6 @@ namespace
 					bFuncIsPublic   = (Entry->GetFunctionFlags() & FUNC_Public) != 0;
 				}
 
-				// Event / function-entry / function-result nodes are graph
-				// roots: an empty BeginPlay or a function with no body has
-				// every pin unconnected by definition and is NOT a
-				// "disconnected orphan node" — flagging them drowned BPM002
-				// in false positives.
 				const bool bIsGraphRoot =
 					ClassName.Contains(TEXT("K2Node_Event")) ||
 					ClassName.Contains(TEXT("K2Node_CustomEvent")) ||
@@ -506,8 +446,6 @@ namespace
 
 	void SendBlueprintValidateBatch(TSharedRef<FBlueprintValidateBatch> S);
 
-	// All batches done (or one failed): fire the single completion the
-	// caller is waiting on.
 	void FinalizeBlueprintValidate(TSharedRef<FBlueprintValidateBatch> S)
 	{
 		UE_LOG(LogShintTools, Verbose,
@@ -517,9 +455,6 @@ namespace
 		S->OnComplete.ExecuteIfBound(S->Aggregate);
 	}
 
-	// Process the next chunk of Blueprints and POST it; on completion, chain
-	// to the next chunk. Runs on the game thread (the HTTP manager
-	// dispatches request completions there), so GetAsset()/Slate stay safe.
 	void SendBlueprintValidateBatch(TSharedRef<FBlueprintValidateBatch> S)
 	{
 		if (S->Cursor >= S->Assets.Num())
@@ -534,16 +469,7 @@ namespace
 			FilesArr.Add(MakeShared<FJsonValueObject>(BuildBlueprintValidateJson(S->Assets[i], *S)));
 		S->Cursor = End;
 
-		// Force a real GC now, while nothing outside this scope still holds
-		// the UBlueprints (and their graphs) this batch just loaded via
-		// GetAsset(). The LOD auditor's batching comments promise "GC
-		// between batches" but never actually call it — relying on the
-		// editor's periodic collection, which is not guaranteed to run
-		// before the next batch has already loaded its own chunk. An
-		// explicit collect here is what actually keeps memory flat across a
-		// multi-thousand-Blueprint project instead of just slowing the OOM
-		// ramp down.
-		CollectGarbage(RF_NoFlags, /*bPerformFullPurge=*/ true);
+		CollectGarbage(RF_NoFlags,  true);
 
 		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 		Body->SetStringField(TEXT("project_name"), S->ProjectName);
@@ -558,10 +484,6 @@ namespace
 			{
 				FShintValidateResult R = FShintCoreClient::ParseValidateResponse(Raw);
 
-				// A hard failure on any batch aborts the whole chain with
-				// that error, rather than silently reporting a partial
-				// result that would look like a clean scan of the full
-				// project — same contract as the LOD auditor's batching.
 				if (!R.bSuccess)
 				{
 					S->Aggregate.bSuccess     = false;
@@ -579,27 +501,9 @@ namespace
 				S->Aggregate.FilesScanned  += R.FilesScanned;
 				if (S->Aggregate.StatusCode == 0) S->Aggregate.StatusCode = R.StatusCode;
 
-				// Assistant contract §7 — unlike /assets/lod/audit, the
-				// /validate/blueprints route has no analysis_id continuation
-				// parameter: every batch mints its OWN analysis document
-				// server-side (verified against the running Core — the
-				// request model has no such field). Latch the first batch's
-				// id so the assistant stays grounded exactly as before this
-				// fix in the common case (a project's Blueprints fit in one
-				// batch). On a project big enough to need more than one
-				// batch, findings from later batches still show up in the
-				// list but are NOT individually resolvable via context_ref —
-				// a real, known gap. Closing it properly needs the same
-				// server-side continuation support the LOD auditor has;
-				// that is a Core change, not something to fake client-side.
 				if (S->Aggregate.AnalysisId.IsEmpty())
 					S->Aggregate.AnalysisId = R.AnalysisId;
 
-				// Quality score is computed per-request over just that
-				// batch's Blueprints, not the whole project — same
-				// limitation as AnalysisId above. Latch the first batch's
-				// score instead of overwriting it with an equally-partial
-				// later one.
 				if (!S->Aggregate.bHasCategoryBreakdown && R.QualityScoreOverall >= 0.f)
 				{
 					S->Aggregate.QualityScoreOverall   = R.QualityScoreOverall;
@@ -635,8 +539,7 @@ void FShintCoreClient::ValidateBlueprints(
 	State->BaseUrl     = Config.GetBaseUrl();
 	State->BenchStart  = FPlatformTime::Seconds();
 	State->OnComplete  = OnComplete;
-	// Optimistic: stays true unless a batch reports a hard failure. A
-	// project with zero Blueprints therefore finishes as a clean success.
+
 	State->Aggregate.bSuccess = true;
 
 	UE_LOG(LogShintTools, Verbose,
@@ -645,10 +548,6 @@ void FShintCoreClient::ValidateBlueprints(
 
 	SendBlueprintValidateBatch(State);
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Code Validator — apply fixes
-// ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreClient::ApplyCodeFixes(
 	const TArray<FShintCodeIssue>& AcceptedIssues, FOnShintFixComplete OnComplete)
@@ -663,14 +562,6 @@ void FShintCoreClient::ApplyCodeFixes(
 	{
 		if (Issue.FilePath.IsEmpty()) continue;
 
-		// Classify exactly as the UI does (SShintToolsPanel_State.cpp): the
-		// rule-id prefix is the authoritative signal — BP* rules are produced
-		// only by Blueprint scanning — with the /Game//Engine package path as a
-		// fallback. Routing BP issues by FilePath ALONE used to misroute any BP
-		// finding whose path wasn't a /Game/ package path (BP items also carry
-		// FileContent) into the C++ tree-sitter branch below, where the fixer
-		// can't touch a Blueprint — so the BP fix silently vanished whenever it
-		// was applied alongside a C++ fix (issue #312).
 		if (Issue.RuleId.StartsWith(TEXT("BP"))
 			|| Issue.FilePath.StartsWith(TEXT("/Game/"))
 			|| Issue.FilePath.StartsWith(TEXT("/Engine/")))
@@ -695,17 +586,12 @@ void FShintCoreClient::ApplyCodeFixes(
 		}
 	}
 
-	// UE5 LoadObject needs the full object path "/Game/Pkg/Asset.Asset", but
-	// the server returns only the package path "/Game/Pkg/Asset".
 	auto MakeBPPath = [](const FString& Pkg) -> FString
 	{
 		if (Pkg.IsEmpty() || Pkg.Contains(TEXT("."))) return Pkg;
 		return Pkg + TEXT(".") + FPaths::GetBaseFilename(Pkg);
 	};
 
-	// E-005: ControlRigBlueprint does not use standard UEdGraphPin wiring, so
-	// BPM001/BPM002 end up corrupting the rig graph. Detect via class hierarchy
-	// to avoid a hard dep on the ControlRig module.
 	auto IsControlRigBP = [](UBlueprint* BP) -> bool
 	{
 		if (!BP) return false;
@@ -726,19 +612,12 @@ void FShintCoreClient::ApplyCodeFixes(
 	int32 BPApplied = 0;
 	int32 BPSkipped = 0;
 
-	// Group issues by BP path so we touch each Blueprint exactly once.
-	// The previous flow called CompileBlueprint after every individual
-	// fix on the same BP, which produced cascading "graph in inconsistent
-	// state" warnings in the Message Log and could leave the BP in a
-	// half-compiled state if any intermediate fix faulted.
 	TMap<FString, TArray<const FShintCodeIssue*>> BPByPath;
 	for (const FShintCodeIssue* I : BPIssues)
 	{
 		BPByPath.FindOrAdd(I->FilePath).Add(I);
 	}
 
-	// Extracts the quoted identifier from rule messages of the form
-	// "Variable 'XXX' is …" — used by BPM001 / BPB007.
 	auto ExtractQuotedName = [](const FString& Msg) -> FString
 	{
 		int32 Q1 = INDEX_NONE, Q2 = INDEX_NONE;
@@ -770,9 +649,6 @@ void FShintCoreClient::ApplyCodeFixes(
 			continue;
 		}
 
-		// E-005: ControlRigBlueprint uses a non-standard graph; structural
-		// fixes corrupt the rig wiring. CDO-only fixes (BPP001) are still
-		// safe so we check rule-by-rule rather than blanket-skipping.
 		const bool bIsCR = IsControlRigBP(BP);
 		bool bAnyApplied = false;
 
@@ -820,11 +696,6 @@ void FShintCoreClient::ApplyCodeFixes(
 				}
 				const FName VarFName(*VarName);
 
-				// Confirm the variable still exists on the BP. If the
-				// validator's message was stale (e.g. user already
-				// renamed/removed it), RemoveMemberVariable is a no-op
-				// but RemoveVariableNodes can still break references —
-				// skip cleanly instead.
 				bool bExists = false;
 				for (const FBPVariableDescription& V : BP->NewVariables)
 				{
@@ -886,7 +757,7 @@ void FShintCoreClient::ApplyCodeFixes(
 						if (bAllDisconnected && Node->Pins.Num() > 0)
 						{
 							FBlueprintEditorUtils::RemoveNode(
-								BP, Node, /*bDontRecompile=*/true);
+								BP, Node, true);
 							++RemovedNodes;
 						}
 					}
@@ -940,8 +811,7 @@ void FShintCoreClient::ApplyCodeFixes(
 			}
 			else if (Rule == TEXT("BPB001"))
 			{
-				// W-003: BPB001 (BP naming) is handled by the Asset Naming
-				// pipeline (see SShintToolsPanel::OnBlueprintValidateComplete).
+
 				++BPSkipped;
 			}
 			else
@@ -953,10 +823,6 @@ void FShintCoreClient::ApplyCodeFixes(
 			}
 		}
 
-		// One compile per BP, after every fix has been queued up. The
-		// previous flow recompiled per-issue, which could leave the BP
-		// graph in an inconsistent state mid-batch and surface as
-		// "Failed to compile" warnings in the Message Log.
 		if (bAnyApplied)
 		{
 			FBlueprintEditorUtils::RefreshAllNodes(BP);
@@ -990,9 +856,7 @@ void FShintCoreClient::ApplyCodeFixes(
 			Content.ParseIntoArray(Lines, TEXT("\n"), false);
 
 			TArray<const FShintCodeIssue*> Sorted = Issues;
-			// References (NOT pointers) in the comparator are correct here:
-			// UE5's TArray<T*>::Sort wraps the user predicate in a dereferencing
-			// adapter, so the lambda receives the pointed-to elements.
+
 			Sorted.Sort([](const FShintCodeIssue& A, const FShintCodeIssue& B) { return A.Line > B.Line; });
 
 			int32 Applied = 0, Skipped = 0;
@@ -1066,9 +930,7 @@ void FShintCoreClient::ApplyCodeFixes(
 
 	if (Result.FixedFiles.Num() > 0)
 	{
-		// #313: never spawn a second build over an in-flight one — it would fail
-		// on the shared UBT/linker locks. The fixes are already on disk, so just
-		// report them; the running build (or the next Apply) compiles them.
+
 		if (GPostFixRecompileInFlight)
 		{
 			UE_LOG(LogShintTools, Warning,
@@ -1100,7 +962,7 @@ void FShintCoreClient::ApplyCodeFixes(
 			int32   ExitCode = 0;
 			FPlatformProcess::ExecProcess(
 				*BuildBat, *BuildArgs, &ExitCode, &StdOut, &StdErr,
-				/*WorkingDir=*/nullptr, /*bShouldEndWithParentProcess=*/false);
+				nullptr, false);
 
 			const FString FullOutput = StdOut + StdErr;
 
@@ -1108,8 +970,6 @@ void FShintCoreClient::ApplyCodeFixes(
 			{
 				Result.bHasCompileErrors = true;
 
-				// MSVC: path(line): error/warning CODE: message
-				// Clang: path/file.cpp:line:col: error: ...
 				static const FString ErrorKeyword   = TEXT("): error ");
 				static const FString WarningKeyword = TEXT("): warning ");
 
@@ -1217,10 +1077,6 @@ void FShintCoreClient::ApplyCodeFixes(
 	OnComplete.ExecuteIfBound(Result);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Tree-sitter — single-issue fix preview (no disk write)
-// ─────────────────────────────────────────────────────────────────────────────
-
 void FShintCoreClient::FetchSingleFixPreview(
 	const FShintCodeIssue& Issue, FOnShintFixComplete OnComplete)
 {
@@ -1252,10 +1108,6 @@ void FShintCoreClient::FetchSingleFixPreview(
 			OnComplete.ExecuteIfBound(FShintCoreClient::ParseTreeSitterFixResponse(Raw));
 		}));
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Tree-sitter fix response — parse + write to disk + incremental build
-// ─────────────────────────────────────────────────────────────────────────────
 
 FShintFixResult FShintCoreClient::ParseTreeSitterFixResponse(const FShintRequestResult& Raw)
 {
@@ -1320,21 +1172,12 @@ FShintFixResult FShintCoreClient::ParseTreeSitterFixResponse(const FShintRequest
 	return Result;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Safety Check
-// ─────────────────────────────────────────────────────────────────────────────
-
 namespace
 {
-	// Local helper — not a class member, so the anonymous namespace keeps
-	// it private to this TU. Mirrors what lived directly in the .cpp before
-	// the split.
+
 	FShintSafetyCheckResult ParseSafetyCheckResponse(const FShintRequestResult& Raw)
 	{
-		// bCheckRan stays false unless the server actually returned a body we
-		// could parse — a transport failure or a 404 (the endpoint does not
-		// exist on the Core today) must NOT read as "the dry-run ran and
-		// found nothing wrong". See FShintSafetyCheckResult's comment.
+
 		FShintSafetyCheckResult Res;
 		if (!Raw.bSuccess || Raw.ResponseBody.IsEmpty())
 			return Res;
@@ -1434,7 +1277,7 @@ void FShintCoreClient::HandleTreeSitterFixResponse(
 
 	if (LocalResult.FixedFiles.Num() > 0)
 	{
-		// #313: skip an overlapping build (see ApplyCodeFixes for the rationale).
+
 		if (GPostFixRecompileInFlight)
 		{
 			UE_LOG(LogShintTools, Warning,
@@ -1466,7 +1309,7 @@ void FShintCoreClient::HandleTreeSitterFixResponse(
 			int32   ExitCode = 0;
 			FPlatformProcess::ExecProcess(
 				*BuildBat, *BuildArgs, &ExitCode, &StdOut, &StdErr,
-				/*WorkingDir=*/nullptr, /*bShouldEndWithParentProcess=*/false);
+				nullptr, false);
 
 			const FString FullOutput = StdOut + StdErr;
 
@@ -1560,10 +1403,6 @@ void FShintCoreClient::HandleTreeSitterFixResponse(
 	OnComplete.ExecuteIfBound(LocalResult);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Parse helpers — Validator response shape
-// ─────────────────────────────────────────────────────────────────────────────
-
 FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequestResult& Raw)
 {
 	FShintValidateResult R;
@@ -1598,9 +1437,6 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 			R.bLimitApplied ? 1 : 0, *R.LimitKind, R.LimitValue, R.TotalAvailable);
 	}
 
-	// Assistant contract §7 — top-level, not inside summary. Absent on an
-	// older Core, which leaves the assistant ungrounded rather than pointed
-	// at a stale analysis.
 	J->TryGetStringField(TEXT("analysis_id"), R.AnalysisId);
 
 	{
@@ -1611,12 +1447,6 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 			UE_LOG(LogShintTools, Verbose, TEXT("ParseValidate: quality_score=%.1f"), R.QualityScoreOverall);
 		}
 
-		// Inline per-category breakdown. The /metrics/score/latest endpoint
-		// is unreachable from the plugin since project_id was dropped from
-		// the config schema in 1.7.11, so we lean on the validate response
-		// for the 5-bucket row shown in the Overview panel. Older cores
-		// that don't echo `category_scores` cause the panel to fall back
-		// to showing only the overall score.
 		const TSharedPtr<FJsonObject>* Cat = nullptr;
 		if (J->TryGetObjectField(TEXT("category_scores"), Cat) && Cat)
 		{
@@ -1658,8 +1488,6 @@ FShintValidateResult FShintCoreClient::ParseValidateResponse(const FShintRequest
 			(*O)->TryGetNumberField(TEXT("context_line_start"),  CtxStart);
 			Issue.ContextLineStart = CtxStart;
 
-			// If the server did not echo back the file content (validate endpoint does not
-			// inject it), read it from disk so FetchFixPreview can call /validate/fix.
 			if (Issue.FileContent.IsEmpty()
 				&& !Issue.FilePath.IsEmpty()
 				&& !Issue.FilePath.StartsWith(TEXT("/Game/"))
@@ -1728,10 +1556,6 @@ FShintFixResult FShintCoreClient::ParseFixResponse(const FShintRequestResult& Ra
 	}
 	return R;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreClient::CollectSourceFiles(const FString& Dir, TArray<FString>& Out)
 {

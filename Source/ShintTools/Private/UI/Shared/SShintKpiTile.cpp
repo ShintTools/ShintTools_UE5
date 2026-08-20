@@ -18,7 +18,6 @@ void SShintKpiTile::Construct(const FArguments& InArgs)
 	[
 		SNew(SVerticalBox)
 
-		// Row 1: caption (small, muted) — uppercase look implied by font choice
 		+ SVerticalBox::Slot()
 		.AutoHeight()
 		.Padding(FMargin(0.f, 0.f, 0.f, FShintStyle::Space::S2))
@@ -29,7 +28,6 @@ void SShintKpiTile::Construct(const FArguments& InArgs)
 			.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
 		]
 
-		// Row 2: value + optional trend, aligned baselines
 		+ SVerticalBox::Slot()
 		.AutoHeight()
 		[

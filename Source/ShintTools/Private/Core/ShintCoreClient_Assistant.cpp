@@ -1,13 +1,4 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
-//
-// Assistant endpoints (/assistant/*) — client contract v1.1.
-//
-// Split out of ShintCoreClient.cpp for the same reason the agent and LOD
-// endpoints are: one TU per module surface. Unlike those two this file is
-// NEVER strip-gated — the assistant router ships in the free image as well,
-// and Free is expected to get a working (two-intent, memory-less) assistant.
-// Feature gating happens per-intent, server-side, and reaches the UI through
-// GetAssistantCapabilities — there is no tier table on this side.
 
 #include "ShintCoreClient.h"
 #include "ShintTools.h"
@@ -21,7 +12,6 @@
 
 namespace
 {
-	// ── Shared parsing helpers ───────────────────────────────────────────────
 
 	TSharedPtr<FJsonObject> ParseRoot(const FString& Body)
 	{
@@ -46,11 +36,6 @@ namespace
 		return T;
 	}
 
-	// FastAPI raises HTTPException with either a plain string detail or the
-	// structured object the assistant contract documents for a 403. Both shapes
-	// carry the message we want on screen; the structured one also tells the UI
-	// which intents this tier CAN run, so a gated click can explain itself
-	// instead of just failing.
 	void ApplyErrorDetail(const FString& Body, FShintAssistantResponse& R)
 	{
 		TSharedPtr<FJsonObject> Root = ParseRoot(Body);
@@ -77,10 +62,6 @@ namespace
 		}
 	}
 
-	// Every /assistant/* failure funnels through here so the panel gets one
-	// consistent, user-facing sentence instead of a raw status code. The
-	// contract guarantees the reply is always displayable as-is; this keeps
-	// that promise on the transport failures the server never sees.
 	void ApplyTransportError(const FShintRequestResult& Raw, const TCHAR* Route,
 	                         FShintAssistantResponse& R)
 	{
@@ -116,14 +97,6 @@ namespace
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Request body — one builder for both the blocking and streaming turn.
-//
-// Only non-empty fields are written: the server treats an absent field and an
-// empty one differently for the grounding inheritance (§2 of the contract, an
-// explicit value always overrides what would have been inherited), so sending
-// "" would suppress inheritance rather than allow it.
-// ─────────────────────────────────────────────────────────────────────────────
 static TSharedRef<FJsonObject> BuildAssistantBody(
 	const FShintAssistantRequest& Req, const FString& ApiKey)
 {
@@ -141,26 +114,12 @@ static TSharedRef<FJsonObject> BuildAssistantBody(
 	SetIf(TEXT("context_ref"),      Req.ContextRef);
 	SetIf(TEXT("rule_id"),          Req.RuleId);
 	SetIf(TEXT("asset_path"),       Req.AssetPath);
-	// [LOD-STRIP-BEGIN]
-	SetIf(TEXT("report_id"),        Req.ReportId);
-	// [LOD-STRIP-END]
 	SetIf(TEXT("platform_profile"), Req.PlatformProfile);
 	SetIf(TEXT("studio_id"),        Req.StudioId);
 	SetIf(TEXT("project_id"),       Req.ProjectId);
 	SetIf(TEXT("module_context"),   Req.ModuleContext);
 
 	Body->SetStringField(TEXT("engine"), TEXT("unreal"));
-
-	// [LOD-STRIP-BEGIN]
-	if (Req.SelectedItemIds.Num() > 0)
-	{
-		TArray<TSharedPtr<FJsonValue>> Ids;
-		Ids.Reserve(Req.SelectedItemIds.Num());
-		for (const FString& Id : Req.SelectedItemIds)
-			Ids.Add(MakeShared<FJsonValueString>(Id));
-		Body->SetArrayField(TEXT("selected_item_ids"), Ids);
-	}
-	// [LOD-STRIP-END]
 
 	return Body;
 }
@@ -183,10 +142,6 @@ static FShintAssistantResponse ParseAssistantResponse(const FShintRequestResult&
 		return R;
 	}
 
-	// The contract puts a non-empty top-level `error` on a 200 when the turn
-	// itself failed (as opposed to the request being rejected). Surface it as
-	// the reply rather than inventing our own wording — §1 "honest degradation"
-	// says the server's text is always suitable to display.
 	FString ServerError;
 	Root->TryGetStringField(TEXT("error"), ServerError);
 
@@ -214,10 +169,6 @@ static FShintAssistantResponse ParseAssistantResponse(const FShintRequestResult&
 	return R;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /assistant/message
-// ─────────────────────────────────────────────────────────────────────────────
-
 void FShintCoreClient::SendAssistantMessage(
 	const FShintAssistantRequest& Request, FOnShintAssistantComplete OnComplete)
 {
@@ -237,17 +188,6 @@ void FShintCoreClient::SendAssistantMessage(
 		}));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /assistant/message/stream
-//
-// The SSE event schema is the one /agent/explain/stream already uses, so the
-// existing parser handles it unchanged. What differs is the terminal event:
-// it carries conversation_id / intent / continued / turn_id, which the panel
-// needs to keep threading. SendRequestStream hands the accumulated text back
-// in ResponseBody, so the metadata is recovered by re-reading the final
-// `done` frame — which the transport also surfaces there.
-// ─────────────────────────────────────────────────────────────────────────────
-
 void FShintCoreClient::SendAssistantMessageStream(
 	const FShintAssistantRequest& Request,
 	FOnShintStreamChunk           OnChunk,
@@ -255,10 +195,6 @@ void FShintCoreClient::SendAssistantMessageStream(
 {
 	const FString Url = Config.GetBaseUrl() / TEXT("assistant/message/stream");
 
-	// The turn's own identity is not knowable until the stream ends, but the
-	// panel has to render *something* threaded immediately. Echo back what the
-	// caller already knew so a failure before the first frame still lands in
-	// the right conversation.
 	const FString RequestedConversation = Request.ConversationId;
 	const FString RequestedIntent       = Request.Intent;
 
@@ -279,17 +215,12 @@ void FShintCoreClient::SendAssistantMessageStream(
 
 			if (!Raw.bSuccess)
 			{
-				// 403/404 are raised before the stream opens, so they arrive
-				// here exactly as they would on the blocking endpoint.
+
 				ApplyTransportError(Raw, TEXT("/assistant/message/stream"), R);
 				OnComplete.ExecuteIfBound(R);
 				return;
 			}
 
-			// 2xx — the parser either accumulated text or caught an SSE error
-			// frame. A mid-generation failure still delivers the grounded
-			// deterministic fallback first, so text-with-an-error is a
-			// degraded success, not a failure.
 			if (!Raw.ResponseBody.IsEmpty())
 			{
 				R.bSuccess        = true;
@@ -310,10 +241,6 @@ void FShintCoreClient::SendAssistantMessageStream(
 		}));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /assistant/capabilities
-// ─────────────────────────────────────────────────────────────────────────────
-
 void FShintCoreClient::GetAssistantCapabilities(
 	FOnShintAssistantCapabilities OnComplete)
 {
@@ -327,9 +254,7 @@ void FShintCoreClient::GetAssistantCapabilities(
 
 			if (!Raw.bSuccess)
 			{
-				// A core too old to serve this router is the common case here.
-				// Fall back to the contract's Free floor rather than showing
-				// nothing: the two free intents work on every published core.
+
 				C.bSuccess     = false;
 				C.Tier         = TEXT("free");
 				C.Intents      = { TEXT("explain_finding"), TEXT("general_help") };
@@ -374,10 +299,6 @@ void FShintCoreClient::GetAssistantCapabilities(
 		}));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /assistant/conversations/{id}
-// ─────────────────────────────────────────────────────────────────────────────
-
 void FShintCoreClient::GetAssistantConversation(
 	const FString& ConversationId, FOnShintAssistantThread OnComplete)
 {
@@ -415,10 +336,6 @@ void FShintCoreClient::GetAssistantConversation(
 			OnComplete.ExecuteIfBound(Turns);
 		}));
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Memory
-// ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreClient::GetAssistantMemory(
 	const FString& StudioId, const FString& ProjectId,
@@ -547,10 +464,6 @@ void FShintCoreClient::PurgeAssistantProject(
 		}));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Studio rules
-// ─────────────────────────────────────────────────────────────────────────────
-
 void FShintCoreClient::GetAssistantRules(
 	const FString& StudioId, const FString& ProjectId,
 	FOnShintAssistantRules OnComplete)
@@ -627,10 +540,6 @@ void FShintCoreClient::ConfirmAssistantRule(
 		}));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /assistant/decisions/check
-// ─────────────────────────────────────────────────────────────────────────────
-
 void FShintCoreClient::CheckAssistantDecisions(
 	const FString& StudioId, const FString& ProjectId, const FString& ContextRef,
 	FOnShintAssistantDecisions OnComplete)
@@ -648,9 +557,6 @@ void FShintCoreClient::CheckAssistantDecisions(
 		{
 			FShintAssistantDecisions D;
 
-			// The detector errs toward silence and an empty array is the normal
-			// case, so a failure here is never worth interrupting the user
-			// over — it degrades to "no contradictions" and stays quiet.
 			TSharedPtr<FJsonObject> Root =
 				Raw.bSuccess ? ParseRoot(Raw.ResponseBody) : nullptr;
 			if (!Root.IsValid())

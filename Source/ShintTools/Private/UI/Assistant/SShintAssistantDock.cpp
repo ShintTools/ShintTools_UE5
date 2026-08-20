@@ -25,28 +25,18 @@
 
 namespace ShintAssistantDockPrivate
 {
-	// ── Geometry, in Slate units ─────────────────────────────────────────────
-	// The card is deliberately narrow. A wide assistant invites the user to
-	// treat it as a document view, and it then covers the details panel it is
-	// supposed to be commenting on.
+
 	constexpr float kCardWidth    = 380.f;
 	constexpr float kCardHeight   = 500.f;
 	constexpr float kLauncherSize =  56.f;
-	constexpr float kGap          =  14.f;   // card ↔ launcher
-	constexpr float kMargin       =  24.f;   // launcher ↔ editor corner
+	constexpr float kGap          =  14.f;
+	constexpr float kMargin       =  24.f;
 
-	// ── State ────────────────────────────────────────────────────────────────
-	// Module-scoped rather than owned by a widget: the launcher outlives the
-	// card, so neither can own the other.
 	static TSharedPtr<SWindow>            GCardWindow;
 	static TSharedPtr<SWindow>            GLauncherWindow;
 	static TWeakPtr<SShintAssistantDock>  GDock;
 	static FTSTicker::FDelegateHandle     GTicker;
 
-	// ── Brushes ──────────────────────────────────────────────────────────────
-	// Slate stores the raw pointer, so these have to outlive every widget that
-	// references them — module-lifetime TUniquePtrs, the pattern SShintCard
-	// already uses.
 	static TUniquePtr<FSlateRoundedBoxBrush> GCardBrush;
 	static TUniquePtr<FSlateRoundedBoxBrush> GLauncherBrush;
 	static TUniquePtr<FSlateRoundedBoxBrush> GLauncherHoverBrush;
@@ -59,12 +49,11 @@ namespace ShintAssistantDockPrivate
 				FShintStyle::Colors::BgCard(),
 				FShintStyle::Radius::Modal,
 				FShintStyle::Colors::BorderSubtle(),
-				/*OutlineWidth=*/1.f);
+				1.f);
 		}
 		return GCardBrush.Get();
 	}
 
-	/** A circle is just a rounded box at half its own size. */
 	const FSlateBrush* LauncherBrush(bool bHovered)
 	{
 		TUniquePtr<FSlateRoundedBoxBrush>& Slot =
@@ -80,11 +69,6 @@ namespace ShintAssistantDockPrivate
 		return Slot.Get();
 	}
 
-	/** PerPixel where the platform offers it, which on Windows means "whenever
-	 *  the desktop compositor is running" — i.e. always, in practice. The
-	 *  fallback is not a failure: the window still shows, it just paints its
-	 *  own background into the rounded corners and the launcher reads as a
-	 *  square. Worth degrading rather than refusing to open. */
 	EWindowTransparency ResolveTransparency()
 	{
 		if (const TSharedPtr<GenericApplication> App =
@@ -95,7 +79,6 @@ namespace ShintAssistantDockPrivate
 		return EWindowTransparency::PerWindow;
 	}
 
-	/** The editor window the dock anchors to. */
 	TSharedPtr<SWindow> AnchorWindow()
 	{
 		if (TSharedPtr<SWindow> Root = FGlobalTabmanager::Get()->GetRootWindow())
@@ -103,10 +86,6 @@ namespace ShintAssistantDockPrivate
 		return FSlateApplication::Get().GetActiveTopLevelWindow();
 	}
 
-	/** Park one window's bottom-right corner at an offset from the editor's,
-	 *  in physical pixels. Slate sizes are DPI-independent; window rects are
-	 *  not, so everything crossing that boundary is scaled here and nowhere
-	 *  else. */
 	void PlaceFromBottomRight(const TSharedPtr<SWindow>& Window,
 	                          const TSharedPtr<SWindow>& Anchor,
 	                          const FVector2D& SizeSlate,
@@ -123,9 +102,6 @@ namespace ShintAssistantDockPrivate
 			AnchorPos.X + AnchorSize.X - (RightInset  * DPI) - SizePx.X,
 			AnchorPos.Y + AnchorSize.Y - (BottomInset * DPI) - SizePx.Y);
 
-		// Only reshape on an actual change. ReshapeWindow is a real OS call and
-		// this runs on a ticker; issuing it every tick makes the window visibly
-		// lag the editor while it is being dragged.
 		const FVector2D CurrentPos  = FVector2D(Window->GetPositionInScreen());
 		const FVector2D CurrentSize = FVector2D(Window->GetSizeInScreen());
 		if (CurrentPos.Equals(PosPx, 1.f) && CurrentSize.Equals(SizePx, 1.f))
@@ -134,13 +110,12 @@ namespace ShintAssistantDockPrivate
 		Window->ReshapeWindow(PosPx, SizePx);
 	}
 
-	/** Create one borderless, transparent, always-above-the-editor window. */
 	TSharedPtr<SWindow> MakeDockWindow(const FVector2D& SizeSlate,
 	                                   TSharedRef<SWidget> Content,
 	                                   bool bFocusWhenShown)
 	{
 		const TSharedPtr<SWindow> Anchor = AnchorWindow();
-		if (!Anchor.IsValid()) return nullptr;   // editor frame not up yet
+		if (!Anchor.IsValid()) return nullptr;
 
 		TSharedRef<SWindow> Window = SNew(SWindow)
 			.CreateTitleBar(false)
@@ -159,22 +134,18 @@ namespace ShintAssistantDockPrivate
 			];
 
 		FSlateApplication::Get().AddWindowAsNativeChild(
-			Window, Anchor.ToSharedRef(), /*bShowImmediately=*/true);
+			Window, Anchor.ToSharedRef(), true);
 
 		return Window;
 	}
 
-	/** Keep both windows glued to the editor's bottom-right corner, and follow
-	 *  the editor into and out of minimisation. A window-moved delegate is not
-	 *  enough here: maximising, changing monitor and a DPI change all move the
-	 *  anchor without firing one. */
 	bool TickAnchor(float)
 	{
 		const TSharedPtr<SWindow> Anchor = AnchorWindow();
 		if (!Anchor.IsValid())
 		{
 			SShintAssistantDock::Shutdown();
-			return false;   // unregister the ticker
+			return false;
 		}
 
 		const bool bVisible = !Anchor->IsWindowMinimized();
@@ -196,8 +167,7 @@ namespace ShintAssistantDockPrivate
 			bVisible ? GCardWindow->ShowWindow() : GCardWindow->HideWindow();
 			if (bVisible)
 			{
-				// Right edges aligned with the launcher, sitting one gap above
-				// it — the launcher's own height plus the gap is the offset.
+
 				PlaceFromBottomRight(
 					GCardWindow, Anchor,
 					FVector2D(kCardWidth, kCardHeight),
@@ -210,10 +180,6 @@ namespace ShintAssistantDockPrivate
 }
 
 using namespace ShintAssistantDockPrivate;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Card
-// ─────────────────────────────────────────────────────────────────────────────
 
 void SShintAssistantDock::Construct(const FArguments& InArgs)
 {
@@ -230,8 +196,6 @@ void SShintAssistantDock::Construct(const FArguments& InArgs)
 				BuildHeader()
 			]
 
-			// Hairline under the header. A full SSeparator carries its own
-			// padding and would push the thread away from the rule.
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				SNew(SBox).HeightOverride(1.f)
@@ -244,9 +208,7 @@ void SShintAssistantDock::Construct(const FArguments& InArgs)
 
 			+ SVerticalBox::Slot().FillHeight(1.f)
 			[
-				// Compact chrome: the panel drops its own context strip and
-				// paints no background, so the card's rounded corners stay
-				// rounded instead of being covered by a square fill.
+
 				SAssignNew(Panel, SShintAssistantPanel)
 				.bCompact(true)
 			]
@@ -310,10 +272,6 @@ FReply SShintAssistantDock::OnClearClicked()
 	return FReply::Handled();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Launcher
-// ─────────────────────────────────────────────────────────────────────────────
-
 void SShintAssistantLauncher::Construct(const FArguments& InArgs)
 {
 	ChildSlot
@@ -341,15 +299,13 @@ void SShintAssistantLauncher::Construct(const FArguments& InArgs)
 				SNew(SImage)
 				.Image_Lambda([]()
 				{
-					// The launcher IS the close button while the card is up —
-					// two controls in the same corner doing opposite things
-					// would be the confusing version of this.
+
 					return FShintIconStyle::GetBrush(
 						SShintAssistantDock::IsExpanded()
 							? "ShintTools.Icons.Cross"
 							: "ShintTools.Icons.Bot");
 				})
-				// Dark glyph on the light disc.
+
 				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::Bg()))
 			]
 		]
@@ -359,8 +315,7 @@ void SShintAssistantLauncher::Construct(const FArguments& InArgs)
 FReply SShintAssistantLauncher::OnMouseButtonDown(const FGeometry& MyGeometry,
                                                   const FPointerEvent& MouseEvent)
 {
-	// Claim only the right button — the left one belongs to the SButton child,
-	// which never sees the event if this returns Handled for it.
+
 	if (MouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
 		return FReply::Handled().CaptureMouse(SharedThis(this));
 
@@ -372,10 +327,7 @@ FReply SShintAssistantLauncher::OnMouseButtonUp(const FGeometry& MyGeometry,
 {
 	if (MouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
 	{
-		// Deferred to the next frame on purpose: Shutdown() destroys the window
-		// that owns this very widget, and doing that from inside its own input
-		// handler tears the widget down mid-event. The one-shot ticker is the
-		// cheapest "after this event has finished routing" there is.
+
 		FTSTicker::GetCoreTicker().AddTicker(
 			FTickerDelegate::CreateLambda([](float) -> bool
 			{
@@ -388,10 +340,6 @@ FReply SShintAssistantLauncher::OnMouseButtonUp(const FGeometry& MyGeometry,
 	return FReply::Unhandled();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Lifecycle
-// ─────────────────────────────────────────────────────────────────────────────
-
 bool SShintAssistantDock::IsExpanded()
 {
 	return GCardWindow.IsValid();
@@ -399,17 +347,16 @@ bool SShintAssistantDock::IsExpanded()
 
 void SShintAssistantDock::Open()
 {
-	// The launcher is what makes the dock persistent, so it comes first and
-	// stays for the rest of the session unless explicitly dismissed.
+
 	if (!GLauncherWindow.IsValid())
 	{
 		GLauncherWindow = MakeDockWindow(
 			FVector2D(kLauncherSize, kLauncherSize),
 			SNew(SShintAssistantLauncher),
-			/*bFocusWhenShown=*/false);
+			false);
 
 		if (!GLauncherWindow.IsValid())
-			return;   // no editor frame yet — nothing to anchor to
+			return;
 
 		GTicker = FTSTicker::GetCoreTicker().AddTicker(
 			FTickerDelegate::CreateStatic(&TickAnchor), 0.f);
@@ -421,12 +368,10 @@ void SShintAssistantDock::Open()
 		GCardWindow = MakeDockWindow(
 			FVector2D(kCardWidth, kCardHeight),
 			SAssignNew(Dock, SShintAssistantDock),
-			/*bFocusWhenShown=*/true);
+			true);
 		GDock = Dock;
 	}
 
-	// Place both immediately rather than waiting for the first tick, so the
-	// card does not flash at the origin before sliding into the corner.
 	TickAnchor(0.f);
 
 	if (const TSharedPtr<SShintAssistantDock> Dock = GDock.Pin())

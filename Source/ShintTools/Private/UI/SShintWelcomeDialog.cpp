@@ -26,10 +26,6 @@ namespace
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Static API
-// ─────────────────────────────────────────────────────────────────────────────
-
 bool SShintWelcomeDialog::HasBeenShown()
 {
 	return FPaths::FileExists(WelcomeFilePath());
@@ -38,7 +34,7 @@ bool SShintWelcomeDialog::HasBeenShown()
 void SShintWelcomeDialog::MarkShown()
 {
 	const FString Path = WelcomeFilePath();
-	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), /*Tree=*/ true);
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path),  true);
 	const FString Body = FString::Printf(
 		TEXT("SHOWN %s\n"), *FDateTime::UtcNow().ToIso8601());
 	FFileHelper::SaveStringToFile(Body, *Path);
@@ -46,10 +42,7 @@ void SShintWelcomeDialog::MarkShown()
 
 void SShintWelcomeDialog::MaybeShowForTier(const FString& Tier)
 {
-	// Shown once per machine/project, for every tier including Free. Called on
-	// every panel open, so the HasBeenShown() guard is what keeps it to one
-	// appearance. The body text below adapts to the tier (Free gets its own
-	// copy + an upgrade CTA).
+
 	if (HasBeenShown())
 	{
 		return;
@@ -69,19 +62,10 @@ void SShintWelcomeDialog::MaybeShowForTier(const FString& Tier)
 	Content->ParentWindow = Window;
 	Window->SetContent(Content);
 
-	// Non-modal: a welcome shouldn't block the editor, and AddWindow needs no
-	// active parent (AddModalWindow would, which can be absent right after the
-	// tab spawns).
 	FSlateApplication::Get().AddWindow(Window);
 
-	// Persist immediately so closing via the window 'X' (not just Got it) still
-	// counts as shown and it never reappears.
 	MarkShown();
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Construct
-// ─────────────────────────────────────────────────────────────────────────────
 
 void SShintWelcomeDialog::Construct(const FArguments& InArgs)
 {
@@ -90,7 +74,6 @@ void SShintWelcomeDialog::Construct(const FArguments& InArgs)
 	const bool bStudioPlus =
 		Tier.ToLower() == TEXT("studio") || Tier.ToLower() == TEXT("enterprise");
 
-	// Tier label with a capitalised first letter for the heading.
 	FString TierLabel = Tier;
 	if (!TierLabel.IsEmpty())
 	{
@@ -100,9 +83,6 @@ void SShintWelcomeDialog::Construct(const FArguments& InArgs)
 	const FText Heading = FText::FromString(
 		FString::Printf(TEXT("Welcome — ShintTools %s"), *TierLabel));
 
-	// What the tier unlocks + how to start. Free gets its own copy (the free
-	// edition is rule-capped, has no license "activation", and ends on an
-	// upgrade CTA); paid tiers describe the full unlock. Studio adds Phase-2.
 	const bool bIsFree = Tier.IsEmpty() || Tier.ToLower() == TEXT("free");
 
 	FString BodyStr;
@@ -124,9 +104,6 @@ void SShintWelcomeDialog::Construct(const FArguments& InArgs)
 		BodyStr += TEXT("Thanks for activating ShintTools. Your license unlocks:\n\n");
 		BodyStr += TEXT("  - Deep Code Validator (full edition) — every C++ and Blueprint rule\n");
 		BodyStr += TEXT("    and one-click Auto-Fix.\n");
-		// [AGENT-STRIP-BEGIN]
-		BodyStr += TEXT("  - AI \"Explain\" — plain-language rationale on any finding.\n");
-		// [AGENT-STRIP-END]
 		BodyStr += TEXT("  - Asset Naming Bot (full edition) — project-wide naming audit + rename.\n");
 		if (bStudioPlus)
 		{
@@ -137,15 +114,9 @@ void SShintWelcomeDialog::Construct(const FArguments& InArgs)
 		BodyStr += TEXT("  1. Open Window > ShintTools to dock the panel.\n");
 		BodyStr += TEXT("  2. Pick a module and click Scan.\n");
 		BodyStr += TEXT("  3. Click Apply on a finding to fix it");
-		// [AGENT-STRIP-BEGIN]
-		BodyStr += TEXT(", or Explain for a plain-language rationale");
-		// [AGENT-STRIP-END]
 		BodyStr += TEXT(".\n\n");
 		BodyStr += TEXT("The local Core Engine does the analysis on your machine; nothing leaves\n");
 		BodyStr += TEXT("it");
-		// [DASH-STRIP-BEGIN]
-		BodyStr += TEXT(" unless you click \"Send to Dashboard\"");
-		// [DASH-STRIP-END]
 		BodyStr += TEXT(".");
 	}
 
@@ -183,10 +154,6 @@ void SShintWelcomeDialog::Construct(const FArguments& InArgs)
 		]
 	];
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Handlers
-// ─────────────────────────────────────────────────────────────────────────────
 
 FReply SShintWelcomeDialog::OnDismissClicked()
 {

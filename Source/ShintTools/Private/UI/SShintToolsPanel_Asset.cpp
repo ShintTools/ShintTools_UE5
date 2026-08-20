@@ -1,19 +1,8 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
-//
-// Asset Naming Bot destination — every widget builder under the Assets
-// section (KPI tile row, scan button, results panel, type filter combo,
-// per-asset row factory) plus the lightweight handlers
-// (OnScanAssets / select-all helpers / dashboard push).
-//
-// The heavy rename + redirect-write flow lives in _Fixes.cpp because it
-// pulls in the AssetTools / AssetRegistry / Kismet / FileHelpers stack.
 
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
 #include "ShintCoreClient.h"
-// [DASH-STRIP-BEGIN]
-#include "ShintDashboardSync.h"
-// [DASH-STRIP-END]
 
 #include "ShintStyle.h"
 
@@ -44,20 +33,7 @@
 
 namespace
 {
-	/**
-	 * Editor class icon for an asset-type name, for the glyph shown to the
-	 * left of each row — visual parity with the Unity client, which puts the
-	 * type's sprite before the asset name.
-	 *
-	 * FShintAssetItem::AssetType already carries the UE class name
-	 * ("Texture2D", "StaticMesh", "Blueprint"), which is exactly the key the
-	 * editor style registers its class icons under, so this is a plain style
-	 * lookup: no AssetRegistry query, no UClass resolution, no asset load —
-	 * it stays cheap even when a scan flags tens of thousands of rows.
-	 *
-	 * GetOptionalBrush (not GetBrush) because an unknown type must fall back
-	 * to the generic icon rather than render the missing-resource checkerboard.
-	 */
+
 	const FSlateBrush* ShintAssetTypeIcon(const FString& AssetType)
 	{
 		if (!AssetType.IsEmpty())
@@ -73,13 +49,9 @@ namespace
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section root
-// ─────────────────────────────────────────────────────────────────────────────
 TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 {
-	// LOD/Asset-Optimizer tile — caption over H1 value over coloured
-	// subtitle, mirroring BuildLodKpiRow so the modules read as one system.
+
 	auto Tile = [](const FText& Caption, TSharedPtr<STextBlock>& OutValue,
 		const FText& Sub, const FLinearColor& SubColor) -> TSharedRef<SWidget>
 	{
@@ -122,7 +94,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 					LOCTEXT("ANBSub", "Scan entire project · detect invalid names · apply UE5 rename (refs preserved) · send to dashboard"))
 			]
 
-			// KPI tile row — ASSETS · INVALID · TIME, Asset Optimizer anatomy.
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S2)
 			[
 				SNew(SHorizontalBox)
@@ -144,10 +115,9 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 						TAttribute<TOptional<float>>::FGetter::CreateSP(this, &SShintToolsPanel::GetAssetProgress)))
 			]
 
-			// Scan bar — primary scan fills the row (Asset Optimizer layout).
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S3)
 			[
-				// LOD Auditor button language: plain label, no icon.
+
 				SNew(SButton).ContentPadding(FMargin(14.f, 9.f))
 				.HAlign(HAlign_Center)
 				.OnClicked(this, &SShintToolsPanel::OnScanAssetsClicked)
@@ -162,9 +132,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetNamingSection()
 		];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Type filter dropdown
-// ─────────────────────────────────────────────────────────────────────────────
 TSharedRef<SWidget> SShintToolsPanel::BuildAssetTypeMenuContent()
 {
 	struct FTypeEntry { FText Label; EAssetTypeFilter Value; };
@@ -208,9 +175,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetTypeMenuContent()
 		[ Menu ];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Results panel — free-tier banner + filter row + list + action row.
-// ─────────────────────────────────────────────────────────────────────────────
 TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 {
 	SAssignNew(AssetEmptyState, SBox)
@@ -241,9 +205,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 	TSharedRef<SWidget> ListArea =
 		SNew(SVerticalBox)
 
-		// Free-tier cap banner — visible when summary.limit_applied=true on
-		// /assets/scan (Free tier list is always capped at 500 issues; see
-		// PopulateAssetIssueList for the row-level cap).
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
 		[
 			SNew(SBorder)
@@ -273,10 +234,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 					.Font(F_Small())
 					.ColorAndOpacity(FSlateColor(C_White()))
 					.Text_Lambda([this]() {
-						// Numerator: rows actually loaded into the backing store
-						// after the free-tier issue cap. Denominator: total issues
-						// the server reported pre-cap. They match when the project
-						// produces ≤ cap issues.
+
 						const int32 Shown = AllAssetItems.Num();
 						return FText::FromString(FString::Printf(
 							TEXT("Free tier: %d of %d issues. Upgrade to Indie for full coverage."),
@@ -296,8 +254,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 			]
 		]
 
-		// Filter row — search (fills) + type combo + bulk selection, matching
-		// the Asset Optimizer toolbar.
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
 		[
 			SNew(SHorizontalBox)
@@ -311,8 +267,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 				})
 			]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f) [ AssetTypeCombo ]
-			// Secondary actions — LOD Auditor button language (flat Surface,
-			// plain label, no icon), matching the Asset Optimizer's Export.
+
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 4.f, 0.f)
 			[
 				SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
@@ -323,8 +278,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 					.ColorAndOpacity(FSlateColor(C_Gray()))
 				]
 			]
-			// T6 — Deselect All companion button. Lives next to Select All so
-			// users have symmetric controls for the asset rename batch.
+
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f)
 			[
 				SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
@@ -335,33 +289,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 					.ColorAndOpacity(FSlateColor(C_Gray()))
 				]
 			]
-			// Send to Dashboard — same toolbar position as the Asset Optimizer's
-			// (Select All / Deselect All / Export / Send / Fix). Paid-tier only:
-			// POSTs the scan to shint.tools, part of the paid SaaS offering.
-			// Hidden completely on free so the user never sees an affordance
-			// that always 403s.
-			// [DASH-STRIP-BEGIN]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f)
-			[
-				SAssignNew(SendAssetBtn, SButton)
-				.Visibility_Lambda([]() -> EVisibility {
-					return FShintToolsModule::GetCachedTier()
-							.Equals(TEXT("free"), ESearchCase::IgnoreCase)
-						? EVisibility::Collapsed
-						: EVisibility::Visible;
-				})
-				.IsEnabled(false).ContentPadding(FMargin(12.f, 6.f))
-				.ButtonColorAndOpacity(FSlateColor(C_Surface()))
-				.OnClicked(this, &SShintToolsPanel::OnSendAssetToDashboardClicked)
-				[
-					SAssignNew(SendAssetBtnLabel, STextBlock)
-					.Text(LOCTEXT("SendAsset", "Send to Dashboard")).Font(F_Small())
-					.ColorAndOpacity(FSlateColor(C_Gray()))
-				]
-			]
-			// [DASH-STRIP-END]
-			// Primary action — default button + white label, matching the
-			// Asset Optimizer's bulk Fix.
+
 			+ SHorizontalBox::Slot().AutoWidth()
 			[
 				SAssignNew(ApplyAssetBtn, SButton)
@@ -391,9 +319,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildAssetResultsPanel()
 		+ SVerticalBox::Slot().AutoHeight() [ ListArea ];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Per-asset row
-// ─────────────────────────────────────────────────────────────────────────────
 TSharedRef<ITableRow> SShintToolsPanel::GenerateAssetIssueRow(
 	FShintAssetItemPtr Item, const TSharedRef<STableViewBase>& Owner)
 {
@@ -416,12 +341,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateAssetIssueRow(
 				]
 				+ SHorizontalBox::Slot().FillWidth(1.f)
 				[
-					// Borderless button around the row's info column — click
-					// to reveal the asset in the Content Browser. The checkbox
-					// sits in its own slot above (untouched), so this never eats
-					// the selection click, and there is no per-row Apply/Ignore
-					// button here to collide with (Fix/Send are bulk actions in
-					// the toolbar above).
+
 					SNew(SButton)
 					.ButtonStyle(FAppStyle::Get(), "NoBorder")
 					.ContentPadding(0.f)
@@ -430,7 +350,6 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateAssetIssueRow(
 					[
 						SNew(SVerticalBox)
 
-						// Type + path row
 						+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)
 						[
 							SNew(SHorizontalBox)
@@ -440,8 +359,6 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateAssetIssueRow(
 								.ColorAndOpacity(FSlateColor(C_Yellow()))
 							]
 
-							// Asset-type sprite, immediately left of the type name —
-							// mirrors the Unity client's row anatomy.
 							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 							  .Padding(0.f, 0.f, 6.f, 0.f)
 							[
@@ -489,14 +406,9 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateAssetIssueRow(
 		];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Light handlers
-// ─────────────────────────────────────────────────────────────────────────────
 FReply SShintToolsPanel::OnScanAssetsClicked()
 {
-	// All-clear guard — if the user just applied every fix and the list is
-	// empty, the first click should show the "click again" hint instead of
-	// silently triggering a fresh full scan.
+
 	if (AllAssetItems.IsEmpty() && AssetFixesApplied > 0)
 	{
 		AssetFixesApplied = 0;
@@ -509,7 +421,7 @@ FReply SShintToolsPanel::OnScanAssetsClicked()
 	}
 
 	SetAssetState(EModuleState::Running);
-	// Reset to default empty text before new results arrive.
+
 	if (AssetEmptyText.IsValid())
 		AssetEmptyText->SetText(LOCTEXT("ANBEmpty", "Run a scan to see naming violations."));
 	AllAssetItems.Empty();
@@ -522,8 +434,7 @@ FReply SShintToolsPanel::OnScanAssetsClicked()
 
 FReply SShintToolsPanel::OnSelectAllAssetsClicked()
 {
-	// Toggle the FULL backing store, not just the filtered view, so a partial
-	// type filter doesn't leave items off-screen unchanged.
+
 	for (FShintAssetItemPtr& I : AllAssetItems)   if (I.IsValid()) I->bChecked = true;
 	for (FShintAssetItemPtr& I : AssetIssueItems) if (I.IsValid()) I->bChecked = true;
 	if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
@@ -531,8 +442,6 @@ FReply SShintToolsPanel::OnSelectAllAssetsClicked()
 	return FReply::Handled();
 }
 
-// T6 — Deselect All for the asset naming bot. Operates on AllAssetItems first
-// so any items hidden by the active type filter are also unticked.
 FReply SShintToolsPanel::OnDeselectAllAssetsClicked()
 {
 	for (FShintAssetItemPtr& I : AllAssetItems)   if (I.IsValid()) I->bChecked = false;
@@ -542,38 +451,6 @@ FReply SShintToolsPanel::OnDeselectAllAssetsClicked()
 	return FReply::Handled();
 }
 
-// [DASH-STRIP-BEGIN]
-FReply SShintToolsPanel::OnSendAssetToDashboardClicked()
-{
-	// Send only the ticked rows. The per-row checkbox toggles bChecked on the
-	// AllAssetItems UI entries (not on LastAssetResult.Issues), so build a
-	// filtered result keyed by each item's OriginalIndex. AllAssetItems holds
-	// the full set regardless of the active type filter, so hidden-but-ticked
-	// rows are still included.
-	FShintAssetScanResult Selected = LastAssetResult;
-	Selected.Issues.Reset(AllAssetItems.Num());
-	for (const FShintAssetItemPtr& Item : AllAssetItems)
-	{
-		if (Item.IsValid() && Item->bChecked
-			&& LastAssetResult.Issues.IsValidIndex(Item->OriginalIndex))
-		{
-			Selected.Issues.Add(LastAssetResult.Issues[Item->OriginalIndex]);
-		}
-	}
-
-	DashboardSync->SendAssetNaming(Selected,
-		FOnShintWebDashboardComplete::CreateSP(this, &SShintToolsPanel::OnAssetDashboardComplete));
-	return FReply::Handled();
-}
-// [DASH-STRIP-END]
-
-// Reveal-in-Content-Browser — resolve the row's package path to a live
-// FAssetData via the AssetRegistry and sync the Content Browser to it
-// (select + reveal, not FAssetEditorManager::OpenEditorForAsset — the user
-// asked to navigate, not open the asset editor). The common post-scan case
-// is the asset having just been renamed/deleted by an applied fix or by the
-// user directly, so a miss here is expected, not exceptional: it gets a
-// quiet notification, not ShintShowErrorToast's red CS_Fail chrome.
 FReply SShintToolsPanel::OnAssetRowNavigateClicked(FShintAssetItemPtr Item)
 {
 	if (!Item.IsValid() || Item->AssetPath.IsEmpty())

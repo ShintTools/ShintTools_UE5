@@ -1,25 +1,4 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
-//
-// FShintCoreClient — Config + Transport core.
-//
-// Feature-specific implementations live in sibling .cpp files of the same
-// module; UBT compiles every .cpp in the module, so member functions can
-// be physically scattered without touching headers or callsites:
-//
-//   • Core/ShintCoreClient_Validator.cpp      — /validate/*  + tree-sitter fix
-//   • Core/ShintCoreClient_QualityScore.cpp   — /metrics/score/*
-//   • Core/ShintCoreClient_Asset.cpp          — /assets/*    + dashboard report
-//   • Core/ShintCoreClient_Agent.cpp          — /agent/explain + /agent/plan
-//   • Core/ShintDashboardSync.cpp             — external dashboard POSTs
-//
-// What stays here:
-//   * Construction / destruction
-//   * LoadConfig / SaveConfig (the only persistent state on the client)
-//   * /health and /ping (transport sanity, no feature payload)
-//   * SendRequest + OnHttpRequestComplete (the HTTP backbone every
-//     subsystem dispatches through — keeping it next to the lifetime
-//     management keeps shared-ref semantics obvious)
-//   * MethodToString / SerializeJson (pure helpers reused everywhere)
 
 #include "ShintCoreClient.h"
 #include "ShintTools.h"
@@ -38,25 +17,13 @@
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Server-Sent-Events parser (FArchive sink)
-//
-// UE's HTTP backend writes the streamed response body into an FArchive as the
-// bytes arrive (SetResponseBodyReceiveStream). This sink splits the stream on
-// the SSE "\n\n" event delimiter, parses each `data: {json}` line, and surfaces
-// chunk / error / done events. Chunk events are pushed to the game thread by the
-// caller-supplied sink so Slate can append tokens live.
-//
-// Byte-level split is safe: '\n' (0x0A) never appears inside a multi-byte UTF-8
-// sequence, so cutting on "\n\n" can't bisect a character.
-// ─────────────────────────────────────────────────────────────────────────────
 class FShintSseParser : public FArchive
 {
 public:
 	explicit FShintSseParser(TFunction<void(FString)> InChunkSink)
 		: ChunkSink(MoveTemp(InChunkSink))
 	{
-		SetIsSaving(true);   // bytes flow INTO us, like a write target
+		SetIsSaving(true);
 	}
 
 	virtual void Serialize(void* Data, int64 Length) override
@@ -70,17 +37,11 @@ public:
 
 	virtual FString GetArchiveName() const override { return TEXT("FShintSseParser"); }
 
-	// Read on the game thread once the request completes.
-	FString FullText;      // concatenated chunk events (or authoritative full_text)
-	FString ErrorText;     // first {"error"} event, if any
+	FString FullText;
+	FString ErrorText;
 	float   GenSeconds = 0.f;
 	bool    bDone = false;
 
-	// 5.2 fallback: no SetResponseBodyReceiveStream, so nothing reached us
-	// while the request was in flight and the whole body shows up here at
-	// completion. Same parse, one shot. The chunk sink is dropped first — the
-	// caller has already rendered the final text by the time this runs, and a
-	// late burst of chunks would land in a bubble that is no longer live.
 	void ParseBufferedBody(const TArray<uint8>& Body)
 	{
 		ChunkSink = nullptr;
@@ -90,8 +51,6 @@ public:
 		}
 	}
 
-	// Whole body decoded — used to surface a non-2xx error body (e.g. a 403
-	// tier-gate JSON) that never arrives as an SSE event.
 	FString RawBody() const
 	{
 		if (Raw.Num() == 0) return FString();
@@ -109,13 +68,12 @@ private:
 			{
 				HandleEvent(Pending.GetData() + Start, i - Start);
 				Start = i + 2;
-				++i; // skip the paired newline
+				++i;
 			}
 		}
 		if (Start > 0)
 		{
-			// Keep only the unparsed tail (version-agnostic — avoids RemoveAt's
-			// shrink-flag API churn across engine versions).
+
 			Pending = TArray<uint8>(Pending.GetData() + Start, Pending.Num() - Start);
 		}
 	}
@@ -128,7 +86,7 @@ private:
 		Line.TrimStartAndEndInline();
 		if (!Line.StartsWith(TEXT("data:"))) return;
 
-		FString Json = Line.RightChop(5); // strip "data:"
+		FString Json = Line.RightChop(5);
 		Json.TrimStartAndEndInline();
 		if (Json.IsEmpty()) return;
 
@@ -156,7 +114,7 @@ private:
 			FString ServerFull;
 			if (Obj->TryGetStringField(TEXT("full_text"), ServerFull) && !ServerFull.IsEmpty())
 			{
-				FullText = ServerFull; // authoritative concatenation from the server
+				FullText = ServerFull;
 			}
 			double G = 0.0;
 			if (Obj->TryGetNumberField(TEXT("generation_seconds"), G))
@@ -166,21 +124,13 @@ private:
 		}
 	}
 
-	TArray<uint8> Raw;      // every byte received (for the raw error body)
-	TArray<uint8> Pending;  // unparsed tail
+	TArray<uint8> Raw;
+	TArray<uint8> Pending;
 	TFunction<void(FString)> ChunkSink;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Construction
-// ─────────────────────────────────────────────────────────────────────────────
-
 FShintCoreClient::FShintCoreClient()  { LoadConfig(); }
 FShintCoreClient::~FShintCoreClient() {}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Config
-// ─────────────────────────────────────────────────────────────────────────────
 
 bool FShintCoreClient::LoadConfig()
 {
@@ -204,20 +154,13 @@ bool FShintCoreClient::LoadConfig()
 	FString S;
 	if (Json->TryGetStringField(TEXT("core_host"),    S) && !S.IsEmpty()) Config.CoreHost = S;
 	if (Json->TryGetStringField(TEXT("project_name"), S)) Config.ProjectName = S;
-	// project_id is no longer part of the config schema. The dashboard's
-	// per-project API key identifies the project implicitly. Old configs
-	// that still carry
-	// the field are tolerated — we just don't read it back.
+
 	if (Json->TryGetStringField(TEXT("api_key"),       S)) Config.ApiKeyDashboard = S;
 	if (Json->TryGetStringField(TEXT("api_key_mongo"), S)) Config.ApiKeyMongo    = S;
 	if (Json->TryGetStringField(TEXT("session_token"), S)) Config.SessionToken   = S;
 	if (Json->TryGetStringField(TEXT("dashboard_url"), S)) Config.DashboardUrl   = S;
 	if (Json->TryGetStringField(TEXT("export_path"),   S)) Config.ExportPath     = S;
 
-	// excluded_paths: array of substrings the scanner skips. Tolerates two
-	// legacy shapes — JSON array of strings (current) and a single newline-
-	// separated string (old hand-edited configs) — so we don't break users
-	// who already had the field.
 	Config.ExcludedPaths.Reset();
 	const TArray<TSharedPtr<FJsonValue>>* ExcArr = nullptr;
 	if (Json->TryGetArrayField(TEXT("excluded_paths"), ExcArr) && ExcArr)
@@ -234,14 +177,10 @@ bool FShintCoreClient::LoadConfig()
 		FString ExcRaw;
 		if (Json->TryGetStringField(TEXT("excluded_paths"), ExcRaw))
 		{
-			ExcRaw.ParseIntoArray(Config.ExcludedPaths, TEXT("\n"), /*CullEmpty=*/true);
+			ExcRaw.ParseIntoArray(Config.ExcludedPaths, TEXT("\n"), true);
 		}
 	}
 
-	// Migrate a legacy dashboard host — an older build wrote
-	// it as the default and the server returns an HTML page there, which
-	// the plugin used to surface as the cryptic "Only HTML requests are
-	// supported here" error. The new default is the live production host.
 	if (Config.DashboardUrl.IsEmpty()
 		|| Config.DashboardUrl.Contains(TEXT("app.shinttools.io")))
 	{
@@ -250,19 +189,11 @@ bool FShintCoreClient::LoadConfig()
 			TEXT("ShintCoreClient: migrated dashboard_url to shint.tools"));
 	}
 
-	// Normalise to the site origin. The public API routes
-	// live at the domain root, but users routinely paste the human-facing
-	// dashboard URL (…/dashboard) into the Settings field. Left as-is the
-	// endpoint join produced POSTs to …/dashboard which the
-	// the server answers with an HTML page ("Only HTML requests are
-	// supported here"). Trim a trailing slash and a trailing
-	// "/dashboard" segment so SendCodeValidator / SendAssetNaming always
-	// target the root.
 	Config.DashboardUrl.TrimStartAndEndInline();
 	Config.DashboardUrl.RemoveFromEnd(TEXT("/"));
 	if (Config.DashboardUrl.EndsWith(TEXT("/dashboard")))
 	{
-		Config.DashboardUrl.LeftChopInline(10); // len("/dashboard")
+		Config.DashboardUrl.LeftChopInline(10);
 		UE_LOG(LogShintTools, Verbose,
 			TEXT("ShintCoreClient: stripped /dashboard suffix from dashboard_url"));
 	}
@@ -276,7 +207,6 @@ bool FShintCoreClient::SaveConfig() const
 {
 	const FString CfgPath = FPaths::Combine(FPaths::ProjectDir(), TEXT("shinttools.config.json"));
 
-	// Read the existing JSON so we preserve unknown fields (modules, naming, etc.)
 	TSharedPtr<FJsonObject> Json;
 	FString Raw;
 	if (FFileHelper::LoadFileToString(Raw, *CfgPath))
@@ -286,8 +216,6 @@ bool FShintCoreClient::SaveConfig() const
 	}
 	if (!Json.IsValid()) Json = MakeShared<FJsonObject>();
 
-	// Overwrite config fields. project_id is intentionally NOT written —
-	// no longer part of the schema; see LoadConfig for the rationale.
 	Json->SetStringField(TEXT("core_host"),       Config.CoreHost);
 	Json->SetNumberField(TEXT("core_port"),       Config.CorePort);
 	Json->SetBoolField(TEXT("auto_start_core"),   Config.bAutoStartCore);
@@ -308,10 +236,6 @@ bool FShintCoreClient::SaveConfig() const
 		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Connectivity
-// ─────────────────────────────────────────────────────────────────────────────
-
 void FShintCoreClient::CheckHealth(FOnShintRequestComplete OnComplete)
 {
 	SendRequest(Config.GetBaseUrl() + TEXT("/health"), EShintHttpMethod::GET, TEXT(""), OnComplete);
@@ -321,10 +245,6 @@ void FShintCoreClient::Ping(FOnShintRequestComplete OnComplete)
 {
 	SendRequest(Config.GetBaseUrl() + TEXT("/ping"), EShintHttpMethod::GET, TEXT(""), OnComplete);
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Generic HTTP request
-// ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreClient::SendRequest(
 	const FString& FullUrl, EShintHttpMethod Method,
@@ -351,29 +271,12 @@ void FShintCoreClient::SendRequest(
 		Req->SetContentAsString(Body);
 	}
 
-	// BindSP keeps FShintCoreClient alive via shared ref — safe if destroyed before response
 	Req->OnProcessRequestComplete().BindSP(
 		AsShared(), &FShintCoreClient::OnHttpRequestComplete, OnComplete);
-	// 90s covers full-project scans.
+
 	float TimeoutSecs = 90.0f;
-	// [AGENT-STRIP-BEGIN]
-	// /agent/explain runs the local LLM and takes 30-45s typical / 60-90s on
-	// slow CPUs — give it 180s so a single slow generation doesn't cut the
-	// spinner off mid-stream.
-	if (FullUrl.Contains(TEXT("/agent/explain")))
-	{
-		TimeoutSecs = 180.0f;
-	}
-	// [AGENT-STRIP-END]
 	Req->SetTimeout(TimeoutSecs);
-	// Match the ACTIVITY timeout to the total. SetTimeout bounds the whole
-	// request, but UE's HTTP backend separately aborts when no bytes flow for
-	// ~30s (default). The synchronous /agent/explain holds the connection
-	// silent for the full 30-45s CPU generation, so the 30s default aborted it
-	// mid-generation and the plugin reported "Could not reach the LLM" even
-	// though the core returned a valid 200. (The streaming endpoint below avoids
-	// the gap entirely; this keeps the non-streaming path safe too.) The setter
-	// only exists from 5.4 up — see ShintCompat::SetActivityTimeout.
+
 	ShintCompat::SetActivityTimeout(Req, TimeoutSecs);
 
 	if (!Req->ProcessRequest())
@@ -385,9 +288,6 @@ void FShintCoreClient::SendRequest(
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Streaming request (Server-Sent Events)
-// ─────────────────────────────────────────────────────────────────────────────
 void FShintCoreClient::SendRequestStream(
 	const FString& FullUrl, EShintHttpMethod Method, const FString& Body,
 	FOnShintStreamChunk OnChunk, FOnShintRequestComplete OnComplete,
@@ -414,8 +314,6 @@ void FShintCoreClient::SendRequestStream(
 		Req->SetContentAsString(Body);
 	}
 
-	// The parser runs on the HTTP worker thread; marshal every chunk to the
-	// game thread before handing it to OnChunk so Slate updates are safe.
 	TSharedRef<FShintSseParser> Parser = MakeShared<FShintSseParser>(
 		[OnChunk](FString Chunk)
 		{
@@ -426,18 +324,11 @@ void FShintCoreClient::SendRequestStream(
 				});
 		});
 
-	// Live token drip. Returns false on 5.2, which has no receive-stream hook:
-	// the body then buffers whole and OnHttpStreamComplete feeds it to the same
-	// parser at the end, so the answer lands in one piece instead of token by
-	// token. Every event the panel needs still arrives.
 	ShintCompat::SetResponseBodyReceiveStream(Req, Parser);
 
 	Req->OnProcessRequestComplete().BindSP(
 		AsShared(), &FShintCoreClient::OnHttpStreamComplete, Parser, OnComplete);
 
-	// Long total + matching activity timeout. Streaming keeps the connection
-	// active token-by-token, but the initial prompt-eval before the first token
-	// can still approach the old 30s default on a cold model.
 	Req->SetTimeout(180.0f);
 	ShintCompat::SetActivityTimeout(Req, 180.0f);
 
@@ -468,9 +359,7 @@ void FShintCoreClient::OnHttpStreamComplete(
 	}
 
 #if !SHINT_HTTP_HAS_RECEIVE_STREAM
-	// Nothing was piped in as it arrived on this engine — parse it now, before
-	// the status checks, so a non-2xx error body is still recoverable via
-	// RawBody() exactly as it is on the streaming path.
+
 	Parser->ParseBufferedBody(Response->GetContent());
 #endif
 
@@ -478,8 +367,7 @@ void FShintCoreClient::OnHttpStreamComplete(
 	const bool bHttpOk = (Result.StatusCode >= 200 && Result.StatusCode < 300);
 	if (!bHttpOk)
 	{
-		// The error body (e.g. a 403 tier-gate JSON) landed in the stream
-		// unparsed — surface it raw so the caller can classify the status.
+
 		Result.bSuccess     = false;
 		Result.ResponseBody = Parser->RawBody();
 		Result.ErrorMessage = FString::Printf(TEXT("HTTP %d"), Result.StatusCode);
@@ -526,10 +414,6 @@ void FShintCoreClient::OnHttpRequestComplete(
 			Result.StatusCode, *Result.ResponseBody);
 	OnComplete.ExecuteIfBound(Result);
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Pure helpers — used by every subsystem
-// ─────────────────────────────────────────────────────────────────────────────
 
 FString FShintCoreClient::MethodToString(EShintHttpMethod Method)
 {

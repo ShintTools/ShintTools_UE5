@@ -1,15 +1,4 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
-//
-// Code Validator destination — every widget builder under the Code section
-// (the KPI tile row, scan buttons, filter combos, results panel, per-issue
-// row factory) plus the lightweight button handlers that drive the scan
-// flow (OnCheckConnection / OnScanProject / OnScanBlueprints / select-all
-// helpers / dashboard push / IgnoreSingleFix).
-//
-// Heavier flows live elsewhere:
-//   - OnApplySelectedCodeFixesClicked / OnApplySingleFix → _Fixes.cpp
-//   - FetchFixPreview                                    → _Fixes.cpp
-//   - OnExplainIssueClicked                              → _Explain.cpp
 
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
@@ -17,11 +6,8 @@
 #include "ShintCoreClient.h"
 #include "Core/ShintAssistantContext.h"
 
-#include "Framework/Docking/TabManager.h"   // TryInvokeTab — Explain -> Assistant
+#include "Framework/Docking/TabManager.h"
 #include "Misc/Paths.h"
-// [DASH-STRIP-BEGIN]
-#include "ShintDashboardSync.h"
-// [DASH-STRIP-END]
 
 #include "ShintStyle.h"
 #include "SShintSeverityBadge.h"
@@ -43,20 +29,13 @@
 
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section root
-// ─────────────────────────────────────────────────────────────────────────────
 TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 {
-	// LOD/Asset-Optimizer design language — caption (muted) over a big H1
-	// value over a coloured subtitle, on a Surface card. Mirrors the Tile
-	// lambda in BuildLodKpiRow so all three modules read as one system.
+
 	auto Tile = [](const FText& Caption, TSharedPtr<STextBlock>& OutValue,
 		const FText& Sub, const FLinearColor& SubColor) -> TSharedRef<SWidget>
 	{
-		// Rounded card treatment (BgCard fill + subtle border) — the same brush
-		// SShintCard paints, so the KPI tiles read as one system with the
-		// Overview hero cards instead of flat squared surfaces.
+
 		return SNew(SBorder)
 			.BorderImage(ST4::Outline(FShintStyle::Colors::BgCard(),
 				FShintStyle::Colors::BorderSubtle(), FShintStyle::Radius::Card))
@@ -96,8 +75,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 					LOCTEXT("CVSub","Analyse C++ source and Blueprints · review issues · apply fixes · send to dashboard"))
 			]
 
-			// KPI tile row — FILES · ERRORS · WARNINGS · QUALITY, same tile
-			// anatomy as the Asset Optimizer.
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S2)
 			[
 				SNew(SHorizontalBox)
@@ -114,9 +91,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 				[ Tile(LOCTEXT("CVQ","QUALITY"), CodeScore_Label,
 					LOCTEXT("CVQSub","Project score"), FShintStyle::Colors::SevLow()) ]
 			]
-			// The overall QUALITY tile above is the single quality readout; the
-			// per-category breakdown strip (perf / sec / bp / maint / naming) was
-			// removed as redundant.
+
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 14.f)
 			[
 				BuildModuleProgressBar(CodeProgressBar,
@@ -124,14 +99,12 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 						TAttribute<TOptional<float>>::FGetter::CreateSP(this, &SShintToolsPanel::GetCodeProgress)))
 			]
 
-			// Scan bar — Asset Optimizer layout: primary scan fills the row,
-			// secondary scan sits at the right.
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S3)
 			[
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0.f, 0.f, 8.f, 0.f)
 				[
-					// LOD Auditor button language: plain label, no icon.
+
 					SNew(SButton).ContentPadding(FMargin(14.f, 9.f))
 					.HAlign(HAlign_Center)
 					.OnClicked(this, &SShintToolsPanel::OnScanProjectClicked)
@@ -152,19 +125,10 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeValidatorSection()
 				]
 			]
 
-			// Results panel
 			+ SVerticalBox::Slot().AutoHeight()
 			[ BuildCodeResultsPanel() ]
 		];
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Filter dropdowns
-//
-// One factory per dropdown menu — `OnGetMenuContent` on the SComboButton
-// invokes them to build the menu lazily so we don't allocate widgets we
-// never show.
-// ─────────────────────────────────────────────────────────────────────────────
 
 TSharedRef<SWidget> SShintToolsPanel::BuildCategoryMenuContent()
 {
@@ -244,18 +208,9 @@ TSharedRef<SWidget> SShintToolsPanel::BuildSeverityMenuContent()
 		[ Menu ];
 }
 
-// BuildCodeTypeMenuContent was retired with the LOD-design toolbar: the
-// C++/Blueprints choice is now the tab strip in BuildCodeFilterBar, matching
-// the Asset Optimizer's Textures/Meshes/Materials tabs.
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Filter bar — tabs + search + dropdowns + Fixable toggle + select/deselect.
-// ─────────────────────────────────────────────────────────────────────────────
 TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 {
-	// LOD-design tab strip — replaces the old "All Types" dropdown. Active
-	// tab = Surface background + white text, exactly like the Asset
-	// Optimizer's Textures/Meshes/Materials tabs.
+
 	auto TabBtn = [this](const FText& Label, ECodeTypeFilter Tab) -> TSharedRef<SWidget>
 	{
 		return SNew(SButton)
@@ -291,9 +246,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 				.Font(FShintStyle::Fonts::Caption())
 				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
 			]
-			// SComboButton already renders Unreal's native dropdown arrow icon;
-			// the manual unicode ▾ glyph rendered as a missing-glyph box on
-			// Bahnschrift's variable axis. Removed in favor of the engine icon.
+
 		];
 
 	TSharedRef<SWidget> SeverityCombo =
@@ -313,8 +266,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			]
 		];
 
-	// Toggle filter — LOD Auditor button language; the label brightens while
-	// the filter is active so the toggle state stays readable without an icon.
 	TSharedRef<SWidget> FixableBtn =
 		SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
 		.ButtonColorAndOpacity(FSlateColor(C_Surface()))
@@ -334,7 +285,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 		];
 
 	return SNew(SVerticalBox)
-		// Tabs — All / C++ / Blueprints (Asset Optimizer design).
+
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
 		[
 			SNew(SHorizontalBox)
@@ -345,7 +296,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			+ SHorizontalBox::Slot().AutoWidth()
 			[ TabBtn(LOCTEXT("CodeTabBP",  "Blueprints"), ECodeTypeFilter::BlueprintsOnly) ]
 		]
-		// Filter row — search (fills) + combos + bulk selection.
+
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
 		[
 			SNew(SHorizontalBox)
@@ -361,8 +312,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f) [ CategoryCombo ]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 6.f, 0.f) [ SeverityCombo ]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f) [ FixableBtn    ]
-			// Secondary actions — LOD Auditor button language (flat Surface,
-			// plain label, no icon), matching the Asset Optimizer's Export.
+
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 4.f, 0.f)
 			[
 				SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
@@ -383,36 +333,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 					.ColorAndOpacity(FSlateColor(C_Gray()))
 				]
 			]
-			// Send to Dashboard — same toolbar position as the Asset Optimizer's
-			// (Select All / Deselect All / Export / Send / Fix). Paid-tier only:
-			// POSTs the scan to shint.tools, part of the paid SaaS offering.
-			// Hidden completely on free so the user never sees an affordance that
-			// always 403s. The cached tier comes from the launcher's startup
-			// /license/status probe; it defaults to "free" until that resolves,
-			// which is intentional — a paid user simply sees the button appear
-			// after the probe lands.
-			// [DASH-STRIP-BEGIN]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 10.f, 0.f)
-			[
-				SAssignNew(SendCodeBtn, SButton)
-				.Visibility_Lambda([]() -> EVisibility {
-					return FShintToolsModule::GetCachedTier()
-							.Equals(TEXT("free"), ESearchCase::IgnoreCase)
-						? EVisibility::Collapsed
-						: EVisibility::Visible;
-				})
-				.IsEnabled(false).ContentPadding(FMargin(12.f, 6.f))
-				.ButtonColorAndOpacity(FSlateColor(C_Surface()))
-				.OnClicked(this, &SShintToolsPanel::OnSendCodeToDashboardClicked)
-				[
-					SAssignNew(SendCodeBtnLabel, STextBlock)
-					.Text(LOCTEXT("SendCode", "Send to Dashboard")).Font(F_Small())
-					.ColorAndOpacity(FSlateColor(C_Gray()))
-				]
-			]
-			// [DASH-STRIP-END]
-			// Primary action — default button + white label, matching the
-			// Asset Optimizer's bulk Fix.
+
 			+ SHorizontalBox::Slot().AutoWidth()
 			[
 				SAssignNew(ApplyCodeBtn, SButton)
@@ -427,9 +348,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeFilterBar()
 		];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Results panel — free-tier banner + filter bar + list + action row.
-// ─────────────────────────────────────────────────────────────────────────────
 TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 {
 	SAssignNew(CodeEmptyState, SBox)
@@ -443,15 +361,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 	TSharedRef<SWidget> ListArea =
 		SNew(SVerticalBox)
 
-		// Free-tier cap banner — visible when the server reports the scan hit
-		// a tier limit (e.g. 40 of 96 rules). Server is the source of truth via
-		// summary.limit_applied.
-		//
-		// Cross-check with the launcher's startup probe (GetCachedTier): the
-		// server occasionally resolves a freshly-activated key to "free" before
-		// the local Mongo licenses row is seeded, which previously surfaced the
-		// banner to a paid customer on every rescan until they restarted the
-		// launcher. Trust the cached tier when it disagrees.
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
 		[
 			SNew(SBorder)
@@ -520,9 +429,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildCodeResultsPanel()
 		+ SVerticalBox::Slot().AutoHeight() [ ListArea ];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Issue row factory
-// ─────────────────────────────────────────────────────────────────────────────
 TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 	FShintIssueItemPtr Item, const TSharedRef<STableViewBase>& Owner)
 {
@@ -531,7 +437,6 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 	const FLinearColor RowBG     = (Item->OriginalIndex % 2 == 0) ? C_RowEven() : C_RowOdd();
 	const FString      AutoBadge = Item->bIsAutoFixable ? TEXT("  AUTO") : TEXT("");
 
-	// Location string: for blueprints show "ClassName > GraphName", for C++ show "File:Line".
 	const bool bIsBlueprintIssue = !Item->Graph.IsEmpty();
 	FString LocationStr;
 	if (bIsBlueprintIssue)
@@ -553,9 +458,6 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 	const bool bIsFixable  = Item->bIsAutoFixable
 		&& (!Item->FixSuggestion.IsEmpty() || !Item->FileContent.IsEmpty() || Item->bIsBlueprint);
 
-	// Context diff panels. Priority: FixPreviewCode (fetched on-demand from
-	// /validate/fix) > ContextAfter (pre-computed by the server fixer during
-	// the scan — already actual fixed code, safe to display for all issue types).
 	const FString& AfterText = !Item->FixPreviewCode.IsEmpty()
 		? Item->FixPreviewCode
 		: Item->ContextAfter;
@@ -594,7 +496,6 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 			];
 	}
 
-	// Compact diff fallback (blueprints / issues without context window).
 	TSharedRef<SWidget> CompactDiff = SNew(SBorder)
 		.Visibility((Item->ContextBefore.IsEmpty() && !Item->Snippet.IsEmpty())
 			? EVisibility::Visible : EVisibility::Collapsed)
@@ -621,7 +522,6 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 			[
 				SNew(SHorizontalBox)
 
-				// Checkbox
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(0.f, 2.f, 10.f, 0.f)
 				[
 					SNew(SCheckBox)
@@ -632,13 +532,10 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 					})
 				]
 
-				// Content column
 				+ SHorizontalBox::Slot().FillWidth(1.f)
 				[
 					SNew(SVerticalBox)
 
-					// Row 1: severity badge + rule name + location + preview + AUTO badge.
-					// SevColor stays in scope so older call-sites still compile until they migrate.
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)
 					[
 						SNew(SHorizontalBox)
@@ -648,9 +545,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 						]
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 10.f, 0.f)
 						[
-							// LLM pivot — show the human label (RuleName from
-							// server-side enrich_issue) instead of the rule_id;
-							// fall back to the id when an older core didn't enrich.
+
 							SNew(STextBlock)
 							.Text(FText::FromString(
 								Item->RuleName.IsEmpty() ? Item->RuleId : Item->RuleName))
@@ -662,22 +557,17 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 							SNew(STextBlock).Text(FText::FromString(LocationStr))
 							.Font(F_Mono()).ColorAndOpacity(FSlateColor(C_Gray()))
 						]
-						// Preview toggle — only for issues with context
+
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6.f, 0.f, 6.f, 0.f)
 						[
 							SNew(SBox).Visibility(bHasContext ? EVisibility::Visible : EVisibility::Collapsed)
 							[
-								// Same button language as the toolbar's Select All /
-								// Deselect All: flat Surface, 12x6 padding, F_Small,
-								// grey label, no glyph. These two were the last
-								// holdouts on the older, tighter style with ASCII
-								// markers baked into the text.
+
 								SNew(SButton).ContentPadding(FMargin(12.f, 6.f))
 								.ButtonColorAndOpacity(FSlateColor(C_Surface()))
 								.OnClicked_Lambda([this, Item]() -> FReply {
 									Item->bPreviewExpanded = !Item->bPreviewExpanded;
-									// Fetch on-demand only when ContextAfter is also empty
-									// (server could not run the fixer at scan time).
+
 									if (Item->bPreviewExpanded
 										&& !Item->FileContent.IsEmpty()
 										&& Item->ContextAfter.IsEmpty()
@@ -692,10 +582,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 								})
 								[
 									SNew(STextBlock)
-									// The open/closed state reads from the label
-									// itself now. An ASCII triangle was carrying
-									// that job, and it is the single most dated
-									// thing in the row.
+
 									.Text_Lambda([Item]() {
 										return Item->bPreviewExpanded
 											? LOCTEXT("HidePreviewBtn", "Hide Preview")
@@ -705,10 +592,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 								]
 							]
 						]
-						// Per-issue "Explain" — hands the question to the AI
-						// Assistant tab. Shown on every tier: the old modal drove
-						// /agent/explain (Indie and up) and so was hidden on Free,
-						// but the assistant answers explain_finding on every plan.
+
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 6.f, 0.f)
 						[
 							SNew(SButton)
@@ -724,9 +608,7 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 								SNew(STextBlock)
 								.Text(LOCTEXT("ExplainBtn", "Explain"))
 								.Font(F_Small())
-								// C_Gray, like every other secondary action. The
-								// one-off blue literal here predated the shared
-								// palette and was the only place using it.
+
 								.ColorAndOpacity(FSlateColor(C_Gray()))
 							]
 						]
@@ -737,14 +619,12 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 						]
 					]
 
-					// Row 2: message
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 5.f)
 					[
 						SNew(STextBlock).Text(FText::FromString(Item->Message)).Font(F_Small())
 						.ColorAndOpacity(FSlateColor(C_White())).AutoWrapText(true)
 					]
 
-					// Row 3: compact diff (no context) OR expanded context diff
 					+ SVerticalBox::Slot().AutoHeight() [ CompactDiff ]
 
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, bHasContext ? 6.f : 0.f, 0.f, 0.f)
@@ -757,16 +637,11 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 						[ ContextDiff ]
 					]
 
-					// Row 4: Apply / Ignore — always visible for auto-fixable issues
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
 					[
 						SNew(SBox).Visibility(bIsFixable ? EVisibility::Visible : EVisibility::Collapsed)
 						[
-							// Same button language as Select All / Preview / Explain:
-							// flat Surface fill, plain label, no icon. Apply keeps a
-							// green LABEL because it is the one action in the row that
-							// writes to the file — the colour is the only thing telling
-							// the two apart now that neither carries a glyph.
+
 							SNew(SHorizontalBox)
 							+ SHorizontalBox::Slot().AutoWidth().Padding(0.f, 0.f, 8.f, 0.f)
 							[
@@ -795,14 +670,6 @@ TSharedRef<ITableRow> SShintToolsPanel::GenerateCodeIssueRow(
 		];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Light handlers
-//
-// All do roughly one of: bump scan state, send an HTTP request via the
-// shared CoreClient / DashboardSync, or mutate the local backing store.
-// The heavy fix flows are in _Fixes.cpp.
-// ─────────────────────────────────────────────────────────────────────────────
-
 FReply SShintToolsPanel::OnCheckConnectionClicked()
 {
 	SetStatus(ECoreStatus::Checking);
@@ -813,33 +680,18 @@ FReply SShintToolsPanel::OnCheckConnectionClicked()
 
 FReply SShintToolsPanel::OnScanProjectClicked()
 {
-	// Bug #35: the previous "all-clear guard" early-returned without hitting
-	// the server, so right after applying every auto-fix the user's first
-	// click on Scan only got the "click Scan again" hint — they read it as
-	// the server not responding. We now always do the real scan; if the
-	// server confirms 0 issues, PopulateCodeIssueList renders the empty
-	// state with the all-resolved message naturally.
+
 	AppliedFixFingerprints.Empty();
 
 	++ScanGeneration;
-	bBlueprintScanActive = false;   // full source scan — no BP-only filter
+	bBlueprintScanActive = false;
 
-	// T1 — Auto-switch the visible filter to "All" so the user sees both
-	// kinds at once (the previous flow forced CppOnly/BlueprintsOnly on every
-	// click, which silently hid the other half of the merged list). The tab
-	// strip reads CurrentCodeTypeFilter reactively — no label to update.
 	CurrentCodeTypeFilter = ECodeTypeFilter::All;
 
 	SetCodeState(EModuleState::Running);
 	if (CodeEmptyText.IsValid())
 		CodeEmptyText->SetText(LOCTEXT("CVEmpty", "Run a scan to see results here."));
 
-	// T1 — Do NOT wipe LastCodeResult or AllCodeItems here. HandleValidateResult
-	// merges the new C++ findings against the existing Blueprint findings (and
-	// vice-versa) by RuleId prefix; clearing them on click defeats the merge
-	// and the BP results disappear the moment a C++ scan starts. We only reset
-	// the visible (filtered) list so the panel doesn't paint stale rows during
-	// the scan.
 	CodeIssueItems.Reset();
 	if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
 
@@ -853,8 +705,6 @@ FReply SShintToolsPanel::OnScanBlueprintsClicked()
 	++ScanGeneration;
 	bBlueprintScanActive = true;
 
-	// T1 — see OnScanProjectClicked. Auto-switch to "All" instead of forcing
-	// BlueprintsOnly, and preserve previous-scan state so the merge survives.
 	CurrentCodeTypeFilter = ECodeTypeFilter::All;
 
 	SetCodeState(EModuleState::Running);
@@ -887,42 +737,20 @@ FReply SShintToolsPanel::OnDeselectAllCodeClicked()
 	return FReply::Handled();
 }
 
-// [DASH-STRIP-BEGIN]
-FReply SShintToolsPanel::OnSendCodeToDashboardClicked()
-{
-	DashboardSync->SendCodeValidator(LastCodeResult,
-		FOnShintWebDashboardComplete::CreateSP(this, &SShintToolsPanel::OnCodeDashboardComplete));
-	return FReply::Handled();
-}
-// [DASH-STRIP-END]
-
 FReply SShintToolsPanel::OnIgnoreSingleFix(FShintIssueItemPtr Item)
 {
 	if (!Item.IsValid()) return FReply::Handled();
 
-	// Fingerprint so this issue is skipped on the next incremental scan.
 	const FString Fingerprint = FString::Printf(
 		TEXT("%s:%d:%s"), *Item->FilePath, Item->Line, *Item->RuleId);
 	AppliedFixFingerprints.Add(Fingerprint);
 
-	// Remove from backing store and rebuild visible list.
 	AllCodeItems.RemoveAll([&Item](const FShintIssueItemPtr& P){ return P == Item; });
 	ApplyCodeFilter();
 	RefreshApplyCodeLabel();
 	return FReply::Handled();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Explain — hand the finding to the AI Assistant
-//
-// Replaces the single-shot modal (SShintToolsPanel_Explain.cpp, removed): it
-// opened a throwaway window, answered once, and was destroyed on the next
-// click, so a follow-up had nowhere to go. The question now becomes a turn in
-// a durable thread the user can keep asking into.
-//
-// The finding is identified by rule_id + asset/file path, not re-sent: the
-// assistant resolves it server-side from the analysis the scan published.
-// ─────────────────────────────────────────────────────────────────────────────
 FReply SShintToolsPanel::OnExplainIssueClicked(FShintIssueItemPtr Item)
 {
 	if (!Item.IsValid()) return FReply::Handled();
@@ -932,9 +760,6 @@ FReply SShintToolsPanel::OnExplainIssueClicked(FShintIssueItemPtr Item)
 		TEXT("Why is \"%s\" flagged in %s?"),
 		*Label, *FPaths::GetCleanFilename(Item->FilePath));
 
-	// Queue first, then invoke: the panel consumes the pending request when it
-	// hears OnChanged, and that fires whether the tab was already open or this
-	// click is what created it.
 	FShintAssistantContext::RequestExplain(Item->RuleId, Item->FilePath, Question);
 	FGlobalTabmanager::Get()->TryInvokeTab(FShintToolsModule::ShintAssistantTabName);
 

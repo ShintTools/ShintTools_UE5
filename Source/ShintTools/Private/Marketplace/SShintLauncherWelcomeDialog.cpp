@@ -19,8 +19,7 @@
 
 namespace
 {
-	// Dashboard entry point Fab users are funnelled to for the launcher /
-	// upgrades. Single literal so the URL is trivial to update.
+
 	static const TCHAR* GLauncherUrl = TEXT("https://shint.tools/login");
 
 	FString LauncherWelcomeFilePath()
@@ -30,10 +29,6 @@ namespace
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Static API
-// ─────────────────────────────────────────────────────────────────────────────
-
 bool SShintLauncherWelcomeDialog::HasBeenShown()
 {
 	return FPaths::FileExists(LauncherWelcomeFilePath());
@@ -42,7 +37,7 @@ bool SShintLauncherWelcomeDialog::HasBeenShown()
 void SShintLauncherWelcomeDialog::MarkShown()
 {
 	const FString Path = LauncherWelcomeFilePath();
-	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), /*Tree=*/ true);
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path),  true);
 	const FString Body = FString::Printf(
 		TEXT("SHOWN %s\n"), *FDateTime::UtcNow().ToIso8601());
 	FFileHelper::SaveStringToFile(Body, *Path);
@@ -69,19 +64,10 @@ void SShintLauncherWelcomeDialog::MaybeShow()
 	Content->ParentWindow = Window;
 	Window->SetContent(Content);
 
-	// Non-modal (like SShintWelcomeDialog): a welcome shouldn't block the
-	// editor, and AddWindow needs no active parent right after the module
-	// starts (AddModalWindow would).
 	FSlateApplication::Get().AddWindow(Window);
 
-	// Persist immediately so closing via the window 'X' (not just a button)
-	// still counts as shown and it never reappears.
 	MarkShown();
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Construct
-// ─────────────────────────────────────────────────────────────────────────────
 
 void SShintLauncherWelcomeDialog::Construct(const FArguments& InArgs)
 {
@@ -139,10 +125,6 @@ void SShintLauncherWelcomeDialog::Construct(const FArguments& InArgs)
 		]
 	];
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Handlers
-// ─────────────────────────────────────────────────────────────────────────────
 
 FReply SShintLauncherWelcomeDialog::OnGetLauncherClicked()
 {

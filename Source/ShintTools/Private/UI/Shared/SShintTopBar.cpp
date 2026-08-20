@@ -15,9 +15,6 @@ namespace ShintTopBarPrivate
 {
 	static TUniquePtr<FSlateColorBrush>      GBarBg;
 
-	// One LED brush per state, allocated lazily on first request. They live
-	// for the module lifetime — the brush pointer Slate captures must remain
-	// valid until the panel is destroyed.
 	static TMap<uint8, TUniquePtr<FSlateRoundedBoxBrush>> GLedBrushes;
 
 	static const FSlateBrush* BarBg()
@@ -43,16 +40,14 @@ namespace ShintTopBarPrivate
 		default:                                                                    break;
 		}
 
-		// Half-transparent fill + solid outline gives the LED a soft glow look
-		// at small sizes (10x10) without using a bitmap.
 		FLinearColor Fill = Color;
 		Fill.A = 0.5f;
 
 		TUniquePtr<FSlateRoundedBoxBrush> Brush = MakeUnique<FSlateRoundedBoxBrush>(
 			Fill,
-			/*Radius=*/5.f,
+			5.f,
 			Color,
-			/*OutlineWidth=*/1.f);
+			1.f);
 		const FSlateBrush* Raw = Brush.Get();
 		GLedBrushes.Add(Key, MoveTemp(Brush));
 		return Raw;
@@ -61,10 +56,7 @@ namespace ShintTopBarPrivate
 
 namespace ShintTopBarPrivate
 {
-	// Pill-shaped background for the license badge. One brush per tier so
-	// the colour matches the tier (free=muted grey, indie=accent blue,
-	// studio/enterprise=gold). The map mirrors the LedBrushes pattern
-	// above — lazily allocated, lives for the module lifetime.
+
 	static TMap<FString, TUniquePtr<FSlateRoundedBoxBrush>> GTierPillBrushes;
 
 	static FLinearColor TierAccent(const FString& Tier)
@@ -73,7 +65,7 @@ namespace ShintTopBarPrivate
 		if (Lower == TEXT("indie"))      return FShintStyle::Colors::AccentBlue();
 		if (Lower == TEXT("studio"))     return FShintStyle::Colors::Warning();
 		if (Lower == TEXT("enterprise")) return FShintStyle::Colors::Warning();
-		return FShintStyle::Colors::TextMuted();  // free / unknown / empty
+		return FShintStyle::Colors::TextMuted();
 	}
 
 	static const FSlateBrush* TierPill(const FString& Tier)
@@ -84,13 +76,13 @@ namespace ShintTopBarPrivate
 
 		const FLinearColor Accent = TierAccent(Tier);
 		FLinearColor Fill = Accent;
-		Fill.A = 0.15f;  // soft tint so the text stays the focal point
+		Fill.A = 0.15f;
 
 		TUniquePtr<FSlateRoundedBoxBrush> Brush = MakeUnique<FSlateRoundedBoxBrush>(
 			Fill,
-			/*Radius=*/8.f,
+			8.f,
 			Accent,
-			/*OutlineWidth=*/1.f);
+			1.f);
 		const FSlateBrush* Raw = Brush.Get();
 		GTierPillBrushes.Add(Key, MoveTemp(Brush));
 		return Raw;
@@ -133,7 +125,6 @@ void SShintTopBar::Construct(const FArguments& InArgs)
 		[
 			SNew(SHorizontalBox)
 
-			// Title — current destination
 			+ SHorizontalBox::Slot()
 			.AutoWidth()
 			.VAlign(VAlign_Center)
@@ -144,12 +135,10 @@ void SShintTopBar::Construct(const FArguments& InArgs)
 				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
 			]
 
-			// Spacer
 			+ SHorizontalBox::Slot()
 			.FillWidth(1.f)
 			[ SNew(SSpacer) ]
 
-			// LED + status text
 			+ SHorizontalBox::Slot()
 			.AutoWidth()
 			.VAlign(VAlign_Center)
@@ -171,7 +160,6 @@ void SShintTopBar::Construct(const FArguments& InArgs)
 				.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextMuted()))
 			]
 
-			// License tier pill — collapsed until /license/status resolves.
 			+ SHorizontalBox::Slot()
 			.AutoWidth()
 			.VAlign(VAlign_Center)

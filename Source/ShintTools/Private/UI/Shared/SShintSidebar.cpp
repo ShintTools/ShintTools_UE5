@@ -3,7 +3,7 @@
 #include "SShintSidebar.h"
 #include "ShintStyle.h"
 #include "ShintIconStyle.h"
-#include "ShintTools.h"   // FShintToolsModule::GetCachedTier — tier-gates LOD
+#include "ShintTools.h"
 
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Layout/SBox.h"
@@ -15,8 +15,7 @@
 
 namespace ShintSidebarPrivate
 {
-	// Heap-stable solid brushes — Slate captures the raw pointer, so we keep
-	// owners in TUniquePtrs that live for the module lifetime.
+
 	static TUniquePtr<FSlateColorBrush> GRailBg;
 	static TUniquePtr<FSlateColorBrush> GActiveBg;
 
@@ -40,11 +39,8 @@ void SShintSidebar::Construct(const FArguments& InArgs)
 	ActiveAttr         = InArgs._Active;
 	OnSelectedDelegate = InArgs._OnSelected;
 
-	// Each destination gets a button. Glyphs are unicode block characters that
-	// render reliably in Bahnschrift / Roboto without needing an icon font.
 	TSharedRef<SVerticalBox> Stack = SNew(SVerticalBox);
 
-	// Brand block at the top of the rail
 	Stack->AddSlot()
 		.AutoHeight()
 		.Padding(FMargin(FShintStyle::Space::S4, FShintStyle::Space::S5,
@@ -56,18 +52,12 @@ void SShintSidebar::Construct(const FArguments& InArgs)
 			.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
 		];
 
-	// Nav buttons
 	Stack->AddSlot().AutoHeight()
 		[ BuildNavButton(EShintDestination::Overview, NSLOCTEXT("Sidebar","Overview","Overview"), TEXT("ShintTools.Icons.Info")) ];
 	Stack->AddSlot().AutoHeight()
 		[ BuildNavButton(EShintDestination::Code,     NSLOCTEXT("Sidebar","Code",    "Code"),     TEXT("ShintTools.Icons.Code")) ];
 	Stack->AddSlot().AutoHeight()
 		[ BuildNavButton(EShintDestination::Assets,   NSLOCTEXT("Sidebar","Assets",  "Assets"),   TEXT("ShintTools.Icons.Tag")) ];
-	// [LOD-STRIP-BEGIN]
-	// LOD Auditor — Studio-tier only; the button hides itself for Free/Indie.
-	Stack->AddSlot().AutoHeight()
-		[ BuildNavButton(EShintDestination::LodAudit, NSLOCTEXT("Sidebar","LodAudit","LOD Auditor"), TEXT("ShintTools.Icons.Optimize"), /*bStudioOnly*/ true) ];
-	// [LOD-STRIP-END]
 	Stack->AddSlot()
 		.FillHeight(1.f)
 		[ SNew(SSpacer) ];
@@ -77,7 +67,7 @@ void SShintSidebar::Construct(const FArguments& InArgs)
 	ChildSlot
 	[
 		SNew(SBox)
-		.WidthOverride(200.f) // fixed-width rail; the launcher uses the same.
+		.WidthOverride(200.f)
 		[
 			SNew(SBorder)
 			.BorderImage(ShintSidebarPrivate::RailBg())
@@ -93,14 +83,9 @@ TSharedRef<SWidget> SShintSidebar::BuildNavButton(
 	EShintDestination Dest, const FText& Label, const FName& Icon,
 	bool bStudioOnly)
 {
-	// Visibility of the active-state highlight strip — bound so it updates
-	// instantly when the parent flips destinations.
+
 	auto IsActive = [this, Dest]() { return ActiveAttr.Get() == Dest; };
 
-	// Tier gate. Studio-only entries (LOD Auditor) stay collapsed until the
-	// license probe resolves to studio/enterprise. Bound (not evaluated once)
-	// so the rail updates live when the user pastes a Studio key in Settings
-	// and the Apply handler re-runs RefreshTierAsync().
 	auto RowVisibility = [bStudioOnly]() -> EVisibility
 	{
 		if (!bStudioOnly)

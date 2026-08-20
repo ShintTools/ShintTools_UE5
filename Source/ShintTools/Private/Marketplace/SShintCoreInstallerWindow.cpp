@@ -48,16 +48,10 @@ namespace
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Construct / dtor
-// ─────────────────────────────────────────────────────────────────────────────
-
 void SShintCoreInstallerWindow::Construct(const FArguments& InArgs)
 {
 	AppendLog(TEXT("ShintTools Core Engine setup."));
-	// One logical sentence per AppendLog call — the row's AutoWrapText handles
-	// reflow at the current dialog width, so we don't pre-wrap with C++ string
-	// concatenation.
+
 	AppendLog(TEXT("This downloads the Core Engine Docker image (~600 MB) and starts it locally on port 18200."));
 
 	ChildSlot
@@ -68,7 +62,6 @@ void SShintCoreInstallerWindow::Construct(const FArguments& InArgs)
 		[
 			SNew(SVerticalBox)
 
-			// Header
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
 			[
 				SNew(STextBlock)
@@ -76,9 +69,6 @@ void SShintCoreInstallerWindow::Construct(const FArguments& InArgs)
 				.Font(FAppStyle::GetFontStyle("HeadingExtraSmall"))
 			]
 
-			// Status line. AutoWrapText so terminal-state messages like
-			// "Failed to start container: docker daemon not running…" wrap
-			// instead of running off the right edge of the dialog.
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
 			[
 				SAssignNew(StatusLabel, STextBlock)
@@ -86,14 +76,12 @@ void SShintCoreInstallerWindow::Construct(const FArguments& InArgs)
 				.AutoWrapText(true)
 			]
 
-			// Progress bar
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
 			[
 				SAssignNew(ProgressBar, SProgressBar)
 				.Percent(0.f)
 			]
 
-			// Log scroll
 			+ SVerticalBox::Slot().FillHeight(1.f).Padding(0, 4, 0, 8)
 			[
 				SNew(SBorder)
@@ -106,12 +94,7 @@ void SShintCoreInstallerWindow::Construct(const FArguments& InArgs)
 						[](TSharedPtr<FString> Item,
 						   const TSharedRef<STableViewBase>& Owner)
 						{
-							// AutoWrapText is required here: docker pull
-							// emits long lines including image digests +
-							// status URLs that exceed the dialog width.
-							// Without wrapping, those rows get clipped at
-							// the right edge and the user only ever sees
-							// the first half of the message.
+
 							return SNew(STableRow<TSharedPtr<FString>>, Owner)
 								[
 									SNew(STextBlock)
@@ -122,7 +105,6 @@ void SShintCoreInstallerWindow::Construct(const FArguments& InArgs)
 				]
 			]
 
-			// Buttons
 			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)
 			[
 				SNew(SUniformGridPanel)
@@ -149,24 +131,12 @@ void SShintCoreInstallerWindow::Construct(const FArguments& InArgs)
 
 SShintCoreInstallerWindow::~SShintCoreInstallerWindow()
 {
-	// Do NOT WorkerFuture.Wait() here -- a docker pull is a 2-8 minute
-	// operation and this dtor runs on the Game Thread when the window is
-	// closed (including via Cancel). Blocking here used to freeze the whole
-	// editor for the remainder of the pull with no feedback. The worker
-	// never touches `this` directly (see RunWorker) -- it only reaches the
-	// widget through a TWeakPtr, Pinned on the Game Thread inside the
-	// posted AsyncTask, so it's safe for the worker to keep running (and
-	// simply no-op its progress callbacks) after this object is gone.
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Static entry points
-// ─────────────────────────────────────────────────────────────────────────────
+}
 
 void SShintCoreInstallerWindow::OpenIfNeededAsync(int32 Port)
 {
-	// Probe Core on a worker thread to avoid blocking the editor at
-	// startup. The probe has its own 3s deadline inside IsCoreHealthy.
+
 	Async(EAsyncExecution::Thread, [Port]()
 	{
 		const bool bHealthy = FShintCoreInstaller::IsCoreHealthy(Port);
@@ -180,10 +150,7 @@ void SShintCoreInstallerWindow::OpenIfNeededAsync(int32 Port)
 
 		AsyncTask(ENamedThreads::GameThread, []()
 		{
-			// Fab guidelines require explicit consent before any
-			// download or third-party process is launched. Skip the
-			// dialog only if the user already accepted in a prior
-			// session.
+
 			if (SShintConsentDialog::HasUserConsented())
 			{
 				OpenNow();
@@ -213,16 +180,12 @@ void SShintCoreInstallerWindow::OpenNow()
 	Content->ParentWindow = Window;
 	Window->SetContent(Content);
 
-	FSlateApplication::Get().AddWindow(Window, /*bShowImmediately=*/ true);
+	FSlateApplication::Get().AddWindow(Window,  true);
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Button handlers
-// ─────────────────────────────────────────────────────────────────────────────
 
 FReply SShintCoreInstallerWindow::OnPrimaryClicked()
 {
-	// Terminal states swap the primary button to "Close" / "Open URL".
+
 	if (CurrentStep == EShintInstallStep::Done)
 	{
 		if (ParentWindow.IsValid()) { ParentWindow->RequestDestroyWindow(); }
@@ -237,15 +200,14 @@ FReply SShintCoreInstallerWindow::OnPrimaryClicked()
 	}
 	if (CurrentStep == EShintInstallStep::PaidUseLauncher)
 	{
-		// Paid Core is launcher-only (license-bound token auth). Send the user
-		// to the download page and close — there's nothing to install here.
+
 		FPlatformProcess::LaunchURL(TEXT("https://shint.tools"), nullptr, nullptr);
 		if (ParentWindow.IsValid()) { ParentWindow->RequestDestroyWindow(); }
 		return FReply::Handled();
 	}
 	if (CurrentStep == EShintInstallStep::Failed)
 	{
-		// Allow retry: reset state and re-run.
+
 		LogLines.Reset();
 		if (LogList.IsValid()) { LogList->RequestListRefresh(); }
 	}
@@ -258,9 +220,6 @@ FReply SShintCoreInstallerWindow::OnPrimaryClicked()
 	bIsRunning = true;
 	PrimaryButtonLabel->SetText(LOCTEXT("Installing", "Installing..."));
 
-	// Spawn worker. Weak self only -- if the window is closed mid-pull the
-	// widget can be destroyed while this task is still running; RunWorker
-	// must never dereference a raw `this`.
 	TWeakPtr<SShintCoreInstallerWindow> WeakSelf(SharedThis(this));
 	WorkerFuture = Async(EAsyncExecution::Thread, [WeakSelf]()
 	{
@@ -272,8 +231,7 @@ FReply SShintCoreInstallerWindow::OnPrimaryClicked()
 
 FReply SShintCoreInstallerWindow::OnCancelClicked()
 {
-	// We don't actively kill the worker (docker pull is hard to interrupt
-	// cleanly). Just close the window -- the dtor waits for the worker.
+
 	if (ParentWindow.IsValid())
 	{
 		ParentWindow->RequestDestroyWindow();
@@ -281,21 +239,13 @@ FReply SShintCoreInstallerWindow::OnCancelClicked()
 	return FReply::Handled();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Worker / progress
-// ─────────────────────────────────────────────────────────────────────────────
-
 void SShintCoreInstallerWindow::RunWorker(TWeakPtr<SShintCoreInstallerWindow> WeakSelf)
 {
 	FShintCoreInstaller Installer;
 
 	Installer.OnProgress = [WeakSelf](const FShintInstallProgress& P)
 	{
-		// Marshal to the Game Thread -- Slate is not thread-safe. Only ever
-		// reach the widget through the weak pointer, Pinned once we're
-		// actually on the Game Thread: if the window was closed while the
-		// pull was running, Pin() fails and we silently drop the update
-		// instead of touching a freed widget.
+
 		FShintInstallProgress Copy = P;
 		AsyncTask(ENamedThreads::GameThread, [WeakSelf, Copy]()
 		{
@@ -306,13 +256,6 @@ void SShintCoreInstallerWindow::RunWorker(TWeakPtr<SShintCoreInstallerWindow> We
 		});
 	};
 
-	// The in-editor wizard installs the FREE public Core only (ImageTag defaults
-	// to :latest). The paid Core (agent + LOD Auditor) lives in a PRIVATE
-	// registry package pulled with a license-bound token that ONLY the launcher
-	// can mint — the wizard has no machine binding, so it cannot authenticate.
-	// Installing the free Core for a paying user would hand them a Core without
-	// the paid routes (LOD audit 404 — the exact bug we chased). So for a paid
-	// tier we stop and direct them to the launcher instead of pulling anything.
 	const FString Tier = FShintToolsModule::GetCachedTier().ToLower();
 	const bool bPaid =
 		Tier == TEXT("indie") || Tier == TEXT("studio") || Tier == TEXT("enterprise");

@@ -1,6 +1,4 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
-//
-// Quality Score (Slice B) endpoints split out of ShintCoreClient.cpp.
 
 #include "ShintCoreClient.h"
 #include "ShintTools.h"
@@ -21,7 +19,6 @@ bool FShintCoreClient::ParseScoreObject(
 {
 	if (!Obj.IsValid()) return false;
 
-	// Older error responses look like { "error": "...", "project_id": "..." }
 	FString ErrorField;
 	if (Obj->TryGetStringField(TEXT("error"), ErrorField) && !ErrorField.IsEmpty())
 	{

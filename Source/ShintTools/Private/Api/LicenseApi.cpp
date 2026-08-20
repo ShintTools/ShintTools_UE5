@@ -17,7 +17,7 @@ FShintLicenseApi::FShintLicenseApi(TSharedRef<FShintHttpClient> InTransport,
 void FShintLicenseApi::RequestStatus(const FString& ApiKey,
                                      FOnShintLicenseStatusComplete OnComplete)
 {
-	// Body: {"api_key": "..."} — same field name as every other endpoint.
+
 	const TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetStringField(TEXT("api_key"), ApiKey);
 	const FString BodyStr = FShintHttpClient::SerializeJson(Body);
@@ -45,7 +45,6 @@ void FShintLicenseApi::RequestStatus(const FString& ApiKey,
 					return;
 				}
 
-				// Parse {"tier": "...", "error": "...", "time": 0.0}.
 				const TSharedRef<TJsonReader<TCHAR>> Reader =
 					TJsonReaderFactory<TCHAR>::Create(Raw.ResponseBody);
 				TSharedPtr<FJsonObject> Json;
@@ -64,7 +63,6 @@ void FShintLicenseApi::RequestStatus(const FString& ApiKey,
 					Json->GetNumberField(TEXT("time")));
 				Out.bSuccess       = Out.ErrorMessage.IsEmpty();
 
-				// Defensive: blank tier is treated as free, never empty.
 				if (Out.Tier.IsEmpty())
 				{
 					Out.Tier = TEXT("free");

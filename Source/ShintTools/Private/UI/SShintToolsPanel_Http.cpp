@@ -1,37 +1,10 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
-//
-// HTTP completion callbacks — every On*Complete bound to a request
-// fired by the panel.
-//
-// Health / scan paths:
-//   OnHealthCheckComplete
-//   OnProjectValidateComplete        → HandleValidateResult (in _State.cpp)
-//   OnBlueprintValidateComplete      → routes BPB001 to the asset panel
-//                                      then HandleValidateResult
-//   OnAssetScanComplete              → chains a BP-naming validate
-//   OnAssetScanFromBPComplete        → asset scan after Scan Blueprints
-//   OnBlueprintNamingScanComplete    → BPB001 → asset panel only
-//
-// Apply paths:
-//   OnCodeFixComplete                → success toast, fingerprint applied
-//                                      fixes, inject BUILD001 errors when
-//                                      the build check fires for the same
-//                                      ScanGeneration
-//   OnAssetFixComplete               → clear lists + "all resolved" empty
-//                                      state
-//
-// Dashboard push paths:
-//   OnCodeDashboardComplete          → button label transitions
-//   OnAssetDashboardComplete         → button label transitions
 
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
 #include "ShintTools.h"
 #include "ShintCoreClient.h"
 #include "Core/ShintAssistantContext.h"
-// [DASH-STRIP-BEGIN]
-#include "ShintDashboardSync.h"
-// [DASH-STRIP-END]
 
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
@@ -45,9 +18,6 @@
 
 #define LOCTEXT_NAMESPACE "SShintToolsPanel"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Health / validate
-// ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::OnHealthCheckComplete(const FShintRequestResult& Result)
 {
 	SetStatus(Result.bSuccess ? ECoreStatus::Online : ECoreStatus::Offline);
@@ -55,13 +25,8 @@ void SShintToolsPanel::OnHealthCheckComplete(const FShintRequestResult& Result)
 
 void SShintToolsPanel::OnProjectValidateComplete(const FShintValidateResult& Result)
 {
-	// Bug #36: this used to call HandleValidateResult with bMerge=false, which
-	// wiped LastCodeResult on every C++ scan — so doing "Scan All BP" then
-	// "Scan All Source" lost the BP findings and the user saw only what the
-	// C++ scan happened to return (often a near-empty list). Switching to
-	// bMerge=true makes the merge-by-prefix logic in HandleValidateResult
-	// keep BP issues while replacing only the C++ half of the list.
-	HandleValidateResult(Result, /*bMerge=*/true, /*bIsBPScan=*/false);
+
+	HandleValidateResult(Result, true, false);
 }
 
 void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& Result)
@@ -70,7 +35,6 @@ void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& R
 		TEXT("OnBlueprintValidateComplete: bSuccess=%d, %d issues from server (bBlueprintScanActive=%d)"),
 		Result.bSuccess ? 1 : 0, Result.Issues.Num(), bBlueprintScanActive ? 1 : 0);
 
-	// Separate naming issues (BPB001) → route to Asset Naming panel.
 	FShintValidateResult QualityResult;
 	QualityResult.bSuccess     = Result.bSuccess;
 	QualityResult.FilesScanned = Result.FilesScanned;
@@ -80,10 +44,7 @@ void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& R
 
 	for (const FShintCodeIssue& Issue : Result.Issues)
 	{
-		// BPB001 (naming) → Asset Naming panel ONLY when triggered by the
-		// legacy naming-chain path (bBlueprintScanActive=false). When the user
-		// clicks "Scan All BP", all issues stay in the Code Validator — no
-		// asset panel side-effect.
+
 		if (!bBlueprintScanActive && Issue.RuleId == TEXT("BPB001"))
 		{
 			FShintAssetItemPtr Item = MakeShared<FShintAssetItem>();
@@ -106,11 +67,6 @@ void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& R
 	}
 	QualityResult.TotalIssues = QualityResult.Issues.Num();
 
-	// #28 — copy the score fields from the server result. HandleValidateResult's
-	// merge path only updates the badge + per-category breakdown when
-	// QualityScoreOverall >= 0; the stripped QualityResult left it at the -1
-	// default (and per-category at 100), so the condition was always false and
-	// the score stayed frozen on whatever the last C++ scan produced.
 	QualityResult.QualityScoreOverall   = Result.QualityScoreOverall;
 	QualityResult.bHasCategoryBreakdown = Result.bHasCategoryBreakdown;
 	QualityResult.PerformanceScore      = Result.PerformanceScore;
@@ -130,16 +86,9 @@ void SShintToolsPanel::OnBlueprintValidateComplete(const FShintValidateResult& R
 		TEXT("OnBlueprintValidateComplete: routed %d to asset panel, %d kept for code merge"),
 		NamingRouted, QualityResult.Issues.Num());
 
-	// T4 — Always merge into the unified code-validator panel so the user sees
-	// C++ AND Blueprint findings in the same list. The Code-Type filter
-	// (CppOnly / BlueprintsOnly) and the Category filter let them slice the
-	// view; they don't need a destructive REPLACE on every BP scan.
-	HandleValidateResult(QualityResult, /*bMerge=*/true, /*bIsBPScan=*/bBlueprintScanActive);
+	HandleValidateResult(QualityResult, true, bBlueprintScanActive);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Apply code fixes — completion
-// ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 FixGeneration)
 {
 	SetCodeState(EModuleState::Done);
@@ -150,12 +99,6 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 F
 			TEXT("ApplyFix: %d fix(es) applied, %d skipped."),
 			Result.TotalFixesApplied, Result.TotalFixesSkipped);
 
-		// T3 — Surface a success toast so the user sees what just landed.
-		// Without this, the panel only updated counters and the "click was
-		// silent" perception drove repeat-clicks. Label by what was ACTUALLY
-		// applied (Result.BlueprintFixesApplied), never by the last scan mode
-		// — bBlueprintScanActive said "Blueprint" for a C++ fix applied right
-		// after a BP scan.
 		{
 			const int32 BPCount  = Result.BlueprintFixesApplied;
 			const int32 CppCount = Result.TotalFixesApplied - BPCount;
@@ -191,8 +134,6 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 F
 			}
 		}
 
-		// Record fingerprints so these issues are suppressed on any future
-		// incremental re-scan within this session.
 		for (const FShintCodeIssue& I : PendingCodeFixes)
 		{
 			AppliedFixFingerprints.Add(
@@ -200,20 +141,14 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 F
 		}
 		PendingCodeFixes.Empty();
 
-		// Clear visible list FIRST so Slate never touches stale pointers.
 		CodeIssueItems.Reset();
 		if (CodeIssueListView.IsValid()) CodeIssueListView->RebuildList();
 
-		// Now safe to remove from backing data.
 		AllCodeItems.RemoveAll([](const FShintIssueItemPtr& I) {
 			return I->bChecked && I->bIsAutoFixable
 				&& (!I->FixSuggestion.IsEmpty() || I->bIsBlueprint);
 		});
 
-		// Inject compile errors from the incremental build check. Only inject
-		// if no new scan has been triggered since the fix was applied. A
-		// changed ScanGeneration means the user already launched a fresh scan
-		// that wiped AllCodeItems — stale BUILD001 items must not be re-added.
 		if (Result.bHasCompileErrors && Result.CompileErrors.Num() > 0
 			&& FixGeneration == ScanGeneration)
 		{
@@ -225,8 +160,7 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 F
 			{
 				FShintIssueItemPtr Item = MakeShared<FShintIssueItem>();
 				Item->RuleId         = TEXT("BUILD001");
-				// Compile errors are always critical — they block compilation.
-				// "critical" maps to the Critical filter chip in the panel.
+
 				Item->Severity       = TEXT("critical");
 				Item->Message        = CE.Code.IsEmpty()
 					? CE.Message
@@ -250,11 +184,9 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 F
 				FixGeneration, ScanGeneration);
 		}
 
-		// Re-populate visible list with updated data.
 		ApplyCodeFilter();
 		RefreshCodeStats();
 
-		// If all items are now gone, show the "all resolved" state immediately.
 		if (AllCodeItems.IsEmpty())
 		{
 			if (CodeEmptyText.IsValid())
@@ -273,57 +205,6 @@ void SShintToolsPanel::OnCodeFixComplete(const FShintFixResult& Result, uint32 F
 	RefreshApplyCodeLabel();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Dashboard push — code
-// ─────────────────────────────────────────────────────────────────────────────
-// [DASH-STRIP-BEGIN]
-void SShintToolsPanel::OnCodeDashboardComplete(const FShintWebDashboardResult& Result)
-{
-	if (!SendCodeBtnLabel.IsValid()) return;
-
-	if (Result.bSuccess)
-	{
-		SendCodeBtnLabel->SetText(LOCTEXT("SendCodeOk", "Sent!"));
-		SendCodeBtnLabel->SetColorAndOpacity(FSlateColor(C_Green()));
-	}
-	else
-	{
-		// Surface the truncated server message inline so the user sees WHY the
-		// send failed without having to open the Output Log.
-		FString Short = Result.ErrorMessage.IsEmpty()
-			? FString(TEXT("Network or auth error"))
-			: Result.ErrorMessage;
-		if (Short.Len() > 60)
-		{
-			Short = Short.Left(57) + TEXT("…");
-		}
-		SendCodeBtnLabel->SetText(FText::FromString(
-			FString::Printf(TEXT("✗  Send failed — %s"), *Short)));
-		SendCodeBtnLabel->SetColorAndOpacity(FSlateColor(C_Red()));
-		UE_LOG(LogShintTools, Error,
-			TEXT("Dashboard send failed: %s | response: %s"),
-			*Result.ErrorMessage, *Result.ResponseBody);
-	}
-
-	TWeakPtr<SShintToolsPanel> weak_this = SharedThis(this);
-	FTSTicker::GetCoreTicker().AddTicker(
-		FTickerDelegate::CreateLambda([weak_this](float) -> bool {
-			if (TSharedPtr<SShintToolsPanel> Pin = weak_this.Pin())
-			{
-				if (Pin->SendCodeBtnLabel.IsValid())
-				{
-					Pin->SendCodeBtnLabel->SetText(LOCTEXT("SendCodeRst", "Send to Dashboard"));
-					Pin->SendCodeBtnLabel->SetColorAndOpacity(FSlateColor(C_Blue()));
-				}
-			}
-			return false;
-		}), 3.f);
-}
-// [DASH-STRIP-END]
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Asset scan chain
-// ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
 {
 	if (!Result.bSuccess)
@@ -341,18 +222,13 @@ void SShintToolsPanel::OnAssetScanComplete(const FShintAssetScanResult& Result)
 		FString::Printf(TEXT("Asset Naming — %d violation%s"),
 			Result.InvalidAssets, Result.InvalidAssets == 1 ? TEXT("") : TEXT("s")));
 
-	// Chain a BP validation pass to pick up BPB001 (naming violations).
-	// Results go ONLY to the asset naming panel — code validator is not touched.
 	CoreClient->ValidateBlueprints(FPaths::ProjectContentDir(),
 		FOnShintValidateComplete::CreateSP(this, &SShintToolsPanel::OnBlueprintNamingScanComplete));
 }
 
 void SShintToolsPanel::OnAssetScanFromBPComplete(const FShintAssetScanResult& Result)
 {
-	// Asset scan triggered by "Scan Blueprints":
-	//   • populate the asset list from full scan results
-	//   • auto-set filter to Blueprints so only BP naming violations are visible
-	//   • do NOT chain another ValidateBlueprints call — BP code scan is already running
+
 	if (!Result.bSuccess)
 	{
 		ShintShowErrorToast(TEXT("Blueprint asset scan failed"), Result.ErrorMessage);
@@ -369,8 +245,7 @@ void SShintToolsPanel::OnAssetScanFromBPComplete(const FShintAssetScanResult& Re
 
 void SShintToolsPanel::OnBlueprintNamingScanComplete(const FShintValidateResult& Result)
 {
-	// Extract only BPB001 (wrong/missing BP_ prefix) and add to asset panel.
-	// Every other BP issue is silently discarded — code validator stays untouched.
+
 	int32 NamingRouted = 0;
 	for (const FShintCodeIssue& Issue : Result.Issues)
 	{
@@ -397,9 +272,6 @@ void SShintToolsPanel::OnBlueprintNamingScanComplete(const FShintValidateResult&
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Asset apply / dashboard
-// ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
 {
 	SetAssetState(EModuleState::Done);
@@ -408,14 +280,12 @@ void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
 	{
 		UE_LOG(LogShintTools, Verbose, TEXT("AssetFix: %d asset(s) renamed."), Result.AssetsRenamed);
 
-		// Clear both backing store and visible list.
 		AllAssetItems.Reset();
 		AssetIssueItems.Reset();
 		if (AssetIssueListView.IsValid()) AssetIssueListView->RebuildList();
 		RefreshAssetStats();
 		RefreshApplyAssetLabel();
 
-		// Track that fixes were applied; show "all resolved" message.
 		++AssetFixesApplied;
 		if (AssetEmptyText.IsValid())
 			AssetEmptyText->SetText(LOCTEXT("ANBAllFixed",
@@ -428,48 +298,5 @@ void SShintToolsPanel::OnAssetFixComplete(const FShintAssetFixResult& Result)
 		UE_LOG(LogShintTools, Error, TEXT("AssetFix failed: %s"), *Result.ErrorMessage);
 	}
 }
-
-// [DASH-STRIP-BEGIN]
-void SShintToolsPanel::OnAssetDashboardComplete(const FShintWebDashboardResult& Result)
-{
-	if (!SendAssetBtnLabel.IsValid()) return;
-
-	if (Result.bSuccess)
-	{
-		SendAssetBtnLabel->SetText(LOCTEXT("SendAssetOk", "Sent!"));
-		SendAssetBtnLabel->SetColorAndOpacity(FSlateColor(C_Green()));
-	}
-	else
-	{
-		FString Short = Result.ErrorMessage.IsEmpty()
-			? FString(TEXT("Network or auth error"))
-			: Result.ErrorMessage;
-		if (Short.Len() > 60)
-		{
-			Short = Short.Left(57) + TEXT("…");
-		}
-		SendAssetBtnLabel->SetText(FText::FromString(
-			FString::Printf(TEXT("✗  Send failed — %s"), *Short)));
-		SendAssetBtnLabel->SetColorAndOpacity(FSlateColor(C_Red()));
-		UE_LOG(LogShintTools, Error,
-			TEXT("Dashboard send failed: %s | response: %s"),
-			*Result.ErrorMessage, *Result.ResponseBody);
-	}
-
-	TWeakPtr<SShintToolsPanel> weak_this = SharedThis(this);
-	FTSTicker::GetCoreTicker().AddTicker(
-		FTickerDelegate::CreateLambda([weak_this](float) -> bool {
-			if (const TSharedPtr<SShintToolsPanel> pin = weak_this.Pin())
-			{
-				if (pin->SendAssetBtnLabel.IsValid())
-				{
-					pin->SendAssetBtnLabel->SetText(LOCTEXT("SendAssetRst", "Send to Dashboard"));
-					pin->SendAssetBtnLabel->SetColorAndOpacity(FSlateColor(C_Blue()));
-				}
-			}
-			return false;
-		}), 3.f);
-}
-// [DASH-STRIP-END]
 
 #undef LOCTEXT_NAMESPACE

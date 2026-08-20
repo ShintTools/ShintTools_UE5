@@ -1,21 +1,10 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
-//
-// Settings destination — the 5-field config card (Core Engine port, API
-// Key, Dashboard API Key, Excluded Paths, Export Path) plus
-// SaveConfigOverrides() that flushes every edited value back to
-// shinttools.config.json.
-//
-// Layout mirrors the Unity Settings tab so users moving between engines
-// see the same affordances in the same order. The Core Engine
-// connection indicator lives in the TopBar (top-right corner — bridged
-// from SetStatus via CurrentConnStateIndex); the Settings tab does NOT
-// duplicate it.
 
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
 #include "ShintCoreClient.h"
 #include "ShintStyle.h"
-#include "ShintTools.h"  // FShintToolsModule::RefreshTierAsync
+#include "ShintTools.h"
 
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -30,8 +19,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 {
 	const FShintCoreConfig& Cfg = CoreClient->GetConfig();
 
-	// One-row helper. Label column is fixed width so every field column
-	// lines up vertically regardless of label length.
 	auto ConfigRow = [this](const FText& Label, TSharedPtr<SEditableTextBox>& OutField,
 		const FString& InitialValue, const FText& Hint) -> TSharedRef<SWidget>
 	{
@@ -54,8 +41,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 			];
 	};
 
-	// Multi-line variant for Excluded Paths so users can paste one path per
-	// line instead of struggling with comma/semicolon delimiters.
 	auto MultiLineRow = [this](const FText& Label,
 		TSharedPtr<SMultiLineEditableTextBox>& OutField,
 		const FString& InitialValue, const FText& Hint) -> TSharedRef<SWidget>
@@ -92,18 +77,12 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 		[
 			SNew(SVerticalBox)
 
-			// ── Header ───────────────────────────────────────────────────────
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 10.f)
 			[
 				SNew(STextBlock).Text(LOCTEXT("CfgTitle", "SETTINGS"))
 				.Font(F_Label()).ColorAndOpacity(FSlateColor(C_DimGray()))
 			]
 
-			// ── Fields ───────────────────────────────────────────────────────
-			//
-			// Order mirrors the Unity Settings tab. Values persist to
-			// shinttools.config.json and auto-save on commit (Enter /
-			// focus-out); the Apply button below makes saving discoverable.
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
 			[
 				ConfigRow(LOCTEXT("CfgCorePort", "Core Engine port"),
@@ -112,7 +91,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 					LOCTEXT("CfgCorePortHint", "Local port the Core Engine listens on. Default 18200."))
 			]
 			// [FAB-STRIP-BEGIN] Launcher-managed credential fields — the Fab
-			// build omits them (build_fab_source_pack.py strips this region).
+
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 6.f)
 			[
 				ConfigRow(LOCTEXT("CfgApiKeyMongo", "API Key"),
@@ -144,7 +123,7 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 					LOCTEXT("CfgExportPathHint", "Default folder for JSON exports."))
 			]
 			// [FAB-STRIP-BEGIN] Launcher-managed dashboard endpoint — omitted
-			// from the Fab build (build_fab_source_pack.py strips this region).
+
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
 			[
 				ConfigRow(LOCTEXT("CfgDashUrl", "Dashboard URL"), DashboardUrlField,
@@ -153,10 +132,6 @@ TSharedRef<SWidget> SShintToolsPanel::BuildConfigSection()
 			]
 			// [FAB-STRIP-END]
 
-				// Apply: persist every field (incl. the license key) and re-probe
-				// /license/status so the tier badge + Indie/Studio gates update
-				// immediately, no editor restart. Fields also auto-save on commit
-				// (Enter / focus-out); this button makes it discoverable.
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 14.f, 0.f, 0.f).HAlign(HAlign_Left)
 				[
 					SNew(SButton)
@@ -182,8 +157,7 @@ void SShintToolsPanel::SaveConfigOverrides()
 	{
 		const FString PortStr = CorePortField->GetText().ToString();
 		const int32 Parsed = FCString::Atoi(*PortStr);
-		// Atoi returns 0 on parse failure; treat 0 or negative as "ignore"
-		// rather than corrupting the config with an unbindable port.
+
 		if (Parsed > 0 && Parsed < 65536) Cfg.CorePort = Parsed;
 	}
 	if (ApiKeyMongoField.IsValid())
@@ -198,18 +172,14 @@ void SShintToolsPanel::SaveConfigOverrides()
 	{
 		const FString Raw = ExcludedPathsField->GetText().ToString();
 		Cfg.ExcludedPaths.Reset();
-		Raw.ParseIntoArray(Cfg.ExcludedPaths, TEXT("\n"), /*CullEmpty=*/true);
-		// Trim each entry — users often paste with trailing spaces.
+		Raw.ParseIntoArray(Cfg.ExcludedPaths, TEXT("\n"), true);
+
 		for (FString& Entry : Cfg.ExcludedPaths)
 			Entry.TrimStartAndEndInline();
 	}
 
 	CoreClient->SaveConfig();
 
-	// Re-resolve the tier with the just-saved key so the License badge +
-	// Indie/Studio gates update live. Without this the badge stayed on the
-	// value resolved at editor startup until the next restart, even though
-	// scans already used the new key (the Core resolves tier per request).
 	FShintToolsModule::RefreshTierAsync();
 }
 

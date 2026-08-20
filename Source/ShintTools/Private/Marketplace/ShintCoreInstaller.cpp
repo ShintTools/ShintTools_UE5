@@ -12,11 +12,6 @@
 #include "Interfaces/IHttpResponse.h"
 #include "Interfaces/IHttpRequest.h"
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Public entrypoint
-// ─────────────────────────────────────────────────────────────────────────────
-
 bool FShintCoreInstaller::Run()
 {
 	if (!CheckDocker())
@@ -42,9 +37,7 @@ bool FShintCoreInstaller::Run()
 
 bool FShintCoreInstaller::IsCoreHealthy(int32 Port)
 {
-	// Best-effort sync HTTP probe using the engine's HTTP module.
-	// We block briefly in a polling loop -- this is only ever called
-	// from the wizard's worker thread, never the Game Thread.
+
 	const FString Url = FString::Printf(
 		TEXT("http://127.0.0.1:%d/health"), Port);
 	auto Request = FHttpModule::Get().CreateRequest();
@@ -72,10 +65,6 @@ bool FShintCoreInstaller::IsCoreHealthy(int32 Port)
 	}
 	return bOk;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Steps
-// ─────────────────────────────────────────────────────────────────────────────
 
 bool FShintCoreInstaller::CheckDocker()
 {
@@ -120,8 +109,6 @@ bool FShintCoreInstaller::StartContainer()
 	Emit(EShintInstallStep::CreatingContainer, 65,
 		TEXT("Creating container..."));
 
-	// If a container by the same name already exists (previous run),
-	// just start it. Otherwise create a new one.
 	FString Out;
 	int32 Code = RunDocker(FString::Printf(
 		TEXT("ps -a --filter name=^%s$ --format {{.Names}}"),
@@ -136,10 +123,7 @@ bool FShintCoreInstaller::StartContainer()
 	}
 	else
 	{
-		// Detached, restart on failure, publish health port. No volume
-		// mount for the LLM model on first install -- the image bakes
-		// in a baseline model; users who want the upgraded model can
-		// mount a directory later.
+
 		const FString CreateArgs = FString::Printf(
 			TEXT("run -d --name %s -p %d:18200 --restart unless-stopped %s"),
 			*ContainerName, HostPort, *ImageTag);
@@ -174,11 +158,7 @@ bool FShintCoreInstaller::WaitForHealth()
 			return true;
 		}
 		++Attempt;
-		// Surface progress every 5 attempts so the user can see the
-		// wizard is alive instead of staring at a frozen "Waiting...".
-		// Without this the only signal during the 1-3 min cold-start
-		// window is the spinning progress bar, which has historically
-		// pushed users to kill the editor.
+
 		if (Attempt % 5 == 0)
 		{
 			const double Elapsed = FPlatformTime::Seconds() - Start;
@@ -199,22 +179,8 @@ bool FShintCoreInstaller::WaitForHealth()
 	return false;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Diagnostics
-// ─────────────────────────────────────────────────────────────────────────────
-
 void FShintCoreInstaller::EmitDiagnostics()
 {
-	// Spawn an interactive cmd.exe window that runs `docker ps`,
-	// `docker logs`, and `curl /health` against our container, then
-	// stays open with `cmd /k` so the user can keep typing extra
-	// commands (`docker logs -f`, `docker exec -it ... bash`, etc.)
-	// without copy-pasting anything from the wizard log.
-	//
-	// We materialise the script as a .bat in the OS temp dir rather
-	// than passing the whole sequence as a single /k argument because
-	// (a) it survives the quoting horror of nested `"..."` in cmd /k
-	// and (b) the user can re-run the file later from Explorer.
 
 	const FString TempDir = FPlatformProcess::UserTempDir();
 	const FString BatPath = FPaths::Combine(TempDir,
@@ -263,23 +229,20 @@ void FShintCoreInstaller::EmitDiagnostics()
 		return;
 	}
 
-	// `cmd /k` keeps the window open after the .bat finishes. Quote
-	// the path because TempDir contains spaces on most systems
-	// (`C:\Users\<name>\AppData\Local\Temp\`).
 	const FString CmdArgs = FString::Printf(
 		TEXT("/k \"\"%s\"\""), *BatPath);
 
 	uint32 OutPID = 0;
 	FProcHandle Handle = FPlatformProcess::CreateProc(
 		TEXT("cmd.exe"), *CmdArgs,
-		/*bLaunchDetached=*/ true,
-		/*bLaunchHidden=*/   false,
-		/*bLaunchReallyHidden=*/ false,
+		 true,
+		   false,
+		 false,
 		&OutPID,
-		/*PriorityModifier=*/ 0,
-		/*OptionalWorkingDirectory=*/ nullptr,
-		/*PipeWriteChild=*/ nullptr,
-		/*PipeReadChild=*/  nullptr);
+		 0,
+		 nullptr,
+		 nullptr,
+		  nullptr);
 
 	if (Handle.IsValid())
 	{
@@ -298,10 +261,6 @@ void FShintCoreInstaller::EmitDiagnostics()
 				"manually:\n  %s"), *BatPath));
 	}
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreInstaller::Emit(
 	EShintInstallStep Step, int32 Percent, const FString& Message)
@@ -332,12 +291,12 @@ int32 FShintCoreInstaller::RunDocker(
 	uint32 OutPID = 0;
 	FProcHandle Handle = FPlatformProcess::CreateProc(
 		TEXT("docker"), *Args,
-		/*bLaunchDetached=*/ false,
-		/*bLaunchHidden=*/   true,
-		/*bLaunchReallyHidden=*/ true,
+		 false,
+		   true,
+		 true,
 		&OutPID,
-		/*PriorityModifier=*/ 0,
-		/*OptionalWorkingDirectory=*/ nullptr,
+		 0,
+		 nullptr,
 		WritePipe,
 		nullptr);
 
@@ -348,7 +307,6 @@ int32 FShintCoreInstaller::RunDocker(
 		return -1;
 	}
 
-	// Drain pipe while process runs.
 	while (FPlatformProcess::IsProcRunning(Handle))
 	{
 		OutStdout += FPlatformProcess::ReadPipe(ReadPipe);

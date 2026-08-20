@@ -2,19 +2,14 @@
 
 #include "Core/ShintAssistantContext.h"
 #include "ShintTools.h"
-#include "Assistant/SShintAssistantDock.h"   // RequestExplain opens the dock
+#include "Assistant/SShintAssistantDock.h"
 
 namespace
 {
 	FString               GAnalysisId;
 	EShintAssistantModule GModule = EShintAssistantModule::None;
 	FString               GSummary;
-	// [LOD-STRIP-BEGIN]
-	FString               GReportId;
-	// [LOD-STRIP-END]
 
-	// Queued "Explain this finding" from a results row. Held until the panel
-	// takes it, so a click that also opens the panel still gets answered.
 	bool    GHasPendingExplain = false;
 	FString GPendingRuleId;
 	FString GPendingAssetPath;
@@ -61,12 +56,6 @@ void FShintAssistantContext::RequestExplain(
 		TEXT("AssistantContext: explain queued rule=%s asset=%s"),
 		*RuleId, *AssetPath);
 
-	// Open the assistant BEFORE broadcasting. Queuing alone was enough while
-	// the assistant was a tab the user had already docked; the dock can be
-	// collapsed or never opened, and then clicking "Explain" queued a question
-	// nobody would ever see — the button did nothing at all. Open() is
-	// idempotent and expands an already-created dock, so a second click on a
-	// row while the thread is open just adds a turn.
 	SShintAssistantDock::Open();
 
 	OnChanged.Broadcast();
@@ -94,20 +83,7 @@ FString FShintAssistantContext::GetModuleContextString()
 	{
 	case EShintAssistantModule::CodeValidator: return TEXT("code_validator");
 	case EShintAssistantModule::AssetNaming:   return TEXT("asset_naming");
-	// [LOD-STRIP-BEGIN]
-	case EShintAssistantModule::LodAudit:      return TEXT("lod_audit");
-	case EShintAssistantModule::Predictive:    return TEXT("predictive");
-	// [LOD-STRIP-END]
 	default:                                   return FString();
 	}
 }
 
-// [LOD-STRIP-BEGIN]
-void FShintAssistantContext::PublishReport(const FString& ReportId)
-{
-	GReportId = ReportId;
-	OnChanged.Broadcast();
-}
-
-FString FShintAssistantContext::GetReportId() { return GReportId; }
-// [LOD-STRIP-END]

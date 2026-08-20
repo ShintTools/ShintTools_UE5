@@ -1,23 +1,11 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
-//
-// Stateful panel logic that mutates the issue/asset backing stores or
-// reads/writes module state — populate, filter, refresh-stats,
-// quality-score helpers, plus the trivial Set*/Get* accessors. None of
-// this builds Slate widgets; the only Slate API touched is the bound
-// SListView::RequestListRefresh() / RebuildList() / visibility flag on
-// the empty-state hosts.
-//
-// Split out of the main panel TU so the controller logic compiles
-// independently from the section builders. The behaviour is verbatim:
-// every counter, every fingerprint, every cap mirror what the original
-// 3.5k-line file did.
 
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
 #include "ShintTools.h"
 #include "ShintCoreClient.h"
 #include "Core/ShintAssistantContext.h"
-#include "SShintTopBar.h"  // EShintConnState — bridged from SetStatus()
+#include "SShintTopBar.h"
 
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
@@ -32,19 +20,7 @@
 
 namespace
 {
-	/**
-	 * Count the DISTINCT files referenced by a list of issue rows.
-	 *
-	 * This is the Unity client's rule, kept identical on purpose so both
-	 * engines headline the same number for the same project: Unity's
-	 * DynamicToolPanel keys a dictionary by each issue's path and shows its
-	 * Count, i.e. a file with five issues still counts once.
-	 *
-	 * Templated on the row type + path member so the Code and Asset panels
-	 * share one definition (their rows name the field differently). Lives in
-	 * this TU only — an anon-namespace helper duplicated across panel TUs
-	 * collides under a full unity build.
-	 */
+
 	template <typename RowType>
 	int32 CountUniqueFiles(const TArray<TSharedPtr<RowType>>& Rows,
 	                       FString RowType::* PathField)
@@ -62,14 +38,6 @@ namespace
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HandleValidateResult
-//
-// Routes a /validate response into the panel: either merges with the existing
-// issue set (preserving the other half of the C++/BP split) or fully replaces
-// it. Bumps ScanGeneration on full replace so any in-flight async build check
-// drops its compile errors instead of injecting them into a newer scan.
-// ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, bool bMerge, bool bIsBPScan)
 {
 	if (!Result.bSuccess)
@@ -81,10 +49,7 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 
 	if (bMerge)
 	{
-		// Merge-by-scan-type. A C++ scan replaces only C++ issues (RuleId
-		// prefixed CP/CB/CS/CM); a BP scan replaces only BP issues (BP*
-		// prefix). Re-running either scan does NOT duplicate findings, and
-		// the unified list keeps both kinds visible at once.
+
 		auto IsBP = [](const FShintCodeIssue& I) {
 			return I.RuleId.StartsWith(TEXT("BP"));
 		};
@@ -94,9 +59,8 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 		});
 		LastCodeResult.Issues.Append(Result.Issues);
 
-		// Recompute counters from the merged set so they always match the list.
 		LastCodeResult.bSuccess      = true;
-		LastCodeResult.FilesScanned  = Result.FilesScanned;  // last scan's coverage
+		LastCodeResult.FilesScanned  = Result.FilesScanned;
 		LastCodeResult.TotalIssues   = LastCodeResult.Issues.Num();
 		LastCodeResult.TotalErrors   = 0;
 		LastCodeResult.TotalWarnings = 0;
@@ -106,25 +70,11 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 			if (I.Severity == TEXT("warning")) ++LastCodeResult.TotalWarnings;
 		}
 
-		// Carry THIS scan's analysis id across. The merge path rebuilt issues,
-		// counters and the score but never touched AnalysisId, so after a
-		// merge the field kept whatever it held before — on a fresh session,
-		// nothing. The publish below then handed the assistant an empty id,
-		// which CLEARS the context by contract, and the panel reported "no
-		// analysis in view" immediately after a scan that had just produced
-		// hundreds of findings. Every question was ungrounded from then on.
-		//
-		// Guarded on non-empty so an older Core that sends no id leaves the
-		// previous grounding intact instead of wiping it.
 		if (!Result.AnalysisId.IsEmpty())
 		{
 			LastCodeResult.AnalysisId = Result.AnalysisId;
 		}
 
-		// Refresh the score from THIS scan's response. The merge path used to
-		// drop the new quality_score on the floor, so a BP scan after a C++
-		// scan kept showing the C++ score forever and the OverviewHero froze
-		// on the first scan's value.
 		if (Result.QualityScoreOverall >= 0.f)
 		{
 			LastCodeResult.QualityScoreOverall   = Result.QualityScoreOverall;
@@ -139,8 +89,7 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 	else
 	{
 		LastCodeResult = Result;
-		// Bump generation so any in-flight async build check is discarded — its
-		// BUILD001 errors belong to the previous set of files, not this fresh scan.
+
 		++ScanGeneration;
 	}
 
@@ -148,9 +97,6 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 	PopulateCodeIssueList(LastCodeResult, bIsBPScan);
 	RefreshCodeStats();
 
-	// Hand the assistant something to ground answers in. Publishing here (and
-	// not at request time) means the panel only ever points at an analysis the
-	// server actually produced.
 	FShintAssistantContext::Publish(
 		LastCodeResult.AnalysisId,
 		EShintAssistantModule::CodeValidator,
@@ -158,11 +104,6 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 			LastCodeResult.TotalIssues,
 			LastCodeResult.TotalIssues == 1 ? TEXT("") : TEXT("s")));
 
-	// Surface the overall score the server returned inline. The
-	// /metrics/score/latest round-trip used to fetch the per-category
-	// breakdown was removed in 1.7.11 along with project_id from the
-	// config schema; the breakdown now rides on the validate response as
-	// `category_scores` when the connected core is new enough.
 	if (LastCodeResult.QualityScoreOverall >= 0.f)
 	{
 		LastQualityScore = FShintQualityScoreSnapshot();
@@ -184,14 +125,11 @@ void SShintToolsPanel::HandleValidateResult(const FShintValidateResult& Result, 
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Populate
-// ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result, bool bIsBPScan)
 {
-	(void)bIsBPScan;   // classification is derived from FilePath / RuleId, not this flag
+	(void)bIsBPScan;
 	const double PopStart = FPlatformTime::Seconds();
-	// Clear visible list FIRST so Slate never references stale items during a paint tick.
+
 	CodeIssueItems.Reset();
 	if (CodeIssueListView.IsValid()) CodeIssueListView->RequestListRefresh();
 
@@ -202,9 +140,6 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result,
 	{
 		const FShintCodeIssue& Src = Result.Issues[i];
 
-		// Skip issues already fixed this session — fingerprint matches by
-		// FilePath:Line:RuleId so an incremental BP re-scan does not re-show
-		// the same issue.
 		const FString Fingerprint = FString::Printf(
 			TEXT("%s:%d:%s"), *Src.FilePath, Src.Line, *Src.RuleId);
 		if (AppliedFixFingerprints.Contains(Fingerprint))
@@ -224,12 +159,6 @@ void SShintToolsPanel::PopulateCodeIssueList(const FShintValidateResult& Result,
 		Item->bIsAutoFixable  = Src.bIsAutoFixable;
 		Item->bChecked        = Src.bIsAutoFixable;
 
-		// Classify each issue. Use the rule-id prefix as the primary signal —
-		// BP* rules can only be produced by Blueprint scanning, C{P,B,S,M}*
-		// rules can only be produced by C++ scanning — and fall back to the
-		// path heuristic only when RuleId is empty. BUILD* (compile errors)
-		// belong to C++ so the fix-routing logic that branches on bIsBlueprint
-		// stays correct.
 		const FString& Rid = Src.RuleId;
 		const bool bRidIsBP = Rid.StartsWith(TEXT("BP"));
 		const bool bRidIsCpp =
@@ -281,12 +210,6 @@ void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Resul
 	AllAssetItems.Reset();
 	AllAssetItems.Reserve(Result.Issues.Num());
 
-	// Free-tier display cap. The free-tier promise is "show up to 500 issues
-	// total". Server caps the SCAN at 500 assets to bound work, but each asset
-	// can fire several rules — so the response can carry many more than 500
-	// issue rows. Cap the DISPLAYED rows so the list never exceeds the
-	// advertised limit and the banner count stays truthful. Only applied when
-	// the server reports tier="free"; Indie returns the full set untouched.
 	constexpr int32 FreeTierIssueCap = 500;
 	const bool bApplyFreeCap = (Result.Tier == TEXT("free"));
 
@@ -310,7 +233,6 @@ void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Resul
 	ApplyAssetFilter();
 	if (SendAssetBtn.IsValid()) SendAssetBtn->SetEnabled(true);
 
-	// If the scan returned no violations, show a clear success message.
 	if (AllAssetItems.IsEmpty() && AssetEmptyText.IsValid())
 		AssetEmptyText->SetText(LOCTEXT("ANBNoIssues", "✓  No naming violations found."));
 
@@ -319,9 +241,6 @@ void SShintToolsPanel::PopulateAssetIssueList(const FShintAssetScanResult& Resul
 		FPlatformTime::Seconds() - PopStart, AllAssetItems.Num());
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Filters
-// ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::ApplyCodeFilter()
 {
 	CodeIssueItems.Reset();
@@ -329,10 +248,9 @@ void SShintToolsPanel::ApplyCodeFilter()
 
 	for (const FShintIssueItemPtr& Item : AllCodeItems)
 	{
-		// Compile errors always show regardless of active filters — they are critical.
+
 		const bool bIsBuildError = (Item->RuleId == TEXT("BUILD001"));
 
-		// Toolbar search — case-insensitive across message / file / rule id.
 		if (!bIsBuildError && !CodeSearchText.IsEmpty()
 			&& !Item->Message.Contains(CodeSearchText)
 			&& !Item->FilePath.Contains(CodeSearchText)
@@ -363,10 +281,6 @@ void SShintToolsPanel::ApplyCodeFilter()
 			if (!bSevMatch) continue;
 		}
 
-		// Category fallback — when the server didn't populate `category`
-		// (some BP and validator rules return it empty), fall back to the
-		// RuleId prefix. Without this the filter dropped every uncategorised
-		// issue and "Performance" silently emptied the panel.
 		if (!bIsBuildError && CurrentCategoryFilter != EIssueCategoryFilter::All)
 		{
 			const FString  CatLower = Item->Category.ToLower();
@@ -400,12 +314,6 @@ void SShintToolsPanel::ApplyCodeFilter()
 
 	if (CodeIssueListView.IsValid()) CodeIssueListView->RequestListRefresh();
 
-	// Manage the empty-state surface from here too. Without this, a stale
-	// filter (e.g. Severity="Error" + a BP scan whose findings are all
-	// warnings) collapses the empty state hosted by PopulateCodeIssueList
-	// AND empties CodeIssueItems — the user sees a blank panel with no
-	// explanation. When AllCodeItems has rows but every one was masked,
-	// surface a "no matches for current filters" message instead.
 	if (CodeEmptyState.IsValid() && CodeEmptyText.IsValid())
 	{
 		if (CodeIssueItems.IsEmpty() && !AllCodeItems.IsEmpty())
@@ -419,9 +327,7 @@ void SShintToolsPanel::ApplyCodeFilter()
 		{
 			CodeEmptyState->SetVisibility(EVisibility::Collapsed);
 		}
-		// CodeIssueItems empty AND AllCodeItems empty falls through —
-		// PopulateCodeIssueList owns that state ("Run a scan" / "No issues
-		// found"); we don't second-guess it here.
+
 	}
 }
 
@@ -432,7 +338,7 @@ void SShintToolsPanel::ApplyAssetFilter()
 
 	for (const FShintAssetItemPtr& Item : AllAssetItems)
 	{
-		// Toolbar search — case-insensitive across names / path.
+
 		if (!AssetSearchText.IsEmpty()
 			&& !Item->CurrentName.Contains(AssetSearchText)
 			&& !Item->SuggestedName.Contains(AssetSearchText)
@@ -470,17 +376,9 @@ void SShintToolsPanel::ApplyAssetFilter()
 	RefreshApplyAssetLabel();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Stat refresh
-// ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::RefreshCodeStats()
 {
-	// FILES counts the DISTINCT files that actually carry an issue — same
-	// rule as the Unity client (DynamicToolPanel keys a dict by issue path
-	// and shows its Count), so the two engines report the same number for
-	// the same project. LastCodeResult.FilesScanned is a different quantity
-	// (every file the Core looked at, issue or not) and made UE5 headline a
-	// much larger number than Unity for an identical scan.
+
 	if (CodeFiles_Label.IsValid())
 		CodeFiles_Label->SetText(FText::FromString(
 			FmtN(CountUniqueFiles(AllCodeItems, &FShintIssueItem::FilePath))));
@@ -490,12 +388,7 @@ void SShintToolsPanel::RefreshCodeStats()
 
 void SShintToolsPanel::RefreshAssetStats()
 {
-	// Drive counters from the backing store so stats reflect total, not the
-	// filtered view. AssetTotal: count of UNIQUE assets (one per asset_path),
-	// not issue rows — multiple issues on the same asset must not inflate the
-	// headline number and break the free-tier 500-asset promise. AssetInvalid:
-	// total flagged rows, kept as-is so the user can see "37 issues across 19
-	// assets".
+
 	const int32 UniqueAssets = CountUniqueFiles(AllAssetItems,
 	                                            &FShintAssetItem::AssetPath);
 	const int32 IssueRows    = AllAssetItems.Num();
@@ -505,14 +398,6 @@ void SShintToolsPanel::RefreshAssetStats()
 		FString::Printf(TEXT("%.2f"), LastAssetResult.ScanTimeSeconds)));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Quality Score
-//
-// Color thresholds match the dashboard convention:
-//   ≥ 90 → green   (healthy)
-//   ≥ 70 → yellow  (needs attention)
-//   < 70 → red     (poor quality)
-// ─────────────────────────────────────────────────────────────────────────────
 namespace
 {
 	FLinearColor ScoreColor(float Score)
@@ -546,8 +431,7 @@ void SShintToolsPanel::OnLatestScoreFetched(const FShintQualityScoreSnapshot& Sn
 {
 	if (!Snap.bValid)
 	{
-		// 404 / older free server / empty project — keep the inline overall we
-		// already painted from the scan response, just log for diagnostics.
+
 		UE_LOG(LogShintTools, Verbose,
 			TEXT("Slice B: /metrics/score/latest returned no score (%s)"),
 			Snap.ErrorMessage.IsEmpty() ? TEXT("not found") : *Snap.ErrorMessage);
@@ -558,9 +442,6 @@ void SShintToolsPanel::OnLatestScoreFetched(const FShintQualityScoreSnapshot& Sn
 	RefreshQualityScore();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Apply-button label refresh
-// ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::RefreshApplyCodeLabel()
 {
 	const int32 N = Algo::CountIf(AllCodeItems,
@@ -581,18 +462,10 @@ void SShintToolsPanel::RefreshApplyAssetLabel()
 	if (ApplyAssetBtn.IsValid()) ApplyAssetBtn->SetEnabled(N > 0);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// State setters + attribute getters
-// ─────────────────────────────────────────────────────────────────────────────
 void SShintToolsPanel::SetStatus(ECoreStatus S)
 {
 	StatusState = S;
-	// Mirror onto the TopBar's parallel enum. The TopBar LED reads
-	// CurrentConnStateIndex — without this bridge it stayed permanently in
-	// the Unknown/grey state because nothing else wrote to that index.
-	// ECoreStatus and EShintConnState are intentionally separate types so
-	// each subsystem owns its vocabulary (the panel speaks "checking", the
-	// TopBar speaks "connecting"); the bridge translates between them.
+
 	EShintConnState Bridged = EShintConnState::Unknown;
 	switch (S)
 	{

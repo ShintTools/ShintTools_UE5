@@ -9,18 +9,12 @@
 
 namespace ShintBadgePrivate
 {
-	// One brush per severity color, allocated once on first use. Slate stores
-	// the raw pointer captured here so the TUniquePtr keeps the FSlateBrush
-	// at a stable heap address for the whole module lifetime — TMap reallocs
-	// would invalidate raw pointers stored inside a value-typed brush.
+
 	static TMap<uint32, TUniquePtr<FSlateRoundedBoxBrush>> GBadgeBrushes;
 
 	static const FSlateBrush* BadgeBrush(const FLinearColor& Tint)
 	{
-		// Quantise the color to 8-bit to keep the cache bounded — even with
-		// HDR tints the worst case is 16M entries; in practice we hit at most
-		// 4 (critical / high / medium / low). Tint goes into the fill at low
-		// alpha for a soft pill, plus a stronger outline for legibility.
+
 		const uint32 Key =
 			(uint32(Tint.R * 255) << 16) |
 			(uint32(Tint.G * 255) <<  8) |
@@ -30,13 +24,13 @@ namespace ShintBadgePrivate
 			return Found->Get();
 
 		FLinearColor Fill = Tint;
-		Fill.A = 0.18f; // soft tinted fill — keeps text legible on dark BG_CARD
+		Fill.A = 0.18f;
 
 		TUniquePtr<FSlateRoundedBoxBrush> Brush = MakeUnique<FSlateRoundedBoxBrush>(
 			Fill,
 			FShintStyle::Radius::Control,
-			Tint,                             // outline matches severity
-			/*OutlineWidth=*/1.f);
+			Tint,
+			1.f);
 
 		const FSlateBrush* Raw = Brush.Get();
 		GBadgeBrushes.Add(Key, MoveTemp(Brush));
@@ -63,7 +57,7 @@ void SShintSeverityBadge::Construct(const FArguments& InArgs)
 	[
 		SNew(SBorder)
 		.BorderImage(ShintBadgePrivate::BadgeBrush(Color))
-		.Padding(FMargin(FShintStyle::Space::S2, 2.f)) // 8px H, 2px V → tight pill
+		.Padding(FMargin(FShintStyle::Space::S2, 2.f))
 		[
 			SNew(STextBlock)
 			.Text(Label)

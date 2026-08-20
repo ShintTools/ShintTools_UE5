@@ -25,10 +25,6 @@ namespace
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Static API
-// ─────────────────────────────────────────────────────────────────────────────
-
 bool SShintConsentDialog::HasUserConsented()
 {
 	FString Body;
@@ -57,16 +53,9 @@ void SShintConsentDialog::OpenModal(TFunction<void()> OnAccept)
 		FSlateApplication::Get().GetActiveTopLevelWindow());
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Construct
-// ─────────────────────────────────────────────────────────────────────────────
-
 void SShintConsentDialog::Construct(const FArguments& InArgs)
 {
-	// One sentence per line — no hard breaks INSIDE a sentence. AutoWrapText
-	// on the body STextBlock handles responsive wrapping; the previous source
-	// pre-wrapped every line manually, which looked aesthetically broken when
-	// the dialog was resized and left orphan words on narrower screens.
+
 	const FText Body = LOCTEXT("ConsentBody",
 		"ShintTools requires a local Core Engine to operate.\n\n"
 		"To set up the Core Engine, ShintTools will:\n"
@@ -122,10 +111,6 @@ void SShintConsentDialog::Construct(const FArguments& InArgs)
 	];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Handlers
-// ─────────────────────────────────────────────────────────────────────────────
-
 FReply SShintConsentDialog::OnAcceptClicked()
 {
 	PersistAcceptance();
@@ -156,7 +141,7 @@ void SShintConsentDialog::PersistAcceptance()
 {
 	const FString Path = ConsentFilePath();
 	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path),
-		/*Tree=*/ true);
+		 true);
 	const FString Body = FString::Printf(
 		TEXT("ACCEPTED %s\n"), *FDateTime::UtcNow().ToIso8601());
 	FFileHelper::SaveStringToFile(Body, *Path);

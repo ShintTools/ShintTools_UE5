@@ -1,7 +1,4 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
-//
-// Asset Naming Bot endpoints + dashboard report,
-// split out of ShintCoreClient.cpp.
 
 #include "ShintCoreClient.h"
 #include "ShintTools.h"
@@ -19,10 +16,6 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Asset Naming Bot — scan
-// ─────────────────────────────────────────────────────────────────────────────
-
 void FShintCoreClient::ScanAssetNaming(
 	const FString& ContentDir, FOnShintAssetScanComplete OnComplete)
 {
@@ -36,14 +29,11 @@ void FShintCoreClient::ScanAssetNaming(
 	TArray<FAssetData> AllAssets;
 	AR.GetAssets(AssetFilter, AllAssets);
 
-	// Server expects: { project_id, project_name, engine,
-	//   asset_paths: [{asset_path, name, type, category}] }
 	TArray<TSharedPtr<FJsonValue>> Arr;
 	for (const FAssetData& AD : AllAssets)
 	{
 		const FString AssetClass = AD.AssetClassPath.GetAssetName().ToString();
-		// Skip redirectors — they exist at the old path after a rename and
-		// would be flagged again even though the real asset was already fixed.
+
 		if (AssetClass == TEXT("ObjectRedirector")) continue;
 
 		const FString PackagePath = AD.PackageName.ToString();
@@ -79,11 +69,6 @@ void FShintCoreClient::ScanAssetNaming(
 		}));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Asset Naming Bot — report server-side (the actual rename happens in the
-// panel via IAssetTools; this just records it for local history)
-// ─────────────────────────────────────────────────────────────────────────────
-
 void FShintCoreClient::ReportAssetFixesToServer(
 	const TArray<FShintAssetIssue>& Fixed, FOnShintAssetFixComplete OnComplete)
 {
@@ -110,10 +95,6 @@ void FShintCoreClient::ReportAssetFixesToServer(
 			OnComplete.ExecuteIfBound(Result);
 		}));
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Local dashboard (legacy)
-// ─────────────────────────────────────────────────────────────────────────────
 
 void FShintCoreClient::SendDashboardReport(
 	const FShintDashboardReport& Report, FOnShintDashboardComplete OnComplete)
@@ -150,10 +131,6 @@ void FShintCoreClient::SendDashboardReport(
 		}));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Parse helpers — Asset response shape
-// ─────────────────────────────────────────────────────────────────────────────
-
 FShintAssetScanResult FShintCoreClient::ParseAssetScanResponse(const FShintRequestResult& Raw)
 {
 	FShintAssetScanResult R;
@@ -178,8 +155,6 @@ FShintAssetScanResult FShintCoreClient::ParseAssetScanResponse(const FShintReque
 		(*Sum)->TryGetNumberField(TEXT("scan_time_seconds"),  R.ScanTimeSeconds);
 		(*Sum)->TryGetStringField(TEXT("tier"),               R.Tier);
 
-		// Free-tier cap metadata (canonical fields). Older server builds may
-		// only emit `assets_capped` + `total_assets`; we tolerate both shapes.
 		(*Sum)->TryGetBoolField  (TEXT("limit_applied"),   R.bLimitApplied);
 		(*Sum)->TryGetStringField(TEXT("limit_kind"),      R.LimitKind);
 		(*Sum)->TryGetNumberField(TEXT("limit_value"),     R.LimitValue);
@@ -194,13 +169,12 @@ FShintAssetScanResult FShintCoreClient::ParseAssetScanResponse(const FShintReque
 		}
 	}
 
-	// Assistant contract §7 — top-level, additive. Absent on an older Core.
 	J->TryGetStringField(TEXT("analysis_id"), R.AnalysisId);
 
 	const TArray<TSharedPtr<FJsonValue>>* IssArr = nullptr;
 	if (!J->TryGetArrayField(TEXT("issues"), IssArr) || !IssArr)
 	{
-		// Fallback: server may return "violations" or "results" instead of "issues"
+
 		if (!J->TryGetArrayField(TEXT("violations"), IssArr) || !IssArr)
 		{
 			J->TryGetArrayField(TEXT("results"), IssArr);
@@ -220,7 +194,7 @@ FShintAssetScanResult FShintCoreClient::ParseAssetScanResponse(const FShintReque
 				(*O)->TryGetStringField(TEXT("path"), Issue.AssetPath);
 			if (!(*O)->TryGetStringField(TEXT("current_name"), Issue.CurrentName))
 				(*O)->TryGetStringField(TEXT("name"), Issue.CurrentName);
-			// Core 5ee4688+ emits `fix_suggestion`; older builds used `suggested_name`.
+
 			if (!(*O)->TryGetStringField(TEXT("fix_suggestion"), Issue.SuggestedName))
 				(*O)->TryGetStringField(TEXT("suggested_name"), Issue.SuggestedName);
 			if (!(*O)->TryGetStringField(TEXT("reason"), Issue.Reason))

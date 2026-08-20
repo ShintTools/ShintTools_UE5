@@ -4,7 +4,7 @@
 
 #include "ShintStyle.h"
 #include "ShintTools.h"
-#include "SShintToolsPanel_Private.h"   // ShintShowErrorToast
+#include "SShintToolsPanel_Private.h"
 
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Layout/SBox.h"
@@ -28,9 +28,7 @@
 
 namespace
 {
-	// Quick-start prompts. Each carries the intent it means, so a click never
-	// goes through the router — §2 of the contract: "send intent when you know
-	// it", it is faster and cannot be misclassified.
+
 	struct FQuickPrompt
 	{
 		const TCHAR* Label;
@@ -54,9 +52,6 @@ namespace
 			: FShintStyle::Colors::TextPrimary();
 	}
 
-	// A tier that cannot run an intent still gets an explanation, not a dead
-	// button — the contract's 403 detail lists what IS allowed, and this turns
-	// that into a sentence worth reading.
 	FString FormatGateMessage(const FShintAssistantResponse& R)
 	{
 		if (R.AllowedIntents.Num() == 0)
@@ -72,14 +67,11 @@ namespace
 
 namespace ShintAssistantPanelPrivate
 {
-	// Heap-stable for the module's lifetime: Slate keeps the raw pointer, so a
-	// brush built on the stack would be read after it died. Same pattern as
-	// SShintCard.
+
 	static TUniquePtr<FSlateRoundedBoxBrush> GInputBrush;
 	static TUniquePtr<FSlateRoundedBoxBrush> GSendBrush;
 	static TUniquePtr<FEditableTextBoxStyle> GFlatInputStyle;
 
-	/** The composer field: a dark pill with a hairline outline. */
 	const FSlateBrush* InputBrush()
 	{
 		if (!GInputBrush.IsValid())
@@ -88,12 +80,11 @@ namespace ShintAssistantPanelPrivate
 				FShintStyle::Colors::BgCard(),
 				FShintStyle::Radius::Card,
 				FShintStyle::Colors::BorderSubtle(),
-				/*OutlineWidth=*/1.f);
+				1.f);
 		}
 		return GInputBrush.Get();
 	}
 
-	/** The send button's disc. */
 	const FSlateBrush* SendBrush()
 	{
 		if (!GSendBrush.IsValid())
@@ -105,11 +96,6 @@ namespace ShintAssistantPanelPrivate
 		return GSendBrush.Get();
 	}
 
-	/** The editor's text box with its own background removed, so the rounded
-	 *  border wrapping it is the only frame the user sees. Every state has to
-	 *  be cleared, not just Normal — otherwise the square editor brush
-	 *  reappears the moment the field takes focus, which is exactly when the
-	 *  user is looking at it. */
 	const FEditableTextBoxStyle* FlatInputStyle()
 	{
 		if (!GFlatInputStyle.IsValid())
@@ -130,10 +116,6 @@ namespace ShintAssistantPanelPrivate
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Construct
-// ─────────────────────────────────────────────────────────────────────────────
-
 void SShintAssistantPanel::Construct(const FArguments& InArgs)
 {
 	bCompact = InArgs._bCompact;
@@ -141,19 +123,11 @@ void SShintAssistantPanel::Construct(const FArguments& InArgs)
 	CoreClient = MakeShared<FShintCoreClient>();
 	CoreClient->LoadConfig();
 
-	// The context strip reads FShintAssistantContext through a bound attribute,
-	// so a scan finishing while the panel is open relabels itself on the next
-	// paint. The subscription is for the other direction: a results row queuing
-	// "Explain this finding", which has to be answered as a real turn rather
-	// than just relabelled. AddSP holds a weak reference, so a closed panel
-	// simply stops receiving — no removal needed.
 	FShintAssistantContext::OnChanged.AddSP(
 		this, &SShintAssistantPanel::ConsumePendingExplain);
 
 	TSharedRef<SVerticalBox> Root = SNew(SVerticalBox);
 
-	// The dock draws its own header, so a second title bar here would be a
-	// title above a title. Only the tab-hosted panel needs the strip.
 	if (!bCompact)
 		Root->AddSlot().AutoHeight() [ BuildContextStrip() ];
 
@@ -184,18 +158,11 @@ void SShintAssistantPanel::Construct(const FArguments& InArgs)
 	RefreshCapabilities();
 }
 
-// A fill of its own would square off the rounded card the dock wraps this in,
-// so compact mode paints nothing and lets the card show through. Everywhere
-// else the panel is the whole surface and needs its own background.
 FSlateColor SShintAssistantPanel::SectionBg(const FLinearColor& Opaque) const
 {
 	return FSlateColor(bCompact ? FLinearColor::Transparent : Opaque);
 }
 
-// The thread starts empty, which without this reads as a broken panel rather
-// than an invitation. The sentence also states the one thing a new user cannot
-// guess: that questions are already grounded in whatever they have open, so
-// nothing needs pasting in.
 void SShintAssistantPanel::ShowEmptyState()
 {
 	if (!ThreadBox.IsValid()) return;
@@ -217,8 +184,7 @@ void SShintAssistantPanel::ShowEmptyState()
 
 void SShintAssistantPanel::ClearConversation()
 {
-	// Bump the token first: a reply still in flight for the old thread must
-	// not land in the new one — same guard SendMessage relies on.
+
 	++RequestToken;
 	bAwaitingReply = false;
 
@@ -240,10 +206,6 @@ void SShintAssistantPanel::FocusComposer()
 		FSlateApplication::Get().SetKeyboardFocus(Composer);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Context strip — what the answer will be grounded in
-// ─────────────────────────────────────────────────────────────────────────────
-
 FText SShintAssistantPanel::GetContextLabel() const
 {
 	if (!FShintAssistantContext::HasContext())
@@ -261,9 +223,6 @@ void SShintAssistantPanel::ConsumePendingExplain()
 	if (!FShintAssistantContext::ConsumePendingExplain(RuleId, AssetPath, Question))
 		return;
 
-	// Answering while another turn is still generating would drop the request
-	// silently (SendMessage refuses when busy), so put it back and let the
-	// next OnChanged pick it up.
 	if (bAwaitingReply)
 	{
 		FShintAssistantContext::RequestExplain(RuleId, AssetPath, Question);
@@ -273,7 +232,6 @@ void SShintAssistantPanel::ConsumePendingExplain()
 	PendingExplainRuleId    = RuleId;
 	PendingExplainAssetPath = AssetPath;
 
-	// The button knows its own intent, so this never goes through the router.
 	SendMessage(Question, TEXT("explain_finding"));
 }
 
@@ -305,22 +263,17 @@ TSharedRef<SWidget> SShintAssistantPanel::BuildContextStrip()
 		];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Rail
-// ─────────────────────────────────────────────────────────────────────────────
-
 bool SShintAssistantPanel::CanUseView(EShintAssistantView View) const
 {
 	switch (View)
 	{
 	case EShintAssistantView::Memory:
-		// Session memory has nothing durable to manage, so the destination
-		// only earns its place at "full".
+
 		return Capabilities.HasPersistentMemory();
 	case EShintAssistantView::Rules:
 		return !Capabilities.StudioRules.IsEmpty();
 	default:
-		return true;   // Chat is available on every tier, including Free
+		return true;
 	}
 }
 
@@ -371,17 +324,10 @@ TSharedRef<SWidget> SShintAssistantPanel::BuildRail()
 		];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Chat
-// ─────────────────────────────────────────────────────────────────────────────
-
 TSharedRef<SWidget> SShintAssistantPanel::BuildChatView()
 {
 	TSharedRef<SVerticalBox> Chat = SNew(SVerticalBox);
 
-	// Compact mode dropped the context strip, but the grounding line is the
-	// one thing that must survive it: without it a detailed answer to a
-	// three-word question looks like a guess.
 	if (bCompact)
 	{
 		Chat->AddSlot().AutoHeight()
@@ -423,9 +369,7 @@ TSharedRef<SWidget> SShintAssistantPanel::BuildComposer()
 			SNew(SButton)
 			.ButtonStyle(FAppStyle::Get(), "NoBorder")
 			.ContentPadding(FMargin(FShintStyle::Space::S2, FShintStyle::Space::S1))
-			// A chip for an intent this tier cannot run would be a button whose
-			// only outcome is a 403 — hide it rather than teach the user to
-			// expect failures.
+
 			.Visibility_Lambda([this, Intent]()
 			{
 				return Capabilities.CanRun(Intent)
@@ -461,10 +405,7 @@ TSharedRef<SWidget> SShintAssistantPanel::BuildComposer()
 
 				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 				[
-					// The rounded field is drawn by this border, not by the
-					// text box: FEditableTextBoxStyle's own background is a
-					// square editor brush, and overriding the whole style just
-					// to round one corner set is more surface than wrapping it.
+
 					SNew(SBorder)
 					.BorderImage(ShintAssistantPanelPrivate::InputBrush())
 					.VAlign(VAlign_Center)
@@ -540,8 +481,6 @@ void SShintAssistantPanel::AppendTurn(
 {
 	if (!ThreadBox.IsValid()) return;
 
-	// The placeholder is a child of the thread, so the first real turn has to
-	// evict it rather than stack under it.
 	if (bShowingEmptyState)
 	{
 		ThreadBox->ClearChildren();
@@ -552,9 +491,6 @@ void SShintAssistantPanel::AppendTurn(
 
 	TSharedRef<SVerticalBox> Bubble = SNew(SVerticalBox);
 
-	// A two-word question that gets a detailed answer looks like a coincidence
-	// unless the panel says what it resolved against — §2 of the contract asks
-	// clients to surface this explicitly.
 	if (bContinued && !bIsUser)
 	{
 		Bubble->AddSlot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S1)
@@ -645,22 +581,13 @@ void SShintAssistantPanel::SendMessage(const FString& Text, const FString& Force
 	Req.ProjectId      = CoreClient->GetConfig().ProjectId;
 	Req.StudioId       = CoreClient->GetConfig().ProjectName;
 
-	// Ground the turn in whatever the user is looking at. Sending it on every
-	// turn is safe: an explicit value simply overrides the inheritance the
-	// server would otherwise apply, and a follow-up still resolves correctly.
 	Req.ContextRef     = FShintAssistantContext::GetAnalysisId();
 	Req.ModuleContext  = FShintAssistantContext::GetModuleContextString();
 
-	// Selector within the analysis, set only when a results row asked. Consumed
-	// here so the next free-text turn resolves through the server's own
-	// inheritance instead of silently reusing this row.
 	Req.RuleId    = MoveTemp(PendingExplainRuleId);
 	Req.AssetPath = MoveTemp(PendingExplainAssetPath);
 	PendingExplainRuleId.Reset();
 	PendingExplainAssetPath.Reset();
-	// [LOD-STRIP-BEGIN]
-	Req.ReportId       = FShintAssistantContext::GetReportId();
-	// [LOD-STRIP-END]
 
 	bAwaitingReply = true;
 	const uint64 Token = ++RequestToken;
@@ -691,8 +618,7 @@ void SShintAssistantPanel::SendMessage(const FString& Text, const FString& Force
 
 void SShintAssistantPanel::OnStreamChunk(const FString& Chunk, uint64 RequestId)
 {
-	// Drop tokens from a superseded turn — the user sent another message, or
-	// reset the thread, while this one was still generating.
+
 	if (RequestId != RequestToken) return;
 
 	StreamBuffer += Chunk;
@@ -714,8 +640,7 @@ void SShintAssistantPanel::OnMessageComplete(
 
 	if (!Response.bSuccess)
 	{
-		// The failure text is always displayable as-is; a gated intent gets the
-		// extra sentence about what this tier CAN do.
+
 		const FString Text = Response.AllowedIntents.Num() > 0
 			? FormatGateMessage(Response)
 			: Response.ErrorMessage;
@@ -733,9 +658,6 @@ void SShintAssistantPanel::OnMessageComplete(
 		return;
 	}
 
-	// Replace the live bubble's provisional text with the final answer. The
-	// streamed buffer and the terminal full_text agree, but the blocking path
-	// (and a single-chunk table answer) only populates the latter.
 	const FString Final = StreamBuffer.IsEmpty()
 		? Response.Reply.RawText : StreamBuffer;
 
@@ -750,18 +672,11 @@ void SShintAssistantPanel::OnMessageComplete(
 			: FText::GetEmpty());
 	}
 
-	// A remember_fact / define_rule turn produced a PROPOSAL. It does nothing
-	// until the user accepts it, so the thread has to offer that choice — a
-	// client that never renders this has an assistant that never learns.
 	if (Response.Intent == TEXT("remember_fact"))
 		RefreshMemory();
 	else if (Response.Intent == TEXT("define_rule"))
 		RefreshRules();
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Memory
-// ─────────────────────────────────────────────────────────────────────────────
 
 TSharedRef<SWidget> SShintAssistantPanel::BuildMemoryView()
 {
@@ -814,7 +729,6 @@ void SShintAssistantPanel::AppendFactConfirmCard(const FShintAssistantFact& Fact
 			? FShintStyle::Colors::Warning() : FShintStyle::Colors::TextFaint()))
 	];
 
-	// Confirm/reject for a proposal; retract for something already confirmed.
 	TSharedRef<SHorizontalBox> Actions = SNew(SHorizontalBox);
 	auto AddAction = [this, &Actions, FactId](const FText& Label, bool bAccept)
 	{
@@ -893,9 +807,7 @@ void SShintAssistantPanel::RefreshMemory()
 
 			for (const FShintAssistantFact& F : M.Facts)
 			{
-				// Superseded/retracted facts are history, not state the user
-				// needs to act on — the store keeps them, the panel does not
-				// clutter itself with them.
+
 				if (F.Status == TEXT("proposed") || F.Status == TEXT("confirmed"))
 					P->AppendFactConfirmCard(F);
 			}
@@ -911,10 +823,6 @@ void SShintAssistantPanel::OnFactConfirmed(const FShintAssistantResponse& R)
 	}
 	RefreshMemory();
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Studio rules
-// ─────────────────────────────────────────────────────────────────────────────
 
 TSharedRef<SWidget> SShintAssistantPanel::BuildRulesView()
 {
@@ -957,8 +865,6 @@ void SShintAssistantPanel::AppendRuleConfirmCard(const FShintAssistantRule& Rule
 		.AutoWrapText(true)
 	];
 
-	// Show the compiler's own reading verbatim: the user is accepting THIS
-	// interpretation, not their original sentence.
 	if (!Rule.Description.IsEmpty())
 	{
 		Card->AddSlot().AutoHeight().Padding(0.f, FShintStyle::Space::S1, 0.f, 0.f)
@@ -1075,10 +981,6 @@ void SShintAssistantPanel::OnRuleConfirmed(const FShintAssistantResponse& R)
 	RefreshRules();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Capabilities — the only thing that decides what this panel offers
-// ─────────────────────────────────────────────────────────────────────────────
-
 void SShintAssistantPanel::RefreshCapabilities()
 {
 	TWeakPtr<SShintAssistantPanel> WeakSelf(SharedThis(this));
@@ -1092,8 +994,6 @@ void SShintAssistantPanel::RefreshCapabilities()
 
 			P->Capabilities = C;
 
-			// A core too old to serve the router still reports the Free floor,
-			// so the panel stays usable rather than showing an empty shell.
 			if (!C.ErrorMessage.IsEmpty() && P->StatusLine.IsValid())
 				P->StatusLine->SetText(FText::FromString(C.ErrorMessage));
 

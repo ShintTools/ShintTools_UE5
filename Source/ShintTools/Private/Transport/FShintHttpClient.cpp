@@ -5,7 +5,7 @@
 #include "HttpModule.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
-#include "ShintTools.h"  // LogShintTools
+#include "ShintTools.h"
 #include "ShintEngineCompat.h"
 
 FString FShintHttpClient::MethodToString(EShintHttpMethod Method)
@@ -30,16 +30,7 @@ FString FShintHttpClient::SerializeJson(const TSharedRef<FJsonObject>& Obj)
 
 float FShintHttpClient::TimeoutForUrl(const FString& Url)
 {
-	// [AGENT-STRIP-BEGIN]
-	// /agent/explain runs the local LLM and takes 30-45s typical / 60-90s
-	// on slow CPUs. 180s gives the spinner enough headroom not to cut off
-	// mid-stream.
-	if (Url.Contains(TEXT("/agent/explain")))
-	{
-		return 180.0f;
-	}
-	// [AGENT-STRIP-END]
-	// 90s covers full-project scans.
+
 	return 90.0f;
 }
 
@@ -71,27 +62,13 @@ void FShintHttpClient::Send(
 		Req->SetContentAsString(Body);
 	}
 
-	// BindSP via AsShared keeps `this` alive through the dispatch — safe if
-	// the owning FShintCoreClient is torn down mid-flight (uncommon but
-	// possible during editor reload).
 	Req->OnProcessRequestComplete().BindSP(
 		AsShared(),
 		&FShintHttpClient::HandleResponse,
 		OnComplete);
 	const float RequestTimeout = TimeoutForUrl(FullUrl);
 	Req->SetTimeout(RequestTimeout);
-	// CRITICAL for /agent/explain: SetTimeout bounds the TOTAL request, but UE's
-	// HTTP backend also enforces a separate ACTIVITY timeout (no bytes sent or
-	// received) that defaults to ~30s. The synchronous /agent/explain endpoint
-	// streams nothing — it holds the connection silent for the full 30-45s (60-90s
-	// on slow CPUs) CPU generation, then sends the whole body at once. With the
-	// 30s default, that silent gap tripped the activity abort at ~30s and the
-	// plugin reported "Could not reach the LLM" even though the core returned a
-	// valid 200 (short <30s generations slipped under it, which is why it looked
-	// intermittent). Match the activity timeout to the total so a long, quiet
-	// generation is never mistaken for a dead connection. The per-request setter
-	// only exists from 5.4 up; on 5.2/5.3 ShintCompat::SetActivityTimeout is a
-	// no-op and the engine-wide [HTTP] HttpActivityTimeout applies instead.
+
 	ShintCompat::SetActivityTimeout(Req, RequestTimeout);
 
 	if (!Req->ProcessRequest())

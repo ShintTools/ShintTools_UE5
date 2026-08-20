@@ -17,7 +17,6 @@ void SShintEmptyState::Construct(const FArguments& InArgs)
 
 	TSharedRef<SVerticalBox> Stack = SNew(SVerticalBox);
 
-	// Headline
 	Stack->AddSlot()
 		.AutoHeight()
 		.HAlign(HAlign_Center)
@@ -29,14 +28,13 @@ void SShintEmptyState::Construct(const FArguments& InArgs)
 			.ColorAndOpacity(FSlateColor(FShintStyle::Colors::TextPrimary()))
 		];
 
-	// Subtitle
 	Stack->AddSlot()
 		.AutoHeight()
 		.HAlign(HAlign_Center)
 		.Padding(FMargin(0.f, 0.f, 0.f, bHasAction ? FShintStyle::Space::S4 : 0.f))
 		[
 			SNew(SBox)
-			.MaxDesiredWidth(420.f) // keep the line measure readable on wide panels
+			.MaxDesiredWidth(420.f)
 			[
 				SNew(STextBlock)
 				.Text(InArgs._Subtitle)
@@ -47,7 +45,6 @@ void SShintEmptyState::Construct(const FArguments& InArgs)
 			]
 		];
 
-	// Action button (optional)
 	if (bHasAction)
 	{
 		Stack->AddSlot()
@@ -69,8 +66,6 @@ void SShintEmptyState::Construct(const FArguments& InArgs)
 			];
 	}
 
-	// Center the stack vertically + horizontally so it reads as a centered hero
-	// regardless of the parent slot's size.
 	ChildSlot
 	[
 		SNew(SBox)

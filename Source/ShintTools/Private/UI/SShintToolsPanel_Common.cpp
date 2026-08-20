@@ -1,52 +1,31 @@
 // Copyright 2026 ShintTools. All Rights Reserved.
-//
-// Shared infrastructure for the SShintToolsPanel translation-unit family:
-//   * ST4::Solid / ST4::Outline brush cache (process-lifetime TMap)
-//   * ShintShowErrorToast            — uniform CS_Fail notification
-//   * StatBadge                      — KPI tile factory used by Code + Asset sections
-//   * CoreRedirects writer           — DefaultEngine.ini patcher for asset renames
-//   * Static SShintToolsPanel helpers — Divider, BuildSectionTitle, BuildDiffLine,
-//                                       BuildContextPanel, BuildModuleProgressBar, FmtN
-//
-// None of these reach into per-panel state. They are split out so the body
-// of the panel can grow without forcing every TU to recompile a single
-// 3.5k-line file.
 
 #include "SShintToolsPanel.h"
 #include "SShintToolsPanel_Private.h"
 #include "ShintTools.h"
 
-// Shared design-system widgets
 #include "ShintStyle.h"
 #include "SShintCard.h"
-#include "ShintIconStyle.h"   // FShintIconStyle::GetBrush — ShintBtnContent glyphs
+#include "ShintIconStyle.h"
 
-// Slate layout / widgets
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
-#include "Widgets/Images/SImage.h"   // ShintBtnContent icon
+#include "Widgets/Images/SImage.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "Framework/Notifications/NotificationManager.h"
 
-// Style
 #include "Styling/AppStyle.h"
 
-// Config / paths
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Brush cache
-// ─────────────────────────────────────────────────────────────────────────────
 namespace ST4
 {
 	namespace
 	{
-		// Function-local static — single process-lifetime cache shared by every
-		// panel TU. Returning a reference keeps the brush pointers stable for
-		// Slate to retain across paint ticks.
+
 		TMap<FString, TUniquePtr<FSlateBrush>>& Cache()
 		{
 			static TMap<FString, TUniquePtr<FSlateBrush>> BC;
@@ -92,9 +71,6 @@ namespace ST4
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Toast
-// ─────────────────────────────────────────────────────────────────────────────
 void ShintShowErrorToast(const FString& Title, const FString& Detail)
 {
 	FNotificationInfo Info(FText::FromString(Title));
@@ -110,9 +86,6 @@ void ShintShowErrorToast(const FString& Title, const FString& Detail)
 	UE_LOG(LogShintTools, Error, TEXT("%s — %s"), *Title, *Detail);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Stat badge
-// ─────────────────────────────────────────────────────────────────────────────
 TSharedRef<SWidget> StatBadge(
 	TSharedPtr<STextBlock>& OutLabel, const FText& Caption, const FLinearColor& Clr)
 {
@@ -143,14 +116,6 @@ TSharedRef<SWidget> StatBadge(
 		];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Action-button content — SVG icon + label.
-//
-// Single definition shared by the Code and Asset sections. Previously each TU
-// kept its own anonymous-namespace copy, which collided under UE5 unity builds
-// (the same blob defined ShintBtnContent twice). Defining it once here with
-// external linkage removes the collision while keeping both call-sites intact.
-// ─────────────────────────────────────────────────────────────────────────────
 TSharedRef<SWidget> ShintBtnContent(
 	const FName& Icon, const TSharedRef<SWidget>& Label, const FSlateColor& Tint)
 {
@@ -169,23 +134,6 @@ TSharedRef<SWidget> ShintBtnContent(
 		];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CoreRedirects writer.
-//
-// IAssetTools::RenameAssets + FixupReferencers fixes references that exist as
-// soft/hard pointers in other LOADED assets. It does NOT survive when the
-// .uasset redirector is later deleted, and it does not cover unloaded packages
-// or **native parent class references** — child Blueprints whose parent is a
-// renamed Blueprint reload with "Class not found" until you provide a
-// CoreRedirects mapping.
-//
-// Three redirect kinds per rename, emitted from the asset-fix flow:
-//   +ClassRedirects   — Blueprint generated-class lookup ("BP_Old_C")
-//   +PackageRedirects — soft package paths ("/Game/.../BP_Old")
-//   +ObjectRedirects  — UObject paths ("/Game/.../BP_Old.BP_Old")
-//
-// Existing entries are deduplicated so re-running the bot is idempotent.
-// ─────────────────────────────────────────────────────────────────────────────
 namespace
 {
 	FString FormatCoreRedirectValue(const FString& OldName, const FString& NewName)
@@ -201,8 +149,6 @@ int32 WriteShintCoreRedirects(const TArray<FShintRedirectEntry>& Entries)
 	const FString IniPath = FPaths::ProjectConfigDir() / TEXT("DefaultEngine.ini");
 	const TCHAR* Section  = TEXT("CoreRedirects");
 
-	// Read existing entries so we can dedupe. GConfig stores +Foo=... lines as
-	// an array under the Foo key, so we split read by entry kind.
 	TArray<FString> ExistingClass;
 	TArray<FString> ExistingPackage;
 	TArray<FString> ExistingObject;
@@ -219,7 +165,7 @@ int32 WriteShintCoreRedirects(const TArray<FShintRedirectEntry>& Entries)
 		if      (E.Key.Equals(TEXT("+ClassRedirects")))   Bucket = &ExistingClass;
 		else if (E.Key.Equals(TEXT("+PackageRedirects"))) Bucket = &ExistingPackage;
 		else if (E.Key.Equals(TEXT("+ObjectRedirects")))  Bucket = &ExistingObject;
-		else continue; // unknown redirect kind — skip rather than corrupt the .ini
+		else continue;
 
 		const bool bAlreadyPresent = Bucket->ContainsByPredicate(
 			[&Value](const FString& S) { return S.Equals(Value, ESearchCase::IgnoreCase); });
@@ -235,19 +181,10 @@ int32 WriteShintCoreRedirects(const TArray<FShintRedirectEntry>& Entries)
 		GConfig->SetArray(Section, TEXT("+ClassRedirects"),   ExistingClass,   IniPath);
 		GConfig->SetArray(Section, TEXT("+PackageRedirects"), ExistingPackage, IniPath);
 		GConfig->SetArray(Section, TEXT("+ObjectRedirects"),  ExistingObject,  IniPath);
-		GConfig->Flush(/*Read=*/false, IniPath);
+		GConfig->Flush(false, IniPath);
 	}
 	return Added;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SShintToolsPanel static helpers
-//
-// These are class statics declared on the panel; the original .cpp kept them
-// inline. They are stateless and only depend on the panel's brand-palette /
-// font accessors, so they live here instead of forcing every TU to depend on
-// the panel translation unit just to call ::Divider() or ::BuildSectionTitle().
-// ─────────────────────────────────────────────────────────────────────────────
 
 TSharedRef<SWidget> SShintToolsPanel::Divider()
 {
@@ -257,8 +194,7 @@ TSharedRef<SWidget> SShintToolsPanel::Divider()
 
 TSharedRef<SWidget> SShintToolsPanel::BuildSectionTitle(const FText& Title, const FText& Subtitle)
 {
-	// Uses ShintStyle tokens so all section headings render with the same
-	// Bahnschrift typography + spacing as the rest of the dashboard.
+
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, FShintStyle::Space::S1)
 		[

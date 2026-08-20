@@ -6,11 +6,6 @@
 #include "HAL/PlatformProcess.h"
 #include "Misc/Paths.h"
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Construction / Destruction
-// ─────────────────────────────────────────────────────────────────────────────
-
 FCoreProcessManager::FCoreProcessManager()
 	: ManagedPID(0)
 {
@@ -20,17 +15,12 @@ FCoreProcessManager::~FCoreProcessManager()
 {
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Lifecycle
-// ─────────────────────────────────────────────────────────────────────────────
-
 bool FCoreProcessManager::StartCoreEngine(
 	ECoreStartMode Mode,
 	uint32& OutPID)
 {
 	OutPID = 0;
 
-	// Guard: don't launch twice
 	if (IsCoreRunning())
 	{
 		OutPID = ManagedPID;
@@ -53,24 +43,16 @@ void FCoreProcessManager::StopCoreEngine()
 {
 	if (!IsCoreRunning()) return;
 
-	FPlatformProcess::TerminateProc(ProcessHandle, /*bKillTree=*/true);
+	FPlatformProcess::TerminateProc(ProcessHandle, true);
 	FPlatformProcess::CloseProc(ProcessHandle);
 	ProcessHandle = FProcHandle();
 	ManagedPID = 0;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Status
-// ─────────────────────────────────────────────────────────────────────────────
-
 bool FCoreProcessManager::IsCoreRunning()
 {
 	return ProcessHandle.IsValid() && FPlatformProcess::IsProcRunning(ProcessHandle);
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Private Launchers
-// ─────────────────────────────────────────────────────────────────────────────
 
 bool FCoreProcessManager::LaunchDocker(uint32& OutPID)
 {
@@ -80,14 +62,14 @@ bool FCoreProcessManager::LaunchDocker(uint32& OutPID)
 	ProcessHandle = FPlatformProcess::CreateProc(
 		*DockerExe,
 		*Args,
-		/*bLaunchDetached=*/ true,
-		/*bLaunchHidden=*/   false,
-		/*bLaunchReallyHidden=*/ false,
-		/*OutProcessID=*/ &OutPID,
-		/*PriorityModifier=*/ 0,
-		/*OptionalWorkingDirectory=*/ nullptr,
-		/*PipeWriteChild=*/ nullptr,
-		/*PipeReadChild=*/ nullptr
+		 true,
+		   false,
+		 false,
+		 &OutPID,
+		 0,
+		 nullptr,
+		 nullptr,
+		 nullptr
 	);
 
 	if (!ProcessHandle.IsValid())
