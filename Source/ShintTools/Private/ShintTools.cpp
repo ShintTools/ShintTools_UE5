@@ -219,10 +219,15 @@ void FShintToolsModule::ExtendLevelEditorMenu()
 		// A LABELLED section. The previous one had no label, so it rendered as
 		// a bare separator and the plugin's name never appeared in the menu at
 		// all — the same reason Unreal's own "GET CONTENT" and "LAYOUT" headers
-		// exist. The label is the second argument; omitting it is what made the
-		// section invisible.
-		FToolMenuSection& Section = ToolsMenu->FindOrAddSection(
-			"ShintToolsSection", LOCTEXT("ShintToolsSectionLabel", "ShintTools"));
+		// exist.
+		//
+		// Set via the plain Label field rather than the two-argument
+		// FindOrAddSection(Name, Label) overload: that overload doesn't exist
+		// on 5.2/5.3 (Fab build failure, C2660) — FindOrAddSection(FName) and
+		// the public Label member are both stable across the whole supported
+		// range, so this needs no version gate at all.
+		FToolMenuSection& Section = ToolsMenu->FindOrAddSection("ShintToolsSection");
+		Section.Label = LOCTEXT("ShintToolsSectionLabel", "ShintTools");
 
 		// Two levels, not three: the control panel is the entry point and sits
 		// directly under the header, while the standalone surfaces go in one
